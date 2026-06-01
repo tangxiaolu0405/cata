@@ -13,6 +13,7 @@ import (
 	"cata/internal/brain"
 	"cata/internal/config"
 	"cata/internal/llm"
+	"cata/prompt"
 )
 
 // Engine 后台自主演进。
@@ -86,8 +87,9 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	brain.SetActive(ws)
 
-	snap, err := Observe()
+	snap, err := Observe(ws)
 	if err != nil {
 		return fmt.Errorf("observe: %w", err)
 	}
@@ -102,7 +104,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 			log.Printf("Autonomous evolution [%s]: crystallize skipped (short-term too small)", ws.ID)
 			return nil
 		}
-		if excerpt, err := readFileCap(brain.ShortTermCurrentPath(), maxShortExcerptBytes); err == nil {
+		if excerpt, err := readFileCap(ws.ShortTermPath(), maxShortExcerptBytes); err == nil {
 			appendCrystallizeTriggers(snap, excerpt)
 		}
 		snap.Triggers = append(snap.Triggers, "high_token_session")
@@ -131,16 +133,16 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		return fmt.Errorf("LLM: %w", err)
 	}
 
-	prompt := buildDecisionPrompt(snap, sessionCompress, crystallize)
-	sys := evolutionSystemPrompt()
+	decisionPrompt := buildDecisionPrompt(ws, snap, sessionCompress, crystallize)
+	sys := prompt.EvolveSystemPrompt()
 	if sessionCompress {
-		sys = evolutionSessionCompressPrompt()
+		sys = prompt.EvolveSessionCompressPrompt()
 	} else if crystallize {
-		sys = evolutionCrystallizePrompt()
+		sys = prompt.EvolveCrystallizePrompt()
 	}
 	messages := []llm.Message{
 		{Role: "system", Content: sys},
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: decisionPrompt},
 	}
 
 	reply, err := client.ChatEvolution(messages)
@@ -161,7 +163,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	var touched []string
 	action := strings.ToLower(strings.TrimSpace(dec.Action))
 	if action != "idle" && len(dec.Updates) > 0 {
-		touched, err = ApplyUpdates(dec.Updates)
+		touched, err = ApplyUpdates(ws, dec.Updates)
 		if err != nil {
 			return fmt.Errorf("apply: %w", err)
 		}
@@ -171,8 +173,8 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	}
 
 	// Deterministic long-term → archive when file count exceeds threshold.
-	if shouldSummarizeLongTerm(snap) {
-		if moved, err := summarizeLongTerm(snap); err != nil {
+	if snap.LongTermFileCount >= longTermSummarizeMinFiles {
+		if moved, err := summarizeLongTerm(ws); err != nil {
 			log.Printf("Autonomous evolution [%s]: summarize: %v", ws.ID, err)
 		} else if len(moved) > 0 {
 			touched = append(touched, moved...)
@@ -205,7 +207,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		} else if arch != "" {
 			entry.DocTouched = append(entry.DocTouched, arch)
 			log.Printf("Autonomous evolution [%s]: short-term archived to %s", ws.ID, arch)
-			if fresh, err := Observe(); err == nil {
+			if fresh, err := Observe(ws); err == nil {
 				snap = fresh
 			}
 		}
@@ -213,7 +215,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if err := brain.SyncMemoryIndexAfterEvolution(entry.DocTouched, learning, archRel(entry.DocTouched)); err != nil {
 		log.Printf("Autonomous evolution [%s]: memory index: %v", ws.ID, err)
 	}
-	if err := AppendLog(entry); err != nil {
+	if err := AppendLog(ws, entry); err != nil {
 		return err
 	}
 
@@ -228,58 +230,21 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	return nil
 }
 
-func evolutionSystemPrompt() string {
-	return `你是 Cata 自主演进模块。**~/.cata 下脑子正文全部由你（LLM）维护**；用户不编辑这些文件。只改脑子目录内 Markdown；产出区（用户 cwd）不在此写入。
-
-persona / persona.local / behavior / constraints 均从 short-term 提炼；终端对话只写 short-term。
-
-只在 triggers 成立时修改；若 triggers 含 fill:*，**本轮必须**用 updates 填好仍为空壳的文档（不可 idle）。
-
-输出：单个 JSON 对象。
-字段：action, reason, learning, updates[]
-
-**写入路由（相对 workspace 根；global/* 用 global/constraints.md、global/behavior.md）**
-| 路径 | 写什么 | 怎么写 |
-| modes/<mode>/persona.md | 身份、偏好、习惯（跨项目） | append_section / replace_section；会话压缩可用 write ≤6500 |
-| persona.local.md | **本项目 focus_path**：仓库用途、技术栈、当前任务 | append_section（Current focus 等）；fill:persona.local 时**必写** |
-| memory/long/*.md | 细节、长事实 | append |
-| modes/<mode>/behavior.md | mode 级 SOP（fill:mode_behavior 时从 short-term 提炼） | append_section |
-| modes/<mode>/constraints.md | mode 级补充约束（fill:mode_constraints 时提炼） | append_section，每节 ≤800 字 |
-| global/constraints.md | **全机通用**硬规则（非项目细节；fill:global_constraints 时提炼） | append_section，每节 ≤600 字 |
-| global/behavior.md | **全机通用** SOP（fill:global_behavior 时提炼） | append_section，每节 ≤600 字 |
-
-- consolidate：新事实按上表分流；**不要** patch memory/short/current.md
-- 带 ## 的文档：禁止 append/空 mode 堆叠；同名 ## 会替换旧节
-- 禁止 write/overwrite 整篇 constraints（含 global 与 mode）
-
-默认 idle。`
-}
-
-func evolutionSessionCompressPrompt() string {
-	return evolutionSystemPrompt() + `
-
-本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；合并 short-term 新事实到 modes/<mode>/persona.md（优先 append_section 按节替换；冗长重复时用 write 输出去重后的全文 ≤6500 字）；细节 append 到 memory/long/*.md；不要 idle；不要 patch short/current.md。`
-}
-
-func evolutionCrystallizePrompt() string {
-	return `你是 Cata 自主演进模块（固化 skill）。
-
-将 short-term 中**已验证**的探索流程固化为脑子内可执行 skill，供后续 run_skill 复用。
-
-输出单个 JSON：action, reason, learning, updates[]
-- action 应为 crystallize_skill（无合适固化则 idle）
-- path 相对 workspace 根，仅允许：
-  - skills/<skill-id>/SKILL.md（流程：何时用 run_skill、不适用时仍用 browser）
-  - skills/<skill-id>/manifest.yaml（runner: python, entry: script.py）
-  - skills/<skill-id>/script.py（从 excerpt 成功命令提炼，标准库优先）
-- skill-id 用小写英文与连字符，如 zhangtingban-lianban
-- **禁止** patch modes/*/capabilities.yaml（服务端会自动 append skills 列表）
-- **禁止** 写入 mcp: [] 或删除 browser；未覆盖站点仍依赖 browser 基础能力
-- SKILL 中写明：适用场景（如东财 A 站）、输出路径（相对产出区 cwd）、禁止 browser_snapshot 整页抓取`
-}
-
-func buildDecisionPrompt(snap *Snapshot, sessionCompress, crystallize bool) string {
+func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, crystallize bool) string {
 	var b strings.Builder
+	b.WriteString("workspace_scope: id=")
+	b.WriteString(ws.ID)
+	b.WriteString(" focus_path=")
+	b.WriteString(ws.RootPath)
+	if ws.Name != "" {
+		b.WriteString(" name=")
+		b.WriteString(ws.Name)
+	}
+	b.WriteString("\n")
+	if notice := prompt.EvolveDecisionScopeNotice(); notice != "" {
+		b.WriteString(notice)
+		b.WriteByte('\n')
+	}
 	b.WriteString("triggers: ")
 	b.WriteString(strings.Join(snap.Triggers, ", "))
 	if sessionCompress {
@@ -303,31 +268,34 @@ func buildDecisionPrompt(snap *Snapshot, sessionCompress, crystallize bool) stri
 			includeExcerpt = false
 		}
 		if includeExcerpt {
-			if excerpt, err := readFileCap(brain.ShortTermCurrentPath(), maxShortExcerptBytes); err == nil && excerpt != "" {
-				b.WriteString("\n\nshort_term excerpt:\n")
+			if excerpt, err := readFileCap(ws.ShortTermPath(), maxShortExcerptBytes); err == nil && excerpt != "" {
+				b.WriteString("\n\nshort_term excerpt (this workspace only):\n")
 				b.WriteString(excerpt)
 			}
 		} else {
 			b.WriteString("\n\n(short_term unchanged since last evolution; excerpt omitted)\n")
 		}
-		if hot, err := readFileCap(brain.HotPath(), 1200); err == nil && hot != "" {
-			b.WriteString("\n\ncurrent mode persona (update via append_section per ## title; same title replaces old body):\n")
+		if hot, err := readFileCap(ws.PersonaPath(), 1200); err == nil && hot != "" {
+			b.WriteString("\n\ncurrent mode persona (this workspace — update via append_section / replace_section):\n")
 			b.WriteString(hot)
 		}
-		if local, err := readFileCap(brain.PersonaLocalPath(), 1200); err == nil {
-			b.WriteString("\n\ncurrent persona.local (project focus — LLM-maintained, update here):\n")
+		if local, err := readFileCap(ws.PersonaLocalPath(), 1200); err == nil {
+			b.WriteString("\n\ncurrent persona.local (this focus_path project):\n")
 			b.WriteString(local)
 		}
 	}
-	if mustFill := brainDocsNeedingFill(); len(mustFill) > 0 {
-		b.WriteString("\n\nMUST fill scaffold brain docs this cycle (append_section from short_term): ")
+	if mustFill := brainDocsNeedingFill(ws); len(mustFill) > 0 {
+		b.WriteString("\n\nMUST fill scaffold brain docs this cycle (this workspace only; from short_term): ")
 		b.WriteString(strings.Join(mustFill, ", "))
 	}
 	if snap.RecentLogSummary != "" {
 		b.WriteString("\n\nrecent evolution: ")
 		b.WriteString(snap.RecentLogSummary)
 	}
-	b.WriteString("\n\nRespond with decision JSON only.")
+	if footer := prompt.EvolveDecisionFooter(); footer != "" {
+		b.WriteString("\n\n")
+		b.WriteString(footer)
+	}
 	return b.String()
 }
 
@@ -349,9 +317,5 @@ func RunCycle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	interval := DefaultCycleSeconds * time.Second
-	if config.Config != nil && config.Config.Evolution.CycleInterval > 0 {
-		interval = time.Duration(config.Config.Evolution.CycleInterval) * time.Second
-	}
-	return NewEngine(interval).runCycle(ctx, ws, false, false)
+	return NewEngine(cycleInterval()).runCycle(ctx, ws, false, false)
 }

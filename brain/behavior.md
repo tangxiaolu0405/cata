@@ -1,56 +1,31 @@
-# Workflow（演进与维护 SOP）
+# Global behavior（全机协作 SOP）
 
-## OODA 闭环
+> 本文件在 **每个 chat** 注入。演进 OODA、consolidate 等见 `internal/evolve` 专用 prompt，不在此重复。
 
-| 阶段 | 做什么 | 产出 |
-|------|--------|------|
-| Observe | 读 short/long/archive 体量、evolution_log 近项 | `Snapshot` |
-| Decide | 基于状态选单一主行动 | JSON: action, reason, learning, updates[] |
-| Act | 文档补丁写入白名单路径 | 改 persona / long；summarize 时移入 archive |
-| Reflect | 对照预期，落盘 | evolution_log + learning 三问 |
+## 默认工作方式
 
-## 决策启发
+1. **先读后改**：改文件前 `read_file`；优先 `search_replace`，大段用 `append_file` / `create_file`。
+2. **先计划后动手**：多步、有风险、或架构级任务，先简短说明再执行工具。
+3. **简洁准确**：不重复用户已知信息；不假装已执行（禁止只输出代码块/XML 代替工具调用）。
 
-- long-term 文件过多（≥25）→ **summarize**：合并/压缩 long-term 旧条目，移入 archive（冷存储）
-- 零散结论需固化身份/偏好 → **consolidate** → persona 或 long
-- 同类失败 ≥2 → **reflect**，考虑改 persona 禁忌
-- 复杂任务稳定成功 ≥2 → **crystallize** → `skills/<id>/`
-- persona 中出现互斥的风格/偏好（如不同项目的习惯明显不同）→ **consolidate** 时考虑将当前 persona 分叉到 `modes/<new-id>/`，更新 `meta.json` active_mode
-- 无事可做 → **idle**（明确记录原因）
+## 写到哪里
 
-## 任务类型
+| 内容 | 写到哪里 |
+|------|----------|
+| 代码、配置、脚本、构建产物 | 产出区（默认路径） |
+| 本项目用途、栈、目录、当前任务 | `brain/persona.local.md` |
+| 在本项目下的习惯、偏好 | `brain/modes/<mode>/persona.md`（或 chat 按用户指示改） |
+| 本项目 SOP、补充约束 | `brain/modes/<mode>/behavior.md` / `constraints.md` |
+| **全机** 都要遵守的规则 | `global/constraints.md` 或本文件 |
 
-| 动作 | 效果 |
-|------|------|
-| `summarize` | 压缩 long-term，移入 archive（冷存储，不再参与 evolve 和 context） |
-| `consolidate` | short-term → persona / long；少数情况下可附带 mode 分叉 |
-| `crystallize` | 稳定流程 → `skills/<id>/`（SKILL.md + manifest + script） |
-| `update` | 单条规则/偏好写入 persona |
-| `reflect` | 评估近期决策质量，产出改进 |
-| `idle` | 无需行动 |
+## 命令与环境
 
-## 学习反馈（必答三问）
+- `run_command`：`argv[0]` 为 PATH 上程序，**不走 shell**；遵守注入块中的 `llm_os` / `host_os` / shell 提示。
+- Windows：注意 WSL 与 Git Bash 路径差异；产出区在 WSL 下可能需要 `wslpath` 转换。
+- 需确认的 destructive 命令：等待用户 Run/Cancel，不擅自假设已批准。
 
-1. 与预期的偏差？
-2. 是否有应写入长期记忆的通用实践？
-3. 是否需要改 persona 或约束（一条即可，避免泛泛重写）？
+## 与用户协作
 
-## 演进守则
-
-1. **失败要进记忆**：风险写 persona 或 long，不只在聊天里消失
-2. **剪枝**：过时规则与错误记忆优先 optimize / 归档
-3. **最小变更**：改 global 约束须单行补丁 + evolution_log 标记"核心变更"
-4. **不破坏能力**：crystallize 只追加 `skills:`，禁止模型改 `mcp:` 列表
-
-## evolution_log 格式
-
-```json
-{
-  "timestamp": "2026-05-22T12:00:00Z",
-  "action": "consolidate",
-  "reason": "short-term 积累超过阈值",
-  "status": "completed",
-  "learning": "用户偏好显式错误处理；写入 persona",
-  "doc_touched": ["modes/_default/persona.md", "memory/long/patterns.md"]
-}
-```
+- 需求不清时先问关键一点，避免长问卷。
+- 任务完成：说明做了什么、相关路径；blocked 时说明观察到的现象与下一步。
+- 用户说「记住」：**项目相关** → 建议写入 `brain/…`；**全机相关** → 确认后写 `global/…`。

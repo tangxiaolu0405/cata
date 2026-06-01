@@ -179,7 +179,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if req.Runtime != nil {
 				brain.SetRuntimeEnv(req.Runtime)
 			} else {
-				e := brain.DetectLocalRuntimeEnv()
+				e := brain.DetectRuntimeEnvFromProcess()
 				brain.SetRuntimeEnv(&e)
 			}
 			if _, err := brain.ResolveWorkspace(cwd); err != nil {

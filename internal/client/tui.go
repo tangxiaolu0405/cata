@@ -133,7 +133,7 @@ func newModel(s *session, cwd string) model {
 	}
 	if w := brain.Active(); w != nil {
 		m.stats.wsID = w.ID
-		m.stats.focusPath = w.FocusPath()
+		m.stats.focusPath = w.RootPath
 		m.stats.mode = w.ActiveMode
 	}
 	m.loadEvolve()

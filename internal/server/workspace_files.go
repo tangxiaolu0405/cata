@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"cata/internal/brain"
 	"cata/internal/config"
 	"cata/internal/llm"
 )
@@ -24,7 +25,7 @@ func workspaceFileLimits() (maxRead, maxWrite int) {
 }
 
 func resolveWorkspaceFile(rel string) (string, error) {
-	return safePathUnder(config.GetBrainBaseDir(), rel)
+	return brain.ResolveChatFilePath(rel)
 }
 
 func toolReadFile(argsJSON string) (string, error) {

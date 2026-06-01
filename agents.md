@@ -13,7 +13,7 @@
 
 ## 目录边界（重要）
 
-见 **`brain/directory-plan.md`**。
+见 **`brain/directory-plan.md`**（布局）与 **`brain/brain-files.md`**（各文件作用与 evolve 边界，代码：`internal/brain/evolve_boundary.go`）。
 
 | 位置 | 角色 |
 |------|------|

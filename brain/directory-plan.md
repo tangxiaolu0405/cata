@@ -76,6 +76,8 @@
 | `~/.cata/` | 运行时脑子（live，由 server + evolve 维护） |
 | cwd | 产出区 |
 
+各文件作用与 **evolve 可 patch / 只读 / 注入** 边界见 **[brain-files.md](./brain-files.md)**（与 `internal/brain/evolve_boundary.go` 对齐）。
+
 ## 命名约定
 
 | 避免 | 改用 |

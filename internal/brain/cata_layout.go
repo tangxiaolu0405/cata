@@ -72,9 +72,22 @@ func seedGlobalDefaults() error {
 const defaultBootAssembler = `# Boot 组装顺序
 
 1. 本文件（boot-assembler）
-2. 动态注入：【Cata 路径：脑子与产出区】（每轮含 brain_dir、focus_path、output_cwd）
-3. 动态注入：【Cata 脑子节选】（global + mode persona）
+2. 动态注入：【Cata 路径：脑子与产出区】（每轮含 focus_path、output_cwd、brain/ 与 global/ 约定）
+3. 动态注入：【Cata 脑子节选】（global constraints/behavior + 本 workspace persona）
 4. 用户消息与 history
 
-**脑子** = CATA_HOME（~/.cata/）。**产出区** = 当前 cwd；run_command 只在产出区执行。
+**脑子** = CATA_HOME（~/.cata/）。**产出区** = 当前 cwd。文件工具默认产出区；brain/… 与 global/… 见路径块。
 `
+
+// InitDirectory 创建 ~/.cata 布局、global 模板，并迁移旧版扁平 brain（若有）。
+func InitDirectory() error {
+	if err := EnsureCataLayout(); err != nil {
+		return fmt.Errorf("cata layout: %w", err)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if _, err := ResolveWorkspace(wd); err != nil {
+			return fmt.Errorf("brain: %w", err)
+		}
+	}
+	return nil
+}

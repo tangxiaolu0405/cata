@@ -14,6 +14,9 @@ import (
 // Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
 type Snapshot struct {
 	ObservedAt            string   `json:"observed_at"`
+	WorkspaceID           string   `json:"workspace_id,omitempty"`
+	FocusPath             string   `json:"focus_path,omitempty"`
+	WorkspaceName         string   `json:"workspace_name,omitempty"`
 	HotModTime            string   `json:"hot_mod_time,omitempty"`
 	ShortTermModTime      string   `json:"short_term_mod_time,omitempty"`
 	ShortTermBytes        int64    `json:"short_term_bytes"`
@@ -32,15 +35,27 @@ func (s *Snapshot) Fingerprint() string {
 		s.ShortTermModTime, s.ShortTermBytes, s.LongTermFileCount)
 }
 
-// Observe 读取 ~/.cata/brain 元数据（不读 workflow/core 全文）。
-func Observe() (*Snapshot, error) {
-	s := &Snapshot{ObservedAt: clock.RFC3339()}
+// Observe 读取指定 workspace 脑子元数据（不读 workflow/core 全文）。
+func Observe(ws *brain.Workspace) (*Snapshot, error) {
+	if ws == nil {
+		var err error
+		ws, err = brain.MustActive()
+		if err != nil {
+			return nil, err
+		}
+	}
+	s := &Snapshot{
+		ObservedAt:    clock.RFC3339(),
+		WorkspaceID:   ws.ID,
+		FocusPath:     ws.RootPath,
+		WorkspaceName: ws.Name,
+	}
 
-	if info, err := os.Stat(brain.HotPath()); err == nil {
+	if info, err := os.Stat(ws.PersonaPath()); err == nil {
 		s.HotModTime = clock.FormatTime(info.ModTime(), time.RFC3339)
 	}
 
-	shortPath := brain.ShortTermCurrentPath()
+	shortPath := ws.ShortTermPath()
 	if info, err := os.Stat(shortPath); err == nil {
 		s.ShortTermModTime = clock.FormatTime(info.ModTime(), time.RFC3339)
 	}
@@ -48,8 +63,7 @@ func Observe() (*Snapshot, error) {
 		s.ShortTermBytes = int64(len(data))
 	}
 
-	longDir := brain.LongTermDir()
-	if entries, err := os.ReadDir(longDir); err == nil {
+	if entries, err := os.ReadDir(ws.LongTermDir()); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
 				s.LongTermFileCount++
@@ -57,8 +71,7 @@ func Observe() (*Snapshot, error) {
 		}
 	}
 
-	archiveDir := brain.ArchiveDir()
-	if entries, err := os.ReadDir(archiveDir); err == nil {
+	if entries, err := os.ReadDir(ws.ArchiveDir()); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
 				s.ArchiveFileCount++
@@ -66,19 +79,17 @@ func Observe() (*Snapshot, error) {
 		}
 	}
 
-	loadLastEvolutionMeta(s)
-	s.RecentLogSummary = summarizeRecentLog(2, 80)
-	if w := brain.Active(); w != nil {
-		if ids, err := brain.ListWorkspaceSkillIDs(w); err == nil {
-			s.SkillIDs = ids
-		}
+	loadLastEvolutionMeta(s, ws.EvolutionLogPath())
+	s.RecentLogSummary = summarizeRecentLog(ws.EvolutionLogPath(), 2, 80)
+	if ids, err := brain.ListWorkspaceSkillIDs(ws); err == nil {
+		s.SkillIDs = ids
 	}
-	computeTriggers(s)
+	computeTriggers(s, ws)
 	return s, nil
 }
 
-func loadLastEvolutionMeta(s *Snapshot) {
-	data, err := os.ReadFile(brain.EvolutionLogPath())
+func loadLastEvolutionMeta(s *Snapshot, logPath string) {
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return
 	}
@@ -91,8 +102,8 @@ func loadLastEvolutionMeta(s *Snapshot) {
 	s.LastEvolutionAction = last.Action
 }
 
-func summarizeRecentLog(n int, maxLearning int) string {
-	data, err := os.ReadFile(brain.EvolutionLogPath())
+func summarizeRecentLog(logPath string, n int, maxLearning int) string {
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return ""
 	}

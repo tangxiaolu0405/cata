@@ -4,8 +4,6 @@ package brain
 import (
 	"os"
 	"path/filepath"
-
-	"cata/internal/config"
 )
 
 // 仓库模板 brain/ 内相对路径（种子来源，与 ~/.cata/global/ 名称一致）。
@@ -14,28 +12,17 @@ const (
 	RelPathConstraints   = "constraints.md"
 	RelPathBehavior      = "behavior.md"
 
-	RelPathMemoryIndex   = "memory_index.json"
-	RelPathEvolutionLog  = "evolution_log.json"
+	RelPathMemoryIndex  = "memory_index.json"
+	RelPathEvolutionLog = "evolution_log.json"
 )
 
 // legacy paths kept for migration / backward-compatible fallbacks
 const (
-	RelPathHot        = "hot.md"                              // migrated → modes/_default/persona.md
-	RelPathShortTermCurrent = "memory/short-term/current_session.md" // migrated → memory/short/current.md
-	RelPathLongTerm   = "memory/long-term"                    // migrated → memory/long/
-	RelPathArchive    = "archive"                             // migrated → memory/archive/
-	RelPathLearnSystemPrompt = "context/learn_system_prompt.md"
+	RelPathHot               = "hot.md" // migrated → modes/_default/persona.md
+	RelPathShortTermCurrent  = "memory/short-term/current_session.md"
+	RelPathLongTerm         = "memory/long-term"
+	RelPathArchive          = "archive"
 )
-
-// Dir 返回 brain 根（~/.cata/brain），兼容旧代码。
-func Dir() string {
-	return brainRoot()
-}
-
-// BaseDir 返回项目根（用于 run_command 等）。
-func BaseDir() string {
-	return config.GetBrainBaseDir()
-}
 
 // Path 在活跃 workspace 下解析相对路径；无 workspace 时回退到 legacy brain 根。
 func Path(rel string) string {
@@ -86,11 +73,6 @@ func ShortTermCurrentPath() string {
 	return filepath.Join(brainRoot(), RelPathShortTermCurrent)
 }
 
-// LearnSystemPromptPath legacy。
-func LearnSystemPromptPath() string {
-	return filepath.Join(brainRoot(), RelPathLearnSystemPrompt)
-}
-
 // LongTermDir 当前 workspace 长期记忆目录。
 func LongTermDir() string {
 	if w := Active(); w != nil {
@@ -115,11 +97,6 @@ func PersonaLocalPath() string {
 		return w.PersonaLocalPath()
 	}
 	return filepath.Join(brainRoot(), RelPersonaLocal)
-}
-
-// ArchiveSummaryFilename 返回周期摘要文件名。
-func ArchiveSummaryFilename(yearMonth string) string {
-	return "summary-" + yearMonth + ".md"
 }
 
 const ArchiveBackupDir = "backup"

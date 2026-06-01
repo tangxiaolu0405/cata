@@ -55,6 +55,24 @@ func ParseCapabilitiesYAML(data []byte) Capabilities {
 	return out
 }
 
+// FormatCapabilitiesYAML 序列化 capabilities（skills + mcp 列表）。
+func FormatCapabilitiesYAML(c Capabilities) string {
+	var b strings.Builder
+	b.WriteString("skills:\n")
+	for _, s := range c.Skills {
+		b.WriteString("  - ")
+		b.WriteString(s)
+		b.WriteByte('\n')
+	}
+	b.WriteString("mcp:\n")
+	for _, m := range c.MCP {
+		b.WriteString("  - ")
+		b.WriteString(m)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // AllowsMCPServer 是否启用该 MCP server 名。
 func (c Capabilities) AllowsMCPServer(name string) bool {
 	name = strings.TrimSpace(name)

@@ -45,8 +45,8 @@ func (t *readFileTool) Name() string { return "read_file" }
 func (t *readFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "read_file",
-		Description: "Read a text file in the output workspace (relative path). Use before editing.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd (brain.base_dir)"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
+		Description: "Read a text file. Path: default=output cwd; brain/…=workspace brain cell; global/…=~/.cata/global/. Use before editing.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path: default=output cwd; brain/… or global/… for brain files"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
 	}}
 }
 
@@ -63,7 +63,7 @@ func (t *searchReplaceTool) Name() string { return "search_replace" }
 func (t *searchReplaceTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "search_replace",
-		Description: "Replace old_string with new_string in a file under output cwd (first match unless replace_all).",
+		Description: "Replace old_string with new_string (first match unless replace_all). Path: default=output; brain/… or global/… for brain files.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}`),
 	}}
 }
@@ -81,7 +81,7 @@ func (t *appendFileTool) Name() string { return "append_file" }
 func (t *appendFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "append_file",
-		Description: "Append text to a file under output cwd (creates file if missing).",
+		Description: "Append text to a file (creates if missing). Path: default=output; brain/… or global/… for brain files.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
 	}}
 }
@@ -310,8 +310,8 @@ func (t *createFileTool) Name() string { return "create_file" }
 func (t *createFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "create_file",
-		Description: "Create a new file in the output workspace. Fails if the file already exists unless overwrite is true.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd"},"content":{"type":"string","description":"File content"},"overwrite":{"type":"boolean","description":"If true, overwrite existing file (default false)"}},"required":["path","content"]}`),
+		Description: "Create a new file. Path: default=output; brain/… or global/… for brain files. Fails if exists unless overwrite.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path (default output; brain/… or global/…)"},"content":{"type":"string","description":"File content"},"overwrite":{"type":"boolean","description":"If true, overwrite existing file (default false)"}},"required":["path","content"]}`),
 	}}
 }
 
@@ -358,8 +358,8 @@ func (t *listFilesTool) Name() string { return "list_files" }
 func (t *listFilesTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "list_files",
-		Description: "List files and directories in the output workspace.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Directory path relative to output cwd (default: root)"}},"required":[]}`),
+		Description: "List files and directories. Path: default=output root; brain/ or global/ for brain areas.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Directory: default=output; brain/ or global/ (optional, default root)"}},"required":[]}`),
 	}}
 }
 

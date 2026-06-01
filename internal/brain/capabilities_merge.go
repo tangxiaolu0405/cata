@@ -25,37 +25,14 @@ func AppendSkillToCapabilities(w *Workspace, skillID string) error {
 	}
 	path := w.CapabilitiesPath()
 	data, _ := os.ReadFile(path)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") && strings.EqualFold(strings.TrimSpace(line[2:]), skillID) {
-			return nil
-		}
-	}
 	caps := ParseCapabilitiesYAML(data)
 	for _, s := range caps.Skills {
 		if strings.EqualFold(s, skillID) {
 			return nil
 		}
 	}
-	if strings.Contains(string(data), "skills: []") {
-		data = []byte(strings.Replace(string(data), "skills: []", "skills:", 1))
-	}
-	var b strings.Builder
-	for _, line := range strings.Split(string(data), "\n") {
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	text := b.String()
-	if !strings.Contains(text, "skills:") {
-		if len(text) > 0 && !strings.HasSuffix(text, "\n") {
-			b.WriteByte('\n')
-		}
-		b.WriteString("skills:\n")
-	}
-	b.WriteString("  - ")
-	b.WriteString(skillID)
-	b.WriteByte('\n')
-	out := b.String()
+	caps.Skills = append(caps.Skills, skillID)
+	out := FormatCapabilitiesYAML(caps)
 	if len(out) > maxCapabilitiesFileBytes {
 		return fmt.Errorf("capabilities.yaml too large after append")
 	}
@@ -65,18 +42,19 @@ func AppendSkillToCapabilities(w *Workspace, skillID string) error {
 	return os.WriteFile(path, []byte(out), 0644)
 }
 
-// RejectCapabilitiesPatch 禁止演进 patch 破坏 mcp。
+// RejectCapabilitiesPatch 演进 patch capabilities 时保留 mcp 段（skill 名仍优先 server append）。
 func RejectCapabilitiesPatch(rel, mode, content string) error {
 	if !strings.HasSuffix(filepath.ToSlash(rel), FileCapabilities) {
 		return nil
 	}
-	if strings.EqualFold(mode, "append") {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "append" || mode == "" {
 		return fmt.Errorf("capabilities.yaml: use server-side skill append only")
 	}
-	if strings.EqualFold(mode, "write") || strings.EqualFold(mode, "overwrite") {
+	if mode == "write" || mode == "overwrite" {
 		return brainRejectCapabilitiesOverwrite(content)
 	}
-	return fmt.Errorf("capabilities.yaml cannot be patched by evolution")
+	return nil
 }
 
 func brainRejectCapabilitiesOverwrite(content string) error {

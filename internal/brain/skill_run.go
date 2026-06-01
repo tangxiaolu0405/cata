@@ -92,7 +92,7 @@ func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
 	if _, err := os.Stat(entry); err != nil {
 		return "", fmt.Errorf("entry %s: %w", manifest.Entry, err)
 	}
-	wd, err := skillOutputCwd()
+	wd, err := ExecWorkingDir()
 	if err != nil {
 		return "", err
 	}
@@ -126,16 +126,6 @@ func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
 		return text, fmt.Errorf("run_skill %s: %w", args.Skill, err)
 	}
 	return fmt.Sprintf("run_skill %s ok (cwd=%s)\n%s", args.Skill, wd, text), nil
-}
-
-func skillOutputCwd() (string, error) {
-	if config.Config != nil && strings.TrimSpace(config.Config.Exec.WorkingDir) != "" {
-		return filepath.Abs(config.Config.Exec.WorkingDir)
-	}
-	if base := config.GetBrainBaseDir(); base != "" {
-		return filepath.Abs(base)
-	}
-	return os.Getwd()
 }
 
 func buildSkillArgv(runner, entry string, params map[string]interface{}) ([]string, error) {

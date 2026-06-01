@@ -47,11 +47,6 @@ func ActiveRuntimeEnv() *RuntimeEnv {
 	return &out
 }
 
-// DetectLocalRuntimeEnv 兼容旧名。
-func DetectLocalRuntimeEnv() RuntimeEnv {
-	return DetectRuntimeEnvFromProcess()
-}
-
 func (e *RuntimeEnv) runCommandHints() string {
 	out := OutputCwd()
 	var b strings.Builder
@@ -166,5 +161,5 @@ func LogBinding() string {
 		return fmt.Sprintf("brain_home=%s output_cwd=%s%s", CataHome(), OutputCwd(), envS)
 	}
 	return fmt.Sprintf("brain_id=%s brain_dir=%s focus_path=%s output_cwd=%s%s",
-		w.ID, w.Dir(), w.FocusPath(), OutputCwd(), envS)
+		w.ID, w.Dir(), w.RootPath, OutputCwd(), envS)
 }

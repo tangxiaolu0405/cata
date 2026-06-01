@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"cata/internal/brain"
 	"cata/internal/config"
@@ -19,11 +18,7 @@ func RunCrystallize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("active workspace: %w", err)
 	}
-	interval := DefaultCycleSeconds * time.Second
-	if config.Config.Evolution.CycleInterval > 0 {
-		interval = time.Duration(config.Config.Evolution.CycleInterval) * time.Second
-	}
-	return NewEngine(interval).runCycle(ctx, ws, false, true)
+	return NewEngine(cycleInterval()).runCycle(ctx, ws, false, true)
 }
 
 func ingestCrystallizedSkills(ws *brain.Workspace, touched []string) {

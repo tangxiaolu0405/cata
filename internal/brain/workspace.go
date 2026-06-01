@@ -19,11 +19,6 @@ type Workspace struct {
 	ActiveMode string
 }
 
-// FocusPath 返回脑子绑定键（与 RootPath 相同，语义为 focus 而非产出根）。
-func (w *Workspace) FocusPath() string {
-	return w.RootPath
-}
-
 // Dir 返回该格脑子在 CATA_HOME 下的目录。
 func (w *Workspace) Dir() string {
 	return filepath.Join(workspacesRoot(), w.ID)

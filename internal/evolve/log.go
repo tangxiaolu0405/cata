@@ -2,6 +2,7 @@ package evolve
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 
 	"cata/internal/brain"
@@ -25,13 +26,12 @@ type LogEntry struct {
 	DocTouched  []string `json:"doc_touched,omitempty"`
 }
 
-// AppendLog 向当前 workspace 的 evolution_log.json 追加。
-func AppendLog(entry LogEntry) error {
-	w, err := brain.MustActive()
-	if err != nil {
-		return err
+// AppendLog 向指定 workspace 的 evolution_log.json 追加。
+func AppendLog(ws *brain.Workspace, entry LogEntry) error {
+	if ws == nil {
+		return fmt.Errorf("workspace required")
 	}
-	path := w.EvolutionLogPath()
+	path := ws.EvolutionLogPath()
 	var log EvolutionLog
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &log)
@@ -46,7 +46,7 @@ func AppendLog(entry LogEntry) error {
 		entry.Status = "completed"
 	}
 	if entry.WorkspaceID == "" {
-		entry.WorkspaceID = w.ID
+		entry.WorkspaceID = ws.ID
 	}
 	log.Entries = append(log.Entries, entry)
 	if len(log.Entries) > maxLogEntries {

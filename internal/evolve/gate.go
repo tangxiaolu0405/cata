@@ -2,7 +2,6 @@ package evolve
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,7 +37,7 @@ func hasFillTrigger(snap *Snapshot) bool {
 }
 
 // computeTriggers 根据「待提炼进 hot 的输入」判断，不观测 hot 是否被改过。
-func computeTriggers(s *Snapshot) {
+func computeTriggers(s *Snapshot, ws *brain.Workspace) {
 	s.Triggers = nil
 
 	if s.ShortTermBytes >= shortTermTriggerBytes {
@@ -55,32 +54,5 @@ func computeTriggers(s *Snapshot) {
 		s.Triggers = append(s.Triggers, fmt.Sprintf("long_term>=%d", longTermSummarizeMinFiles))
 	}
 
-	appendBrainDocFillTriggers(s)
-}
-
-// appendBrainDocFillTriggers 脑子 Markdown 仍为 scaffold 时追加 fill 触发（~/.cata 由演进 LLM 维护，不依赖用户编辑）。
-func appendBrainDocFillTriggers(s *Snapshot) {
-	if s.ShortTermBytes < shortTermActivityBytes {
-		return
-	}
-	w := brain.Active()
-	if w == nil {
-		return
-	}
-	if brain.FileNeedsEvolveFill(w.PersonaLocalPath()) {
-		s.Triggers = append(s.Triggers, "fill:persona.local")
-	}
-	modeDir := filepath.Dir(w.PersonaPath())
-	if brain.FileNeedsEvolveFill(filepath.Join(modeDir, brain.FileBehavior)) {
-		s.Triggers = append(s.Triggers, "fill:mode_behavior")
-	}
-	if brain.FileNeedsEvolveFill(filepath.Join(modeDir, brain.FileConstraints)) {
-		s.Triggers = append(s.Triggers, "fill:mode_constraints")
-	}
-	if brain.FileNeedsEvolveFill(brain.GlobalConstraintsPath()) {
-		s.Triggers = append(s.Triggers, "fill:global_constraints")
-	}
-	if brain.FileNeedsEvolveFill(brain.GlobalBehaviorPath()) {
-		s.Triggers = append(s.Triggers, "fill:global_behavior")
-	}
+	appendBrainDocFillTriggers(s, ws)
 }

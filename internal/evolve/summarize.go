@@ -14,8 +14,11 @@ import (
 
 // summarizeLongTerm merges old long-term memory entries into archive when
 // the long-term file count exceeds the threshold.
-func summarizeLongTerm(_ *Snapshot) ([]string, error) {
-	longDir := brain.LongTermDir()
+func summarizeLongTerm(ws *brain.Workspace) ([]string, error) {
+	if ws == nil {
+		return nil, fmt.Errorf("workspace required")
+	}
+	longDir := ws.LongTermDir()
 	entries, err := os.ReadDir(longDir)
 	if err != nil {
 		return nil, err
@@ -31,7 +34,6 @@ func summarizeLongTerm(_ *Snapshot) ([]string, error) {
 		return nil, nil
 	}
 
-	// Sort by modification time, oldest first
 	sort.Slice(files, func(i, j int) bool {
 		pi := filepath.Join(longDir, files[i])
 		pj := filepath.Join(longDir, files[j])
@@ -43,7 +45,6 @@ func summarizeLongTerm(_ *Snapshot) ([]string, error) {
 		return si.ModTime().Before(sj.ModTime())
 	})
 
-	// Move oldest half to archive
 	count := len(files) / 2
 	if count < 1 {
 		count = 1
@@ -52,7 +53,7 @@ func summarizeLongTerm(_ *Snapshot) ([]string, error) {
 		count = 12
 	}
 
-	archiveDir := brain.ArchiveDir()
+	archiveDir := ws.ArchiveDir()
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
 		return nil, err
 	}
@@ -75,9 +76,4 @@ func summarizeLongTerm(_ *Snapshot) ([]string, error) {
 		log.Printf("summarize: moved %d old entries to archive (%d remain)", len(moved), len(files)-len(moved))
 	}
 	return moved, nil
-}
-
-// shouldSummarizeLongTerm returns true when long-term file count exceeds threshold.
-func shouldSummarizeLongTerm(snap *Snapshot) bool {
-	return snap.LongTermFileCount >= longTermSummarizeMinFiles
 }

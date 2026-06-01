@@ -39,7 +39,10 @@ func TerminalPathsSystemBlock() string {
 	b.WriteString("- **脑子（Brain）**：`")
 	b.WriteString(home)
 	b.WriteString("/`（CATA_HOME）。记忆、persona、short-term、evolution_log 只在脑子目录；**禁止**把用户项目交付物写入脑子。\n")
-	b.WriteString("- **产出区（Output）**：当前工作目录。`read_file` / `search_replace` / `append_file` / `run_command`、构建与交付物**只**在产出区。\n")
+	b.WriteString("- **产出区（Output）**：当前工作目录。默认相对路径、`run_command`、构建与交付物在此。\n")
+	b.WriteString("- **文件工具路径**：默认=产出区；`brain/…`=当前脑子 workspace 格；`global/…`=全机 global（`")
+	b.WriteString(home)
+	b.WriteString("/global/`）。\n")
 	b.WriteString("- 项目内 `.cata/workspace.yaml` 仅是**门牌**（绑定哪一格脑子），不是脑子正文。\n\n")
 	b.WriteString("## 当前绑定\n\n")
 	if w := Active(); w != nil {
@@ -47,7 +50,7 @@ func TerminalPathsSystemBlock() string {
 		b.WriteString(w.Dir())
 		b.WriteString("`\n")
 		b.WriteString("- 脑子绑定键 focus_path：`")
-		b.WriteString(w.FocusPath())
+		b.WriteString(w.RootPath)
 		b.WriteString("`（用于选哪一格脑子，≠ 产出区）\n")
 	} else {
 		b.WriteString("- 脑子分区：（未解析）\n")
@@ -76,7 +79,7 @@ func TerminalPathsSystemBlock() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(env.runCommandHints())
-	b.WriteString("\n执行工具或建议写文件时，默认针对 **产出区**；引用 persona/约束时读取 **脑子** 下已注入节选。\n")
+	b.WriteString("\n改产出区用默认路径；改脑子文档用 `brain/modes/...` 或 `global/constraints.md`；也可读 system 已注入节选。\n")
 	b.WriteString("改文件优先 **read_file** → **search_replace** / **append_file**；跑命令用 **run_command**。禁止只写代码块或 XML 假装已执行。\n")
 	return b.String()
 }

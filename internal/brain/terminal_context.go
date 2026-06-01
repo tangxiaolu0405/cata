@@ -81,7 +81,7 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 			{"brain/behavior.md", RelPathBehavior},
 			{"brain/hot.md", RelPathHot},
 		} {
-			p := filepathJoinBrain(rel.rel)
+			p := Path(rel.rel)
 			if fileExists(p) {
 				sections = append(sections, struct{ title, path string }{rel.title, p})
 			}
@@ -143,8 +143,4 @@ func readSection(title, path string, maxPerFile int) string {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-func filepathJoinBrain(rel string) string {
-	return Path(rel)
 }

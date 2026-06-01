@@ -563,17 +563,6 @@ func InitBrainPath() error {
 	return nil
 }
 
-// GetBrainDir 脑子目录（CATA_HOME/brain 或覆盖）。
-func GetBrainDir() string {
-	if Config == nil {
-		InitBrainPath()
-	}
-	if BrainDir == "" {
-		BrainDir = filepath.Join(CataHome(), DefaultBrainDirName)
-	}
-	return BrainDir
-}
-
 // GetBrainBaseDir 产出区/工作区根（brain.base_dir）。
 func GetBrainBaseDir() string {
 	if Config == nil {
@@ -588,11 +577,6 @@ func GetBrainBaseDir() string {
 		}
 	}
 	return BrainBaseDir
-}
-
-// GetBrainPath 脑子目录下的相对路径。
-func GetBrainPath(relPath string) string {
-	return filepath.Join(GetBrainDir(), relPath)
 }
 
 // ResolvedSocketPath Unix socket 绝对路径。

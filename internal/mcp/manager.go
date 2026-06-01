@@ -87,7 +87,7 @@ func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
 		if !caps.AllowsMCPServer(s.Name) {
 			continue
 		}
-		if err := mgr.connectServer(ctx, s); err != nil {
+		if err := connectServer(mgr, ctx, s); err != nil {
 			log.Printf("MCP server %q: %v", s.Name, err)
 		}
 	}
@@ -98,16 +98,24 @@ func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
 	return mgr
 }
 
-func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) error {
+func openStdioServer(ctx context.Context, s config.MCPServerEntry) (*stdioClient, []listedTool, error) {
 	c, err := startStdioClient(ctx, s.Name, s.Command, s.Args, s.Env)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	tools, err := c.listTools(listCtx)
 	if err != nil {
 		_ = c.Close()
+		return nil, nil, err
+	}
+	return c, tools, nil
+}
+
+func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) error {
+	c, tools, err := openStdioServer(ctx, s)
+	if err != nil {
 		return err
 	}
 	mgr.mu.Lock()
@@ -155,14 +163,8 @@ func EnsureInit() {
 		return
 	}
 	shutdownLocked()
-	caps = brain.LoadActiveCapabilities()
 	Init(config.Config.MCP, caps)
-	lastMCPKey = mcpCapsKey(caps)
-}
-
-// ReinitIfNeeded 在 capabilities.yaml 的 mcp 段变化后重建（新 chat 连接时调用）。
-func ReinitIfNeeded() {
-	EnsureInit()
+	lastMCPKey = key
 }
 
 func shutdownLocked() {
@@ -180,10 +182,6 @@ func shutdownLocked() {
 	global = nil
 }
 
-func (mgr *Manager) connectServer(ctx context.Context, s config.MCPServerEntry) error {
-	return connectServer(mgr, ctx, s)
-}
-
 func toLLMTool(t listedTool) llm.Tool {
 	params := t.InputSchema
 	if len(params) == 0 {
@@ -197,7 +195,7 @@ func toLLMTool(t listedTool) llm.Tool {
 		Type: "function",
 		Function: llm.ToolFunction{
 			Name:        t.Name,
-			Description: desc + " (via MCP browser)",
+			Description: desc + " (via MCP)",
 			Parameters:  params,
 		},
 	}
@@ -282,14 +280,8 @@ func (mgr *Manager) reconnectServer(ctx context.Context, name string, old *stdio
 		return nil, fmt.Errorf("no config for server %q", name)
 	}
 
-	c, err := startStdioClient(ctx, cfg.Name, cfg.Command, cfg.Args, cfg.Env)
+	c, _, err := openStdioServer(ctx, cfg)
 	if err != nil {
-		return nil, err
-	}
-	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if _, err := c.listTools(listCtx); err != nil {
-		_ = c.Close()
 		return nil, err
 	}
 

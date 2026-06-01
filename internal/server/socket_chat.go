@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -72,7 +70,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
-	mcp.ReinitIfNeeded()
+	mcp.EnsureInit()
 	tools := ss.buildTerminalChatTools()
 	if len(tools) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
@@ -366,55 +364,13 @@ func safeSlice(s string, start, end int) string {
 	return s[start:end]
 }
 
-// safePathUnder 将 rel 限制在 base 目录之下（base 须已为绝对路径或经 Abs 处理）。
+// safePathUnder 将 rel 限制在 base 目录之下。
 func safePathUnder(base, rel string) (string, error) {
-	if base == "" {
-		return "", fmt.Errorf("base directory not configured")
-	}
-	rel = filepath.Clean(strings.TrimSpace(rel))
-	if rel == "." {
-		return "", fmt.Errorf("path required")
-	}
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("absolute path not allowed")
-	}
-	full := filepath.Join(base, rel)
-	baseAbs, err := filepath.Abs(base)
-	if err != nil {
-		return "", err
-	}
-	fullAbs, err := filepath.Abs(full)
-	if err != nil {
-		return "", err
-	}
-	r, err := filepath.Rel(baseAbs, fullAbs)
-	if err != nil || strings.HasPrefix(r, "..") {
-		return "", fmt.Errorf("path escapes allowed directory")
-	}
-	return fullAbs, nil
+	return brain.PathUnderBase(base, rel)
 }
 
 func resolveExecCwd() (string, error) {
-	if config.Config == nil {
-		return "", fmt.Errorf("config not loaded")
-	}
-	base := config.GetBrainBaseDir()
-	sub := strings.TrimSpace(config.Config.Exec.WorkingDir)
-	if sub == "" {
-		return base, nil
-	}
-	d, err := safePathUnder(base, filepath.Clean(sub))
-	if err != nil {
-		return "", err
-	}
-	st, err := os.Stat(d)
-	if err != nil {
-		return "", fmt.Errorf("exec.working_dir: %w", err)
-	}
-	if !st.IsDir() {
-		return "", fmt.Errorf("exec.working_dir must be an existing directory under brain.base_dir: %s", sub)
-	}
-	return d, nil
+	return brain.ExecWorkingDir()
 }
 
 // isFatalBrowserError returns true when the tool error or output indicates
@@ -436,6 +392,32 @@ func isFatalBrowserError(err error, output string) bool {
 			strings.Contains(output, "Browser closed") ||
 			strings.Contains(output, "Protocol error") ||
 			strings.Contains(output, "has been closed"))
+}
+
+// trimHistoryToTokenBudget 从最早的用户/助手/tool 消息裁掉，使估算 token ≤ budget。
+func trimHistoryToTokenBudget(client *llm.Client, msgs []llm.Message, tools []llm.Tool, budget int) []llm.Message {
+	if budget <= 0 || len(msgs) == 0 {
+		return msgs
+	}
+	out := append([]llm.Message(nil), msgs...)
+	for len(out) > 1 && client.EstimatedChatInputTokens(out, tools) > budget {
+		drop := firstDroppableIndex(out)
+		if drop < 0 {
+			break
+		}
+		out = append(out[:drop], out[drop+1:]...)
+	}
+	return out
+}
+
+func firstDroppableIndex(msgs []llm.Message) int {
+	for i, m := range msgs {
+		switch m.Role {
+		case "user", "assistant", "tool":
+			return i
+		}
+	}
+	return -1
 }
 
 func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, lastTool string) {
@@ -466,7 +448,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 	}
 	if w := brain.Active(); w != nil {
 		ev["workspace_id"] = w.ID
-		ev["focus_path"] = w.FocusPath()
+		ev["focus_path"] = w.RootPath
 		ev["active_mode"] = w.ActiveMode
 	}
 	if outCwd := brain.OutputCwd(); outCwd != "" {

@@ -3,7 +3,6 @@ package evolve
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"cata/internal/brain"
 	"cata/internal/config"
@@ -24,11 +23,7 @@ func RunSessionCompress(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("active workspace: %w", err)
 	}
-	interval := DefaultCycleSeconds
-	if config.Config.Evolution.CycleInterval > 0 {
-		interval = config.Config.Evolution.CycleInterval
-	}
-	e := NewEngine(time.Duration(interval) * time.Second)
+	e := NewEngine(cycleInterval())
 	if err := e.runCycle(ctx, ws, true, false); err != nil {
 		return err
 	}
