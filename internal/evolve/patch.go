@@ -33,7 +33,10 @@ func ApplyUpdates(updates []DocUpdate) ([]string, error) {
 		if err != nil {
 			return touched, err
 		}
-		abs := w.Path(rel)
+		abs, storeRel, err := resolveUpdateAbs(w, rel)
+		if err != nil {
+			return touched, err
+		}
 		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 			return touched, err
 		}
@@ -52,22 +55,29 @@ func ApplyUpdates(updates []DocUpdate) ([]string, error) {
 			if err != nil {
 				return touched, err
 			}
-		case "append_section":
+		case "append_section", "replace_section":
 			body, _ := os.ReadFile(abs)
-			section := strings.TrimSpace(u.Section)
-			if section == "" {
-				section = "Notes"
-			}
-			block := fmt.Sprintf("\n\n## %s\n\n%s\n", section, strings.TrimSpace(u.Content))
-			if err := os.WriteFile(abs, append(body, []byte(block)...), 0644); err != nil {
+			merged := mergeMarkdownSection(body, u.Section, u.Content)
+			if err := os.WriteFile(abs, merged, 0644); err != nil {
 				return touched, err
 			}
 		default:
 			return touched, fmt.Errorf("unknown patch mode: %s", u.Mode)
 		}
-		touched = append(touched, rel)
+		touched = append(touched, storeRel)
 	}
 	return touched, nil
+}
+
+func resolveUpdateAbs(w *brain.Workspace, rel string) (abs, storeRel string, err error) {
+	switch rel {
+	case "global/constraints.md":
+		return brain.GlobalConstraintsPath(), rel, nil
+	case "global/behavior.md":
+		return brain.GlobalBehaviorPath(), rel, nil
+	default:
+		return w.Path(rel), rel, nil
+	}
 }
 
 func normalizeWorkspaceRel(p string) (string, error) {
@@ -79,6 +89,9 @@ func normalizeWorkspaceRel(p string) (string, error) {
 	}
 
 	if p == brain.RelPersonaLocal {
+		return p, nil
+	}
+	if p == "global/constraints.md" || p == "global/behavior.md" {
 		return p, nil
 	}
 

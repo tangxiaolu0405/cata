@@ -9,7 +9,7 @@ const (
 	shortTermActivityBytes = 512
 	longTermSummarizeMinFiles = 25 // 触发 summarize：long-term 文件过多时归档到 archive（冷存储）
 	maxShortExcerptBytes    = 2400
-	maxUpdatesPerCycle            = 3
+	maxUpdatesPerCycle            = 6
 	maxCrystallizeUpdatesPerCycle = 8
 	minPatchContentRunes    = 24
 	maxLogEntries           = 80

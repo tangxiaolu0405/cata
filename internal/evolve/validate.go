@@ -28,20 +28,42 @@ func filterUpdatesWithLimit(updates []DocUpdate, limit int) []DocUpdate {
 		if err := brain.RejectCapabilitiesPatch(rel, u.Mode, content); err != nil {
 			continue
 		}
-		if strings.Contains(rel, brain.DirModes+"/") {
-			if strings.HasSuffix(rel, "/"+brain.FilePersona) || strings.HasSuffix(rel, "/"+brain.FileBehavior) {
-				// allow append to persona/behavior
+		mode := strings.ToLower(strings.TrimSpace(u.Mode))
+		if evolutionRequiresSectionedUpdate(rel) {
+			if mode == "append" || mode == "" {
+				continue
 			}
 		}
-		if strings.HasSuffix(rel, "/"+brain.FileConstraints) &&
-			(strings.EqualFold(u.Mode, "write") || strings.EqualFold(u.Mode, "overwrite")) &&
-			utf8.RuneCountInString(content) > 600 {
-			continue
+		if strings.Contains(rel, "/"+brain.FilePersona) {
+			if (mode == "write" || mode == "overwrite") && utf8.RuneCountInString(content) > 6500 {
+				continue
+			}
 		}
-		if (rel == brain.RelPersonaLocal || strings.Contains(rel, "/"+brain.FilePersona)) &&
-			(strings.EqualFold(u.Mode, "write") || strings.EqualFold(u.Mode, "overwrite")) &&
-			utf8.RuneCountInString(content) > 2000 {
-			continue
+		if rel == brain.RelPersonaLocal {
+			if (mode == "write" || mode == "overwrite") && utf8.RuneCountInString(content) > 2000 {
+				continue
+			}
+		}
+		if strings.HasSuffix(rel, "/"+brain.FileBehavior) {
+			if (mode == "write" || mode == "overwrite") && utf8.RuneCountInString(content) > 2000 {
+				continue
+			}
+		}
+		if strings.HasSuffix(rel, "/"+brain.FileConstraints) {
+			if mode == "write" || mode == "overwrite" {
+				continue
+			}
+			if utf8.RuneCountInString(content) > 800 {
+				continue
+			}
+		}
+		if rel == "global/constraints.md" || rel == "global/behavior.md" {
+			if mode == "write" || mode == "overwrite" {
+				continue
+			}
+			if utf8.RuneCountInString(content) > 600 {
+				continue
+			}
 		}
 		if rel == brain.RelMetaJSON &&
 			(strings.EqualFold(u.Mode, "write") || strings.EqualFold(u.Mode, "overwrite")) &&

@@ -14,7 +14,7 @@ import (
 
 // ReadOpenAIChatStream 读取 OpenAI 兼容的 text/event-stream（data: JSON 行），
 // 将 assistant 文本增量交给 onDelta，并返回合并正文、工具调用与 finish_reason。
-func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, err error) {
+func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	br := bufio.NewReader(r)
 	aggs := make(map[int]*streamToolAgg)
 	var contentBuf strings.Builder
@@ -25,7 +25,7 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 	for {
 		rawLine, readErr := br.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
-			return "", "", nil, "", readErr
+			return "", "", nil, "", usage, readErr
 		}
 		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
 		if line == "" {
@@ -48,12 +48,15 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 			} `json:"error"`
 		}
 		if e := json.Unmarshal([]byte(payload), &wrap); e == nil && wrap.Error != nil {
-			return "", "", nil, "", fmt.Errorf("stream API error: %s", wrap.Error.Message)
+			return "", "", nil, "", usage, fmt.Errorf("stream API error: %s", wrap.Error.Message)
 		}
 
 		var chunk streamChunk
 		if e := json.Unmarshal([]byte(payload), &chunk); e != nil {
 			continue
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			if readErr == io.EOF {
@@ -75,7 +78,7 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 			contentBuf.WriteString(d.Content)
 			if onDelta != nil {
 				if e := onDelta(d.Content); e != nil {
-					return "", "", nil, "", e
+					return "", "", nil, "", usage, e
 				}
 			}
 		}
@@ -95,10 +98,10 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 				contentBuf.WriteString(ch.Message.Content)
 				if onDelta != nil {
 				if e := onDelta(ch.Message.Content); e != nil {
-					return "", "", nil, "", e
+					return "", "", nil, "", usage, e
+				}
 				}
 			}
-		}
 		}
 
 		if readErr == io.EOF {
@@ -115,10 +118,11 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 	if reasoning == "" {
 		reasoning = lastChoiceReasoning
 	}
-	return contentBuf.String(), reasoning, toolCalls, finishReason, nil
+	return contentBuf.String(), reasoning, toolCalls, finishReason, usage, nil
 }
 
 type streamChunk struct {
+	Usage   *StreamUsage `json:"usage"`
 	Choices []struct {
 		Delta        streamDelta `json:"delta"`
 		FinishReason *string     `json:"finish_reason"`
@@ -199,7 +203,7 @@ func finalizeStreamToolCalls(aggs map[int]*streamToolAgg) []ToolCall {
 }
 
 // ChatStreamRound 单次流式 chat/completions 请求。
-func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, err error) {
+func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	if maxTokens <= 0 {
 		maxTokens = c.maxTokens
 	}
@@ -214,7 +218,7 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	}
 	httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true, true)
 	if err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", usage, err
 	}
 
 	hc := c.streamHTTPClient
@@ -223,7 +227,7 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	}
 	resp, err := hc.Do(httpReq)
 	if err != nil {
-		return "", "", nil, "", fmt.Errorf("stream request: %w", err)
+		return "", "", nil, "", usage, fmt.Errorf("stream request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -233,7 +237,7 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 		if len(msg) > 800 {
 			msg = msg[:800] + "..."
 		}
-		return "", "", nil, "", fmt.Errorf("stream API status %d: %s", resp.StatusCode, msg)
+		return "", "", nil, "", usage, fmt.Errorf("stream API status %d: %s", resp.StatusCode, msg)
 	}
 
 	ct := resp.Header.Get("Content-Type")
@@ -241,18 +245,18 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 		body, _ := io.ReadAll(resp.Body)
 		content, toolCalls2, perr := c.provider.ParseResponse(body)
 		if perr != nil {
-			return "", "", nil, "", fmt.Errorf("expected SSE stream (Content-Type=%s), got parse error: %v", ct, perr)
+			return "", "", nil, "", usage, fmt.Errorf("expected SSE stream (Content-Type=%s), got parse error: %v", ct, perr)
 		}
 		if onDelta != nil && content != "" {
 			_ = onDelta(content)
 		}
 		c.appendLLMLog(req, tools, toolChoice, content, toolCalls2, body)
-		return content, "", toolCalls2, "stop", nil
+		return content, "", toolCalls2, "stop", usage, nil
 	}
 
-	assistant, reasoning, toolCalls, finishReason, err = ReadOpenAIChatStream(resp.Body, onDelta)
+	assistant, reasoning, toolCalls, finishReason, usage, err = ReadOpenAIChatStream(resp.Body, onDelta)
 	if err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", usage, err
 	}
 
 	// 若干 OpenAI 兼容端在 SSE 下 finish_reason=tool_calls 但 delta 未携带可合并的 tool_calls；
@@ -267,10 +271,10 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 		}
 		cr, tc2, err2 := c.chat(nreq, tools, toolChoice, true)
 		if err2 != nil {
-			return assistant, reasoning, toolCalls, finishReason, fmt.Errorf("stream tool_calls empty, non-stream fallback failed: %w", err2)
+			return assistant, reasoning, toolCalls, finishReason, usage, fmt.Errorf("stream tool_calls empty, non-stream fallback failed: %w", err2)
 		}
 		if len(tc2) == 0 {
-			return assistant, reasoning, toolCalls, finishReason, fmt.Errorf("stream and non-stream both returned no tool_calls while finish_reason implies tools")
+			return assistant, reasoning, toolCalls, finishReason, usage, fmt.Errorf("stream and non-stream both returned no tool_calls while finish_reason implies tools")
 		}
 		toolCalls = tc2
 		if cr != nil && len(cr.Choices) > 0 {
@@ -289,5 +293,8 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	}
 
 	c.appendLLMLog(req, tools, toolChoice, assistant, toolCalls, nil)
-	return assistant, reasoning, toolCalls, finishReason, nil
+	return assistant, reasoning, toolCalls, finishReason, usage, nil
 }
+
+// ModelName 当前客户端使用的模型名。
+func (c *Client) ModelName() string { return c.model }

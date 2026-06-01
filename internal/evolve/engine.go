@@ -170,6 +170,15 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		ingestCrystallizedSkills(ws, touched)
 	}
 
+	// Deterministic long-term → archive when file count exceeds threshold.
+	if shouldSummarizeLongTerm(snap) {
+		if moved, err := summarizeLongTerm(snap); err != nil {
+			log.Printf("Autonomous evolution [%s]: summarize: %v", ws.ID, err)
+		} else if len(moved) > 0 {
+			touched = append(touched, moved...)
+		}
+	}
+
 	if !isMeaningfulDecision(dec, touched) {
 		log.Printf("Autonomous evolution [%s]: no-op (action=%s)", ws.ID, dec.Action)
 		e.mu.Lock()
@@ -220,17 +229,28 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 }
 
 func evolutionSystemPrompt() string {
-	return `你是 Cata 自主演进模块。只修改 ~/.cata 脑子目录内 Markdown；产出区（用户 cwd）不在此写入。
+	return `你是 Cata 自主演进模块。**~/.cata 下脑子正文全部由你（LLM）维护**；用户不编辑这些文件。只改脑子目录内 Markdown；产出区（用户 cwd）不在此写入。
 
-persona 由你从脑子内 short-term 提炼；终端对话不直接改 persona。
+persona / persona.local / behavior / constraints 均从 short-term 提炼；终端对话只写 short-term。
 
-只在 triggers 成立时修改当前脑子分区内文件；否则 action=idle 且 updates=[]。
+只在 triggers 成立时修改；若 triggers 含 fill:*，**本轮必须**用 updates 填好仍为空壳的文档（不可 idle）。
 
 输出：单个 JSON 对象。
 字段：action, reason, learning, updates[]
-- path 相对 workspace 根，例如：modes/_default/persona.md、persona.local.md、memory/long/note.md
-- consolidate：把 short_term excerpt 中的**新事实**写入 modes/<mode>/persona.md（append），细节写 memory/long/*.md；**不要** patch memory/short/current.md（服务端会归档并更新 memory/index.json）
-- 禁止整篇重写 constraints；persona 只 append 不重复已有段落
+
+**写入路由（相对 workspace 根；global/* 用 global/constraints.md、global/behavior.md）**
+| 路径 | 写什么 | 怎么写 |
+| modes/<mode>/persona.md | 身份、偏好、习惯（跨项目） | append_section / replace_section；会话压缩可用 write ≤6500 |
+| persona.local.md | **本项目 focus_path**：仓库用途、技术栈、当前任务 | append_section（Current focus 等）；fill:persona.local 时**必写** |
+| memory/long/*.md | 细节、长事实 | append |
+| modes/<mode>/behavior.md | mode 级 SOP（fill:mode_behavior 时从 short-term 提炼） | append_section |
+| modes/<mode>/constraints.md | mode 级补充约束（fill:mode_constraints 时提炼） | append_section，每节 ≤800 字 |
+| global/constraints.md | **全机通用**硬规则（非项目细节；fill:global_constraints 时提炼） | append_section，每节 ≤600 字 |
+| global/behavior.md | **全机通用** SOP（fill:global_behavior 时提炼） | append_section，每节 ≤600 字 |
+
+- consolidate：新事实按上表分流；**不要** patch memory/short/current.md
+- 带 ## 的文档：禁止 append/空 mode 堆叠；同名 ## 会替换旧节
+- 禁止 write/overwrite 整篇 constraints（含 global 与 mode）
 
 默认 idle。`
 }
@@ -238,7 +258,7 @@ persona 由你从脑子内 short-term 提炼；终端对话不直接改 persona�
 func evolutionSessionCompressPrompt() string {
 	return evolutionSystemPrompt() + `
 
-本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；将 short-term 中的新事实写入 modes/<mode>/persona.md，细节摘要可 append 到 memory/long/*.md；不要 idle；不要 patch short/current.md。`
+本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；合并 short-term 新事实到 modes/<mode>/persona.md（优先 append_section 按节替换；冗长重复时用 write 输出去重后的全文 ≤6500 字）；细节 append 到 memory/long/*.md；不要 idle；不要 patch short/current.md。`
 }
 
 func evolutionCrystallizePrompt() string {
@@ -291,9 +311,17 @@ func buildDecisionPrompt(snap *Snapshot, sessionCompress, crystallize bool) stri
 			b.WriteString("\n\n(short_term unchanged since last evolution; excerpt omitted)\n")
 		}
 		if hot, err := readFileCap(brain.HotPath(), 1200); err == nil && hot != "" {
-			b.WriteString("\n\ncurrent mode persona (merge here, append only):\n")
+			b.WriteString("\n\ncurrent mode persona (update via append_section per ## title; same title replaces old body):\n")
 			b.WriteString(hot)
 		}
+		if local, err := readFileCap(brain.PersonaLocalPath(), 1200); err == nil {
+			b.WriteString("\n\ncurrent persona.local (project focus — LLM-maintained, update here):\n")
+			b.WriteString(local)
+		}
+	}
+	if mustFill := brainDocsNeedingFill(); len(mustFill) > 0 {
+		b.WriteString("\n\nMUST fill scaffold brain docs this cycle (append_section from short_term): ")
+		b.WriteString(strings.Join(mustFill, ", "))
 	}
 	if snap.RecentLogSummary != "" {
 		b.WriteString("\n\nrecent evolution: ")

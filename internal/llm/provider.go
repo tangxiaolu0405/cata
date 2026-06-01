@@ -349,7 +349,7 @@ func (p *QwenProvider) GetAPIKeyHeader(apiKey string) (string, string) {
 func GetProvider(providerName string) Provider {
 	switch strings.ToLower(providerName) {
 	case "qwen", "tongyi", "dashscope":
-		return &QwenProvider{}
+		return &OpenAIProvider{}
 	case "deepseek":
 		return &OpenAIProvider{}
 	case "openai", "":

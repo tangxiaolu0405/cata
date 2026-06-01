@@ -40,10 +40,10 @@ Cata 是终端原生 AI Agent。单二进制，Unix socket 架构，后台自主
 | 会话历史 | 内存（socket） | server 每轮 | 否 | 同连接多轮 |
 | short-term | `memory/short/current.md` | server 每轮 | **输入**（evolve 读取） | 否 |
 | persona | `modes/<mode>/persona.md` | **仅 evolve** | **输出**（consolidate 写入） | 每轮全量 |
-| persona.local | `persona.local.md` | evolve / 人 | 读写 | 每轮 |
+| persona.local | `persona.local.md` | **仅 evolve** | 读写 | 每轮 |
 | long-term | `memory/long/` | evolve | **读写**（consolidate 细节，summarize 源） | index → 按需 |
 | archive | `memory/archive/` | evolve | **否**（summarize 目标，写入后即冷） | **否** |
-| global | `~/.cata/global/` | 人 / seed | 否 | 约束+行为节选 |
+| global | `~/.cata/global/` | **仅 evolve**（空壳时 fill 触发）+ init 种子 | 否 | 约束+行为节选 |
 
 **archive 是冷存储**：long-term 中过时/冗余的内容经 summarize 移入 archive 后，不再被 evolve 读取，不进入 memory_index，不注入 context。比 long-term 更"长"，但不再参与认知循环。
 

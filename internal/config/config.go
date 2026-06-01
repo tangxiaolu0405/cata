@@ -42,6 +42,8 @@ type MCPConfig struct {
 	Servers            []MCPServerEntry `json:"servers"`
 	ToolTimeoutSeconds int              `json:"tool_timeout_seconds"`
 	MaxOutputBytes     int              `json:"max_output_bytes"`
+	AllowedTools       []string         `json:"allowed_tools"`
+	MaxExportedTools   int              `json:"max_exported_tools"`
 }
 
 // MCPServerEntry 单个 MCP server 进程配置。
@@ -413,6 +415,12 @@ func normalizeMCPConfig(m *MCPConfig) {
 	}
 	if m.MaxOutputBytes <= 0 {
 		m.MaxOutputBytes = 256 * 1024
+	}
+	if m.MaxExportedTools <= 0 {
+		m.MaxExportedTools = 14
+	}
+	if len(m.AllowedTools) == 0 && m.Enabled {
+		m.AllowedTools = []string{"browser_*"}
 	}
 	if len(m.Servers) == 0 && m.Enabled {
 		m.Servers = []MCPServerEntry{{

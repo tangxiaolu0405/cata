@@ -3,6 +3,7 @@ package brain
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -57,6 +58,17 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 		if p := w.PersonaPath(); fileExists(p) {
 			sections = append(sections, struct{ title, path string }{
 				fmt.Sprintf("mode/%s/persona", w.modeID()), p,
+			})
+		}
+		modeDir := filepath.Dir(w.PersonaPath())
+		if p := filepath.Join(modeDir, FileBehavior); fileExists(p) && !FileNeedsEvolveFill(p) {
+			sections = append(sections, struct{ title, path string }{
+				fmt.Sprintf("mode/%s/behavior", w.modeID()), p,
+			})
+		}
+		if p := filepath.Join(modeDir, FileConstraints); fileExists(p) && !FileNeedsEvolveFill(p) {
+			sections = append(sections, struct{ title, path string }{
+				fmt.Sprintf("mode/%s/constraints", w.modeID()), p,
 			})
 		}
 		if p := w.PersonaLocalPath(); fileExists(p) {

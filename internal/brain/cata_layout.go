@@ -44,6 +44,9 @@ func seedGlobalFromRepo() error {
 	}
 	for dstName, srcName := range mapping {
 		dst := filepath.Join(globalDir(), dstName)
+		if !FileNeedsEvolveFill(dst) {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(src, srcName))
 		if err != nil {
 			continue

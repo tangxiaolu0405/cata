@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"cata/internal/brain"
 	"cata/internal/client"
@@ -17,7 +18,7 @@ func main() {
 	}
 
 	if len(os.Args) < 2 {
-		client.RunChat()
+		client.RunChat(nil)
 		return
 	}
 
@@ -26,7 +27,8 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	case "chat":
-		client.RunChat()
+		dirs := parseDirs(os.Args[2:])
+		client.RunChat(dirs)
 	case "init":
 		runInit()
 	case "config":
@@ -40,19 +42,34 @@ func main() {
 	}
 }
 
+func parseDirs(args []string) []string {
+	var dirs []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--dir" && i+1 < len(args) {
+			abs, err := filepath.Abs(args[i+1])
+			if err == nil {
+				dirs = append(dirs, abs)
+			}
+			i++
+		}
+	}
+	return dirs
+}
+
 func printUsage() {
 	fmt.Println("Cata — terminal agent (one binary: server + chat client)")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  cata              Start chat (default)")
-	fmt.Println("  cata chat         Same as default")
-	fmt.Println("  cata run          Start server (one per machine; foreground)")
-	fmt.Println("  cata init         Initialize ~/.cata brain layout")
-	fmt.Println("  cata config       Manage configuration")
+	fmt.Println("  cata                    Start chat (default)")
+	fmt.Println("  cata chat [--dir <path>]  Start chat at output dir")
+	fmt.Println("  cata run                Start server (one per machine; foreground)")
+	fmt.Println("  cata init               Initialize ~/.cata brain layout")
+	fmt.Println("  cata config             Manage configuration")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  cata              # auto-starts server; /exit stops server when last chat ends")
-	fmt.Println("  cd ../other && cata   # another project (same server until all chats exit)")
+	fmt.Println("  cata                         # uses current directory as output area")
+	fmt.Println("  cata chat --dir ~/project    # project as output area")
+	fmt.Println("  cata chat --dir ~/a --dir ~/b  # first dir is main output area")
 	fmt.Println()
 	fmt.Println("Same output directory: second `cata` exits with an error.")
 	fmt.Println("See README.md and agents.md")
