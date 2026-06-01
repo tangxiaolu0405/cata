@@ -26,6 +26,9 @@ func shouldFinalizeShortTerm(dec *Decision, touched []string, snap *Snapshot, se
 		if strings.Contains(pl, "persona") || strings.HasPrefix(pl, brain.RelMemoryLong+"/") {
 			return true
 		}
+		if pl == brain.RelPersonaLocal {
+			return true
+		}
 	}
 	return false
 }

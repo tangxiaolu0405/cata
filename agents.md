@@ -24,6 +24,8 @@
 
 `focus_path`（git 根 / yaml 目录 / cwd）只用于**选中哪一格脑子**，不把产出存进 `~/.cata`。
 
+**脑子正文（persona、persona.local、behavior、constraints、记忆）由 server + 后台 evolve（LLM）维护；用户不编辑 `~/.cata`。`cata init` 仅创建目录与种子模板。**
+
 ---
 
 ## 当前实现
@@ -33,7 +35,7 @@
 | **`cmd/cata`** | `init`（初始化 ~/.cata/brain）、`config`、`run`（socket + 后台演进） |
 | **`cmd/cata`（`chat`）** | 默认流式 LLM 客户端；协议：`chat`（`stream:true`）、`chat_reset`、`ping`；`cmd/catacli` 已废弃 |
 | **`internal/server`** | Unix socket、终端 chat 工具循环 |
-| **`internal/llm`** | OpenAI 兼容 Chat；注入 boot-leader + **路径块**（脑子 vs 产出区）+ 脑子节选 |
+| **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
 | **`internal/brain`** | 路径常量、`InitDirectory`、终端节选 |
 | **`internal/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
 | **`internal/config`** | `~/.cata/config.json`：LLM（`deepseek` / `qwen` 等 OpenAI 兼容）、exec、`evolution.enabled` / `cycle_interval` |
@@ -59,6 +61,10 @@
 - **无** 手动 `cata evolve` 命令。
 
 ---
+
+## 多模态（设计，未实现）
+
+终端 chat 计划支持**图片附件**（路径 / 粘贴），并按 **`llm.capabilities` + `models.chat_vision`** 在纯文本模型与 vision 模型间切换；history 存附件引用，出站前编码为 OpenAI 式 `content[]`。详见 **`design.md` §多模态**。
 
 ## LLM（DeepSeek）
 
@@ -86,12 +92,6 @@ cata chat --dir ~/project         # 产出区 = ~/project
 cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 ```
 
-**配置文件** (`~/.cata/config.json`)：
-
-```json
-{ "workspace": { "default_dir": "~/myproject" } }
-```
-
 **参考 Claude Code**：
 - Claude 的 launch dir → cata 的 cwd 或第一个 `--dir`
 - Claude 的 `--add-dir` → cata 的多个 `--dir`
@@ -110,63 +110,57 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ---
 
-## 交互层：事件输出规范
+## 提示词组装（与代码对齐）
 
-**核心原则**：`stdout` = AI 的回答正文（可被管道/重定向）。`stderr` = 元信息（工具、进度、错误）。两者绝不混淆。
+终端 **socket history** 只存 `user` / `assistant` / `tool`；**系统提示在 HTTP 出站前**由 `internal/llm` 注入（`buildHTTPChatRequest(..., injectBrain=true)` → `withBootLeaderSystemMessage`）。详见 **`design.md` §Context 组装**。
 
-### 事件类型与显示
+| 顺序 | API `messages[]` | 来源（代码） |
+|------|------------------|--------------|
+| ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点 |
+| ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`：路径块 + Skills + 记忆索引 + global/mode 文档 |
+| ③+ | `user` / `assistant` / `tool` | `internal/server/socket_chat.go` 内存 history |
+| 并行 | `tools[]` | 内置工具 + MCP（不经 messages 拼接正文） |
 
-| 事件 | 通道 | 显示条件 | 说明 |
-|------|------|----------|------|
-| `token` | **stdout** | 始终 | AI 生成的文本，逐字流式输出 |
-| `thinking` | stderr | `--show-thinking` | DeepSeek reasoning_content |
-| `tool:start` | stderr | 始终 | 工具名 + 参数摘要 |
-| `tool:output` | stderr | 按 display 级别 | `silent`=隐藏，`normal`=截断摘要，`verbose`=完整 |
-| `tool:done` | stderr | 仅出错或 `--verbose` | 退出码 / 耗时 |
-| `progress` | stderr | 第 2+ 轮 | 第 1 轮不显示（"正在想"是默认预期） |
-| `error` | stderr | 始终 | 错误信息 |
-| `done` | 内部 | 不显示 | 流结束信号 |
+**② brain 节选**（`internal/brain/terminal_context.go`）单条 `system`，自上而下：
 
-### 工具输出的三级显示
+1. **路径块** — `TerminalPathsSystemBlock()`（`context_paths.go`）：脑子 vs 产出区、`focus_path`、`output_cwd`、运行时 shell/OS（`Runtime` 由 client 上报）
+2. **Skills** — `SkillsPromptBlock()`：读 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（workspace → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
+3. **记忆索引** — `MemoryIndexPromptBlock()` ← `memory/index.json`（≤2800 bytes）
+4. **文档块** — `global/constraints.md`、`global/behavior.md`、`modes/<mode>/persona.md`、`persona.local.md`（legacy 无 workspace 时回退 `brain/constraints.md` 等）
 
-| 级别 | 何时用 | 示例 |
-|------|--------|------|
-| `silent` | `read_file` 成功、纯上下文获取 | 用户不需要看文件内容 |
-| `normal` | `search_replace` diff、`run_skill` 日志 | 显示变更摘要 |
-| `verbose` | `run_command` 结果、任何工具出错 | 完整输出 |
+**演进 LLM**（`internal/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt()` 等）+ `user`（`buildDecisionPrompt()`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**（`ChatEvolution` 注释写「不注入」与实现不一致，以代码为准）。
 
-### Client 覆盖
+**其它 LLM 调用**：`Summarize` / 查询预处理等在 `client.go` 内联 `system` + `user`，走 `chat()` 时也会带上 ①②。
 
-```
-cata chat             # 默认：normal 级别
-cata chat --quiet     # 所有工具输出静默，只显示 AI 文本
-cata chat --verbose   # 所有工具输出完整显示
-cata chat --show-thinking  # 输出 reasoning/thinking 内容到 stderr
-```
+**日志拆解**：`internal/llm/prompt_log.go`（`LLM_LOG_FILE`）；组件 id：`boot-leader`、`brain-excerpt`、`conversation`、`tools`。
 
-### Server 事件格式（NDJSON）
+---
 
-```jsonld
-{"type":"token","content":"我来帮你"}
-{"type":"thinking","content":"需要先读取文件..."}
-{"type":"tool:start","id":"c1","name":"read_file","args":{"path":"main.go"},"display":"silent"}
-{"type":"tool:output","id":"c1","name":"read_file","content":"package main\n...","display":"silent"}
-{"type":"tool:done","id":"c1","name":"read_file","ok":true}
-{"type":"tool:start","id":"c2","name":"run_command","args":{"argv":["go","test","./..."]},"display":"verbose"}
-{"type":"tool:output","id":"c2","name":"run_command","content":"ok  ...\n","display":"verbose"}
-{"type":"tool:done","id":"c2","name":"run_command","ok":true,"exit_code":0}
-{"type":"progress","message":"model round 2"}
-{"type":"error","message":"something went wrong"}
-{"type":"done","success":true}
-```
+## 交互层：Bubble Tea TUI
 
-**`display` 字段**：Server 给 Client 的提示。Client 可根据 `--quiet` / `--verbose` 覆盖。`silent` 的工具输出在 `--quiet` 下完全不出现；`verbose` 的输出在 `--verbose` 下完整显示。
+`cata chat` 使用 **Bubble Tea** 全屏 TUI（`internal/client/tui.go`）：主区滚动对话、底栏 `›` 输入、宽屏 **右侧状态栏**（`tui_stats.go`，≥96 列；`CATA_NO_SIDEBAR=1` 关闭）。**不再**使用 stdout/stderr 分流，故不支持 `cata chat "…" > file` 管道模式。
+
+### Server → Client（NDJSON）
+
+`internal/server/socket_chat.go` → `emitStreamLine`；TUI 在 `stream.go` 消费。
+
+| `type` | TUI |
+|--------|-----|
+| `token` | 主区流式正文 |
+| `tool_*` / `progress` / `error` | 主区或侧栏 |
+| `exec_confirm_required` | 列表菜单 Run/Cancel |
+| `user_choice` | 列表菜单（↑↓/j/k，Enter） |
+| `stats` | 刷新右侧栏 |
+| `done` | 结束本轮；`cancelled`=Ctrl+C |
+
+斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config`。
+
+**预留**（server 未发或未接）：`thinking`、`file_written`、`diff`、`display` 分级。
 
 ### 推理/思考内容
 
-- DeepSeek thinking (`reasoning_content`) 默认不向用户展示
-- `--show-thinking` 时作为 `thinking` 事件流式输出到 stderr
-- API 层始终回传 `reasoning_content`（协议要求），只是 UI 层过滤
+- Server 在流式轮次收集 `reasoning_content` 并写入 **history**（供 DeepSeek tool 轮次回传），**不向 client 发 `thinking` 事件**
+- DeepSeek `llm.thinking`：`auto` / `enabled` / `disabled`（`internal/llm/provider.go`）
 
 ---
 
@@ -180,7 +174,7 @@ cata chat --show-thinking  # 输出 reasoning/thinking 内容到 stderr
 ## 给 AI 的约束
 
 1. 改功能先看 **`internal/server`**、**`cmd/cata`**、**`internal/client`**、**`internal/evolve`**。
-2. 路径以 **`internal/brain/paths.go`**、`context_paths.go` 与 **`~/.cata/global/`** 为准；产出区 = `cata` 启动时的 cwd。
+2. 路径以 **`internal/brain/paths.go`**、`layout.go`、`context_paths.go` 与 **`~/.cata/global/`** 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
 3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
 4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（脑子）混为一谈；勿把 focus_path 当成产出区。
 
@@ -189,6 +183,8 @@ cata chat --show-thinking  # 输出 reasoning/thinking 内容到 stderr
 ## 建议阅读顺序
 
 1. 本文件  
-2. `~/.cata/global/constraints.md`（或仓库模板 `brain/constraints.md`）  
-3. `brain/behavior.md`  
-4. 具体 `internal/server`、`internal/evolve` 源码  
+2. **`design.md`**（架构、Context 组装、NDJSON 协议）  
+3. `~/.cata/global/constraints.md`（或仓库模板 `brain/constraints.md`）  
+4. 提示词代码：`internal/llm/client.go`、`internal/brain/terminal_context.go`、`internal/llm/prompt_log.go`  
+5. 对话循环：`internal/server/socket_chat.go`、`internal/client/tui.go`  
+6. 演进：`internal/evolve/engine.go`  

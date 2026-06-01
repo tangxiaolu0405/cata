@@ -1,18 +1,13 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -22,7 +17,6 @@ import (
 	"cata/internal/brain"
 	"cata/internal/config"
 	"cata/internal/evolve"
-	"cata/internal/execcmd"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -31,8 +25,6 @@ var activeChatStreams int32
 
 // 压缩后 socket history 目标占用（相对 context_window 的比例，为回复与 tool 留空）。
 const historyBudgetAfterCompressRatio = 0.40
-
-const execConfirmWaitTimeout = 10 * time.Minute
 
 // 终端对话：history 仅维护 user / assistant / tool。boot-leader.md 与 brain 节选由 internal/llm.Client.withBootLeaderSystemMessage 在出站前注入为前两条 system（与 user 无关）；工具仅经 API 的 tools 字段。旧版 terminalUserContent 已移除。
 
@@ -88,9 +80,18 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 		return fmt.Errorf("no terminal tools enabled")
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lr := newConnLineReader(conn, cancel)
+	defer lr.Stop()
+	ctx = withChatConnReader(ctx, lr)
+
+	var sessPromptTok, sessCompletionTok int
 
 	for round := 1; ; round++ {
+		if ctx.Err() != nil {
+			return ss.emitChatCancelled(conn)
+		}
 		ss.maybeContextCompress(conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
 
@@ -105,6 +106,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 		var asst string
 		var reasoning string
 		var toolCalls []llm.ToolCall
+		var roundUsage llm.StreamUsage
 		var err error
 		for attempt := 1; attempt <= maxLLMAttempts; attempt++ {
 			if attempt > 1 {
@@ -113,7 +115,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 				})
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
-			asst, reasoning, toolCalls, _, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+			asst, reasoning, toolCalls, _, roundUsage, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
 			toolCalls = llm.NormalizeToolCalls(toolCalls)
 			if err == nil {
 				break
@@ -123,7 +125,11 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 			}
 			log.Printf("chat stream round %d attempt %d: %v", round, attempt, err)
 		}
+		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, "")
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return ss.emitChatCancelled(conn)
+			}
 			msg := err.Error() + "\n\n本连接对话上下文已保留（含已执行的工具结果）。直接输入「继续」即可接着做，无需从头重述任务。"
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
@@ -187,7 +193,11 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 
 		fatalBrowser := false
 		for _, tc := range toolCalls {
+			if ctx.Err() != nil {
+				return ss.emitChatCancelled(conn)
+			}
 			name := tc.Function.Name
+			ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, &sessPromptTok, &sessCompletionTok, name)
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name})
 			var out string
 			var terr error
@@ -218,6 +228,12 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 	}
 }
 
+func (ss *SocketServer) emitChatCancelled(conn net.Conn) error {
+	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": "已停止"})
+	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false, "cancelled": true})
+	return nil
+}
+
 // maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。
 // history 指本连接内存中的多轮 user/assistant/tool，不是 short-term 文件；short-term 由 AppendChatTurn 写入磁盘供 evolve 提炼。
 func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool) {
@@ -244,62 +260,10 @@ func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, 
 
 func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
 	_ = config.InitBrainPath()
-
-	var out []llm.Tool
-	if config.Config != nil && config.Config.WorkspaceFilesEnabled() {
-		readParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd (brain.base_dir)"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`)
-		replaceParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}`)
-		appendParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`)
-		out = append(out,
-			llm.Tool{Type: "function", Function: llm.ToolFunction{
-				Name:        "read_file",
-				Description: "Read a text file in the output workspace (relative path). Use before editing.",
-				Parameters:  readParams,
-			}},
-			llm.Tool{Type: "function", Function: llm.ToolFunction{
-				Name:        "search_replace",
-				Description: "Replace old_string with new_string in a file under output cwd (first match unless replace_all).",
-				Parameters:  replaceParams,
-			}},
-			llm.Tool{Type: "function", Function: llm.ToolFunction{
-				Name:        "append_file",
-				Description: "Append text to a file under output cwd (creates file if missing).",
-				Parameters:  appendParams,
-			}},
-		)
-	}
+	out := ss.tools.Schemas()
 	if mgr := mcp.Global(); mgr != nil {
 		out = append(out, mgr.Tools()...)
 	}
-	if config.Config != nil && config.Config.Exec.Enabled {
-		runCmdParams := json.RawMessage(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"argv[0]=program on PATH; no shell."}},"required":["argv"]}`)
-		out = append(out, llm.Tool{
-			Type: "function",
-			Function: llm.ToolFunction{
-				Name:        "run_command",
-				Description: brain.RunCommandToolDescription(),
-				Parameters:  runCmdParams,
-			},
-		})
-	}
-	runSkillParams := json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from capabilities.yaml (brain skills/<id>/)"},"params":{"type":"object","description":"Optional JSON params passed to the skill script"}},"required":["skill"]}`)
-	out = append(out, llm.Tool{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "run_skill",
-			Description: "Run a crystallized skill script from brain (workspace ~/.cata/brain/.../skills/<id>/). Outputs go to output cwd. Use for known tasks; use browser_* for new sites.",
-			Parameters:  runSkillParams,
-		},
-	})
-	askUserParams := json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"Question to present to the user"},"options":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"desc":{"type":"string"}},"required":["id","label"]},"minItems":2},"multi":{"type":"boolean","description":"Allow user to select multiple options (default false)"}},"required":["prompt","options"]}`)
-	out = append(out, llm.Tool{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "ask_user",
-			Description: "Present a choice to the user. Use when you need the user to decide between approaches, pick from alternatives, or confirm a multi-option selection. The user sees an interactive selector (arrow keys, Enter to confirm).",
-			Parameters:  askUserParams,
-		},
-	})
 	return out
 }
 
@@ -317,183 +281,7 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 		}
 	}
 
-	switch name {
-	case "run_command":
-		var p struct {
-			Argv []string `json:"argv"`
-		}
-		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
-			return "", fmt.Errorf("run_command args: %w", err)
-		}
-		if len(p.Argv) == 0 {
-			return "", fmt.Errorf("run_command: argv required")
-		}
-		if config.Config == nil {
-			return "", fmt.Errorf("config not loaded")
-		}
-		if err := config.CheckExecArgv(p.Argv); err != nil {
-			return "", err
-		}
-		ec := &config.Config.Exec
-		wd, err := resolveExecCwd()
-		if err != nil {
-			return "", err
-		}
-		cmdLine := execcmd.FormatLine(p.Argv)
-		if config.ExecNeedsConfirm(p.Argv) {
-			id := newExecConfirmID()
-			_ = ss.emitStreamLine(conn, map[string]interface{}{
-				"type":         "exec_confirm_required",
-				"confirm_id":   id,
-				"argv":         p.Argv,
-				"command_line": cmdLine,
-				"cwd":          wd,
-				"options": []map[string]string{
-					{"id": "run", "label": "Run"},
-					{"id": "cancel", "label": "Cancel"},
-				},
-			})
-			approved, err := ss.waitExecClientConfirm(conn, id)
-			if err != nil {
-				return "", err
-			}
-			if !approved {
-				_ = ss.emitStreamLine(conn, map[string]interface{}{
-					"type": "exec_denied", "confirm_id": id,
-					"command_line": cmdLine, "cwd": wd,
-				})
-				return "[run_command] cancelled by user", nil
-			}
-		}
-
-		to := time.Duration(ec.TimeoutSeconds) * time.Second
-		if to <= 0 {
-			to = 120 * time.Second
-		}
-		xctx, cancel := context.WithTimeout(ctx, to)
-		defer cancel()
-
-		cmd := exec.CommandContext(xctx, p.Argv[0], p.Argv[1:]...)
-		cmd.Dir = wd
-
-		var stdOut, stdErr bytes.Buffer
-		cmd.Stdout = &stdOut
-		cmd.Stderr = &stdErr
-		runErr := cmd.Run()
-
-		maxB := ec.MaxOutputBytes
-		if maxB <= 0 {
-			maxB = 256 * 1024
-		}
-
-		exitCode := 0
-		timedOut := false
-		var exitErr *exec.ExitError
-		if runErr != nil {
-			if errors.Is(xctx.Err(), context.DeadlineExceeded) {
-				timedOut = true
-				exitCode = -1
-			} else if errors.As(runErr, &exitErr) {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = -1
-			}
-		}
-
-		stdoutStr := stdOut.String()
-		stderrStr := stdErr.String()
-		totalLen := len(stdoutStr) + len(stderrStr)
-		truncated := false
-		if totalLen > maxB {
-			stdoutStr, stderrStr = truncateCmdOutput(stdoutStr, stderrStr, maxB)
-			truncated = true
-		}
-
-		result := formatCommandResult(wd, cmdLine, exitCode, timedOut, truncated, stdoutStr, stderrStr)
-
-		_ = ss.emitStreamLine(conn, map[string]interface{}{
-			"type":         "exec_done",
-			"argv":         p.Argv,
-			"command_line": cmdLine,
-			"cwd":          wd,
-			"exit_code":    exitCode,
-			"timed_out":    timedOut,
-			"truncated":    truncated,
-		})
-
-		if runErr != nil && !timedOut && exitCode < 0 {
-			log.Printf("run_command failed: argv=%v cwd=%s: %v", p.Argv, wd, runErr)
-		} else {
-			log.Printf("run_command: exit=%d argv=%v cwd=%s bytes=%d", exitCode, p.Argv, wd, totalLen)
-		}
-		return result, nil
-
-	case "read_file":
-		return toolReadFile(argsJSON)
-	case "search_replace":
-		return toolSearchReplace(argsJSON)
-	case "append_file":
-		return toolAppendFile(argsJSON)
-
-	case "run_skill":
-		var p brain.RunSkillArgs
-		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
-			return "", fmt.Errorf("run_skill args: %w", err)
-		}
-		return brain.RunSkill(ctx, p)
-
-	case "ask_user":
-		var p struct {
-			Prompt  string `json:"prompt"`
-			Options []struct {
-				ID    string `json:"id"`
-				Label string `json:"label"`
-				Desc  string `json:"desc"`
-			} `json:"options"`
-			Multi bool `json:"multi"`
-		}
-		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
-			return "", fmt.Errorf("ask_user args: %w", err)
-		}
-		if len(p.Options) < 2 {
-			return "", fmt.Errorf("ask_user: at least 2 options required")
-		}
-		choiceID := newExecConfirmID()
-		_ = ss.emitStreamLine(conn, map[string]interface{}{
-			"type":    "user_choice",
-			"id":      choiceID,
-			"prompt":  p.Prompt,
-			"detail":  "",
-			"multi":   p.Multi,
-			"options": p.Options,
-		})
-		selected, err := ss.waitUserChoice(conn, choiceID)
-		if err != nil {
-			return "", err
-		}
-		if len(selected) == 0 {
-			return "[ask_user] user cancelled", nil
-		}
-		var labels []string
-		for _, s := range selected {
-			for _, o := range p.Options {
-				if o.ID == s {
-					labels = append(labels, o.Label)
-					break
-				}
-			}
-		}
-		if len(labels) == 0 {
-			labels = selected
-		}
-		if p.Multi {
-			return fmt.Sprintf("[ask_user] user selected: %s", strings.Join(labels, ", ")), nil
-		}
-		return fmt.Sprintf("[ask_user] user selected: %s", labels[0]), nil
-
-	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
-	}
+	return ss.tools.Dispatch(ctx, conn, name, argsJSON)
 }
 
 // formatCommandResult builds a structured string for the LLM from command execution results.
@@ -606,50 +394,6 @@ func safePathUnder(base, rel string) (string, error) {
 	return fullAbs, nil
 }
 
-// waitExecClientConfirm 在流式 chat 同连接上阻塞，直到客户端发送 command=exec_confirm。
-func (ss *SocketServer) waitExecClientConfirm(conn net.Conn, confirmID string) (bool, error) {
-	deadline := time.Now().Add(execConfirmWaitTimeout)
-	br := bufio.NewReader(conn)
-	for {
-		if time.Now().After(deadline) {
-			return false, fmt.Errorf("exec confirmation timed out")
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		line, err := br.ReadBytes('\n')
-		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			return false, fmt.Errorf("read exec_confirm: %w", err)
-		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var req Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			return false, fmt.Errorf("invalid exec_confirm JSON: %w", err)
-		}
-		if req.Command != "exec_confirm" {
-			return false, fmt.Errorf("expected exec_confirm while command pending, got %q", req.Command)
-		}
-		if strings.TrimSpace(req.ConfirmID) != confirmID {
-			return false, fmt.Errorf("confirm_id mismatch")
-		}
-		_ = conn.SetReadDeadline(time.Time{})
-		return req.Approved, nil
-	}
-}
-
-func newExecConfirmID() string {
-	var b [10]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("t%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b[:])
-}
-
 func resolveExecCwd() (string, error) {
 	if config.Config == nil {
 		return "", fmt.Errorf("config not loaded")
@@ -673,46 +417,6 @@ func resolveExecCwd() (string, error) {
 	return d, nil
 }
 
-// waitUserChoice blocks on the same chat connection waiting for a user_choice response.
-func (ss *SocketServer) waitUserChoice(conn net.Conn, choiceID string) ([]string, error) {
-	deadline := time.Now().Add(execConfirmWaitTimeout)
-	br := bufio.NewReader(conn)
-	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("user choice timed out")
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		line, err := br.ReadBytes('\n')
-		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			return nil, fmt.Errorf("read user_choice: %w", err)
-		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var req struct {
-			Command  string   `json:"command"`
-			ChoiceID string   `json:"choice_id"`
-			Selected []string `json:"selected"`
-		}
-		if err := json.Unmarshal(line, &req); err != nil {
-			return nil, fmt.Errorf("invalid user_choice JSON: %w", err)
-		}
-		if req.Command != "user_choice" {
-			return nil, fmt.Errorf("expected user_choice, got %q", req.Command)
-		}
-		if req.ChoiceID != choiceID {
-			return nil, fmt.Errorf("choice_id mismatch")
-		}
-		_ = conn.SetReadDeadline(time.Time{})
-		return req.Selected, nil
-	}
-}
-
 // isFatalBrowserError returns true when the tool error or output indicates
 // the browser process died — remaining browser tool calls in this round are futile.
 func isFatalBrowserError(err error, output string) bool {
@@ -732,4 +436,41 @@ func isFatalBrowserError(err error, output string) bool {
 			strings.Contains(output, "Browser closed") ||
 			strings.Contains(output, "Protocol error") ||
 			strings.Contains(output, "has been closed"))
+}
+
+func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, lastTool string) {
+	in := usage.PromptTokens
+	out := usage.CompletionTokens
+	if in == 0 && out == 0 && usage.TotalTokens > 0 {
+		in = usage.TotalTokens
+	}
+	if in > 0 {
+		*sessIn += in
+	}
+	if out > 0 {
+		*sessOut += out
+	}
+	ctxEst := client.EstimatedChatInputTokens(*history, tools)
+	ev := map[string]interface{}{
+		"type":               "stats",
+		"round":              round,
+		"model":              client.ModelName(),
+		"prompt_tokens":      in,
+		"completion_tokens":  out,
+		"session_prompt":     *sessIn,
+		"session_completion": *sessOut,
+		"context_est":        ctxEst,
+		"context_window":     client.ContextWindowTokens(),
+		"tools":              len(tools),
+		"last_tool":          lastTool,
+	}
+	if w := brain.Active(); w != nil {
+		ev["workspace_id"] = w.ID
+		ev["focus_path"] = w.FocusPath()
+		ev["active_mode"] = w.ActiveMode
+	}
+	if outCwd := brain.OutputCwd(); outCwd != "" {
+		ev["output_cwd"] = outCwd
+	}
+	_ = ss.emitStreamLine(conn, ev)
 }

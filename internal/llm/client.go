@@ -627,7 +627,8 @@ func (c *Client) Chat(messages []Message) (string, error) {
 // evolutionMaxTokens 自主演进决策 JSON 的输出上限（控制成本）。
 const evolutionMaxTokens = 1024
 
-// ChatEvolution 演进专用：不注入 boot-leader/brain 节选，低温度、限制 max_tokens，不写 llm.log。
+// ChatEvolution 演进决策：低温度、限制 max_tokens、不写 llm.log（skipAppendLog）。
+// 仍经 chat() 注入 boot-assembler 与 brain 节选；messages 中可另含 evolve 专用 system。
 func (c *Client) ChatEvolution(messages []Message) (string, error) {
 	maxTok := evolutionMaxTokens
 	if c.maxTokens > 0 && c.maxTokens < maxTok {

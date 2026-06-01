@@ -21,7 +21,8 @@ import (
 type SocketServer struct {
 	server       *Server
 	ln           net.Listener
-	chatSessions int32 // 仅统计 cata chat 长连接；ping 探测不计入
+	chatSessions int32        // 仅统计 cata chat 长连接；ping 探测不计入
+	tools        *ToolRegistry // built-in tool registry
 }
 
 // ChatSessions 返回当前交互式 chat 会话数（不含 ping 探活连接）。
@@ -75,10 +76,14 @@ func NewSocketServer(srv *Server) (*SocketServer, error) {
 		return nil, fmt.Errorf("failed to listen on socket: %w", err)
 	}
 
-	return &SocketServer{
+	reg := NewToolRegistry()
+	ss := &SocketServer{
 		server: srv,
 		ln:     ln,
-	}, nil
+		tools:  reg,
+	}
+	ss.RegisterBuiltinTools(reg)
+	return ss, nil
 }
 
 // getSocketPath 获取 socket 文件路径（默认 CATA_HOME/cata.sock，见 internal/config）。
@@ -191,6 +196,9 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 				log.Printf("short-term session boundary: %v", err)
 			}
 			ss.sendResponse(conn, Response{Success: true, Message: "Conversation cleared."})
+			continue
+		case "chat_cancel":
+			ss.sendResponse(conn, Response{Success: true, Message: "no active stream"})
 			continue
 		default:
 			resp := ss.handleCommand(req)

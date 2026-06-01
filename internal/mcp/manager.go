@@ -39,14 +39,28 @@ var (
 	lastMCPKey string
 )
 
-// 终端 chat 仅暴露高频 browser 工具，避免 20+ 工具撑爆上下文导致网关/进程异常。
-var preferredBrowserTools = []string{
-	"browser_navigate", "browser_snapshot", "browser_click", "browser_type",
-	"browser_fill", "browser_tabs", "browser_wait_for", "browser_take_screenshot",
-	"browser_scroll", "browser_select_option", "browser_press_key", "browser_navigate_back",
+// matchesToolPattern returns true if toolName matches a config pattern.
+// Patterns support * wildcards (e.g. "browser_*" or "*").
+func matchesToolPattern(toolName, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.Contains(pattern, "*") {
+		prefix, suffix, _ := strings.Cut(pattern, "*")
+		return strings.HasPrefix(toolName, prefix) && strings.HasSuffix(toolName, suffix)
+	}
+	return toolName == pattern
 }
 
-const maxExportedMCPTools = 14
+// isToolAllowed checks whether a tool name is in the allowed list (with wildcard support).
+func isToolAllowed(name string, allowed []string) bool {
+	for _, p := range allowed {
+		if matchesToolPattern(name, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Init 按配置与 capabilities 启动 MCP；失败的服务器仅记日志。
 func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
@@ -99,24 +113,20 @@ func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) e
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	mgr.clients[s.Name] = c
+
+	allowed := config.Config.MCP.AllowedTools
+	maxExport := config.Config.MCP.MaxExportedTools
 	exported := 0
-	byName := make(map[string]listedTool)
 	for _, t := range tools {
-		if strings.TrimSpace(t.Name) != "" {
-			byName[t.Name] = t
-		}
-	}
-	for _, name := range preferredBrowserTools {
-		if exported >= maxExportedMCPTools {
-			break
-		}
-		t, ok := byName[name]
-		if !ok {
+		name := strings.TrimSpace(t.Name)
+		if name == "" || exported >= maxExport {
 			continue
 		}
-		mgr.routes[name] = &toolRoute{serverName: s.Name, toolName: name}
-		mgr.llmTools = append(mgr.llmTools, toLLMTool(t))
-		exported++
+		if isToolAllowed(name, allowed) {
+			mgr.routes[name] = &toolRoute{serverName: s.Name, toolName: name}
+			mgr.llmTools = append(mgr.llmTools, toLLMTool(t))
+			exported++
+		}
 	}
 	return nil
 }
@@ -252,7 +262,6 @@ func (mgr *Manager) TryCall(ctx context.Context, name, argsJSON string) (out str
 	}
 
 	// Always return content as text — never lose the actual error to Go error.
-	// The caller (runTerminalTool) replaces content with "error: <go err>" when err != nil.
 	if callErr != nil && text == "" {
 		text = "[browser error] " + callErr.Error()
 	}

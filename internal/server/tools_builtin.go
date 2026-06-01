@@ -1,0 +1,404 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"cata/internal/brain"
+	"cata/internal/config"
+	"cata/internal/execcmd"
+	"cata/internal/llm"
+)
+
+// RegisterBuiltinTools adds all standard tools to the registry.
+func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
+	if cfg := config.Config; cfg != nil && cfg.WorkspaceFilesEnabled() {
+		reg.Register(&readFileTool{})
+		reg.Register(&searchReplaceTool{})
+		reg.Register(&appendFileTool{})
+		reg.Register(&createFileTool{})
+		reg.Register(&listFilesTool{})
+	}
+	if cfg := config.Config; cfg != nil && cfg.Exec.Enabled {
+		reg.Register(&runCommandTool{ss: ss})
+	}
+	reg.Register(&runSkillTool{})
+	reg.Register(&askUserTool{ss: ss})
+}
+
+// --- read_file ---
+
+type readFileTool struct{}
+
+func (t *readFileTool) Name() string { return "read_file" }
+
+func (t *readFileTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "read_file",
+		Description: "Read a text file in the output workspace (relative path). Use before editing.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd (brain.base_dir)"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
+	}}
+}
+
+func (t *readFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolReadFile(argsJSON)
+}
+
+// --- search_replace ---
+
+type searchReplaceTool struct{}
+
+func (t *searchReplaceTool) Name() string { return "search_replace" }
+
+func (t *searchReplaceTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "search_replace",
+		Description: "Replace old_string with new_string in a file under output cwd (first match unless replace_all).",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}`),
+	}}
+}
+
+func (t *searchReplaceTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolSearchReplace(argsJSON)
+}
+
+// --- append_file ---
+
+type appendFileTool struct{}
+
+func (t *appendFileTool) Name() string { return "append_file" }
+
+func (t *appendFileTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "append_file",
+		Description: "Append text to a file under output cwd (creates file if missing).",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
+	}}
+}
+
+func (t *appendFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolAppendFile(argsJSON)
+}
+
+// --- run_command ---
+
+type runCommandTool struct{ ss *SocketServer }
+
+func (t *runCommandTool) Name() string { return "run_command" }
+
+func (t *runCommandTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "run_command",
+		Description: brain.RunCommandToolDescription(),
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"argv[0]=program on PATH; no shell."}},"required":["argv"]}`),
+	}}
+}
+
+func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		Argv []string `json:"argv"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("run_command args: %w", err)
+	}
+	if len(p.Argv) == 0 {
+		return "", fmt.Errorf("run_command: argv required")
+	}
+	if config.Config == nil {
+		return "", fmt.Errorf("config not loaded")
+	}
+	if err := config.CheckExecArgv(p.Argv); err != nil {
+		return "", err
+	}
+	ec := &config.Config.Exec
+	wd, err := resolveExecCwd()
+	if err != nil {
+		return "", err
+	}
+	cmdLine := execcmd.FormatLine(p.Argv)
+	if config.ExecNeedsConfirm(p.Argv) {
+		id := newConfirmID()
+		_ = t.ss.emitStreamLine(conn, map[string]interface{}{
+			"type":         "exec_confirm_required",
+			"confirm_id":   id,
+			"argv":         p.Argv,
+			"command_line": cmdLine,
+			"cwd":          wd,
+			"options": []map[string]string{
+				{"id": "run", "label": "Run"},
+				{"id": "cancel", "label": "Cancel"},
+			},
+		})
+		approved, err := t.ss.waitExecClientConfirm(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if !approved {
+			_ = t.ss.emitStreamLine(conn, map[string]interface{}{
+				"type": "exec_denied", "confirm_id": id,
+				"command_line": cmdLine, "cwd": wd,
+			})
+			return "[run_command] cancelled by user", nil
+		}
+	}
+
+	to := time.Duration(ec.TimeoutSeconds) * time.Second
+	if to <= 0 {
+		to = 120 * time.Second
+	}
+	xctx, cancel := context.WithTimeout(ctx, to)
+	defer cancel()
+
+	cmd := exec.CommandContext(xctx, p.Argv[0], p.Argv[1:]...)
+	cmd.Dir = wd
+
+	var stdOut, stdErr bytes.Buffer
+	cmd.Stdout = &stdOut
+	cmd.Stderr = &stdErr
+	runErr := cmd.Run()
+
+	maxB := ec.MaxOutputBytes
+	if maxB <= 0 {
+		maxB = 256 * 1024
+	}
+
+	exitCode := 0
+	timedOut := false
+	var exitErr *exec.ExitError
+	if runErr != nil {
+		if errors.Is(xctx.Err(), context.DeadlineExceeded) {
+			timedOut = true
+			exitCode = -1
+		} else if errors.As(runErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+
+	stdoutStr := stdOut.String()
+	stderrStr := stdErr.String()
+	totalLen := len(stdoutStr) + len(stderrStr)
+	truncated := false
+	if totalLen > maxB {
+		stdoutStr, stderrStr = truncateCmdOutput(stdoutStr, stderrStr, maxB)
+		truncated = true
+	}
+
+	result := formatCommandResult(wd, cmdLine, exitCode, timedOut, truncated, stdoutStr, stderrStr)
+
+	_ = t.ss.emitStreamLine(conn, map[string]interface{}{
+		"type":         "exec_done",
+		"argv":         p.Argv,
+		"command_line": cmdLine,
+		"cwd":          wd,
+		"exit_code":    exitCode,
+		"timed_out":    timedOut,
+		"truncated":    truncated,
+	})
+
+	if runErr != nil && !timedOut && exitCode < 0 {
+		log.Printf("run_command failed: argv=%v cwd=%s: %v", p.Argv, wd, runErr)
+	} else {
+		log.Printf("run_command: exit=%d argv=%v cwd=%s bytes=%d", exitCode, p.Argv, wd, totalLen)
+	}
+	return result, nil
+}
+
+// --- run_skill ---
+
+type runSkillTool struct{}
+
+func (t *runSkillTool) Name() string { return "run_skill" }
+
+func (t *runSkillTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "run_skill",
+		Description: "Run a crystallized skill script from brain (workspace ~/.cata/brain/.../skills/<id>/). Outputs go to output cwd. Use for known tasks; use browser_* for new sites.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from capabilities.yaml (brain skills/<id>/)"},"params":{"type":"object","description":"Optional JSON params passed to the skill script"}},"required":["skill"]}`),
+	}}
+}
+
+func (t *runSkillTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p brain.RunSkillArgs
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("run_skill args: %w", err)
+	}
+	return brain.RunSkill(ctx, p)
+}
+
+// --- ask_user ---
+
+type askUserTool struct{ ss *SocketServer }
+
+func (t *askUserTool) Name() string { return "ask_user" }
+
+func (t *askUserTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "ask_user",
+		Description: "Present a choice to the user. Use when you need the user to decide between approaches, pick from alternatives, or confirm a multi-option selection. The user sees an interactive selector (arrow keys, Enter to confirm).",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"Question to present to the user"},"options":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"desc":{"type":"string"}},"required":["id","label"]},"minItems":2},"multi":{"type":"boolean","description":"Allow user to select multiple options (default false)"}},"required":["prompt","options"]}`),
+	}}
+}
+
+func (t *askUserTool) Execute(ctx context.Context, conn net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		Prompt  string `json:"prompt"`
+		Options []struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+			Desc  string `json:"desc"`
+		} `json:"options"`
+		Multi bool `json:"multi"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("ask_user args: %w", err)
+	}
+	if len(p.Options) < 2 {
+		return "", fmt.Errorf("ask_user: at least 2 options required")
+	}
+	choiceID := newConfirmID()
+	_ = t.ss.emitStreamLine(conn, map[string]interface{}{
+		"type":    "user_choice",
+		"id":      choiceID,
+		"prompt":  p.Prompt,
+		"detail":  "",
+		"multi":   p.Multi,
+		"options": p.Options,
+	})
+	selected, err := t.ss.waitUserChoice(ctx, choiceID)
+	if err != nil {
+		return "", err
+	}
+	if len(selected) == 0 {
+		return "[ask_user] user cancelled", nil
+	}
+	var labels []string
+	for _, s := range selected {
+		for _, o := range p.Options {
+			if o.ID == s {
+				labels = append(labels, o.Label)
+				break
+			}
+		}
+	}
+	if len(labels) == 0 {
+		labels = selected
+	}
+	if p.Multi {
+		return fmt.Sprintf("[ask_user] user selected: %s", strings.Join(labels, ", ")), nil
+	}
+	return fmt.Sprintf("[ask_user] user selected: %s", labels[0]), nil
+}
+
+// --- create_file ---
+
+type createFileTool struct{}
+
+func (t *createFileTool) Name() string { return "create_file" }
+
+func (t *createFileTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "create_file",
+		Description: "Create a new file in the output workspace. Fails if the file already exists unless overwrite is true.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd"},"content":{"type":"string","description":"File content"},"overwrite":{"type":"boolean","description":"If true, overwrite existing file (default false)"}},"required":["path","content"]}`),
+	}}
+}
+
+func (t *createFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		Path      string `json:"path"`
+		Content   string `json:"content"`
+		Overwrite bool   `json:"overwrite"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("create_file args: %w", err)
+	}
+	if strings.TrimSpace(p.Path) == "" {
+		return "", fmt.Errorf("create_file: path required")
+	}
+	full, err := resolveWorkspaceFile(p.Path)
+	if err != nil {
+		return "", err
+	}
+	if !p.Overwrite {
+		if _, err := os.Stat(full); err == nil {
+			return "", fmt.Errorf("create_file: %s already exists (use overwrite:true to replace)", p.Path)
+		}
+	}
+	_, maxWrite := workspaceFileLimits()
+	if len(p.Content) > maxWrite {
+		return "", fmt.Errorf("create_file: content exceeds max_write_bytes (%d)", maxWrite)
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(full, []byte(p.Content), 0644); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("create_file %s: wrote %d bytes", p.Path, len(p.Content)), nil
+}
+
+// --- list_files ---
+
+type listFilesTool struct{}
+
+func (t *listFilesTool) Name() string { return "list_files" }
+
+func (t *listFilesTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "list_files",
+		Description: "List files and directories in the output workspace.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Directory path relative to output cwd (default: root)"}},"required":[]}`),
+	}}
+}
+
+func (t *listFilesTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		Path string `json:"path"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("list_files args: %w", err)
+	}
+	rel := strings.TrimSpace(p.Path)
+	if rel == "" {
+		rel = "."
+	}
+	full, err := resolveWorkspaceFile(rel)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("list_files %s (%d entries)\n", rel, len(entries)))
+	for _, e := range entries {
+		info, err := e.Info()
+		size := int64(0)
+		isDir := " "
+		if err == nil {
+			size = info.Size()
+			if e.IsDir() {
+				isDir = "d"
+			}
+		}
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		b.WriteString(fmt.Sprintf("  %s %10d  %s\n", isDir, size, name))
+	}
+	return b.String(), nil
+}
