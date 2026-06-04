@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"cata/internal/brain"
 	"cata/internal/config"
 )
@@ -13,7 +15,6 @@ import (
 func bindStats(cwd string) {
 	_, _ = brain.ResolveWorkspace(cwd)
 	if w := brain.Active(); w != nil {
-		// stats filled on first model init via applyStats
 		_ = w
 	}
 }
@@ -89,39 +90,192 @@ func (m *model) loadEvolve() {
 	m.stats.evolveLast = strings.TrimSpace(log.Entries[len(log.Entries)-1].Action)
 }
 
+type sidebarSection struct {
+	label string
+	lines []string
+}
+
+func sidebarInnerWidth() int {
+	// styleSidebar: padding 0,1 → 左右各 1 列
+	const pad = 2
+	w := sidebarWidth - pad
+	if w < 24 {
+		return 24
+	}
+	return w
+}
+
+func sidebarDivider(w int) string {
+	if w < 4 {
+		w = 4
+	}
+	return styleDim.Render(strings.Repeat("─", w))
+}
+
+func wrapSidebar(width int, text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	rendered := lipgloss.NewStyle().Width(width).Render(text)
+	var out []string
+	for _, ln := range strings.Split(rendered, "\n") {
+		out = append(out, strings.TrimRight(ln, " "))
+	}
+	return out
+}
+
+func appendSidebarSection(all []string, innerW int, sec sidebarSection, withDivider bool) []string {
+	if len(sec.lines) == 0 {
+		return all
+	}
+	if withDivider && len(all) > 0 {
+		all = append(all, sidebarDivider(innerW))
+	}
+	all = append(all, styleSidebarLabel.Render(sec.label))
+	for _, line := range sec.lines {
+		all = append(all, wrapSidebar(innerW, line)...)
+	}
+	return all
+}
+
 func (m *model) sidebarText() string {
-	if os.Getenv("CATA_NO_SIDEBAR") != "" {
+	if !sidebarActive(m.width) {
 		return ""
 	}
-	if m.width < minMainWidth+sidebarWidth {
-		return ""
-	}
+	innerW := sidebarInnerWidth()
 	var lines []string
-	lines = append(lines, "── cata ──")
-	if m.stats.evolveOn {
-		lines = append(lines, fmtEvolveLine(m.stats.evolveSec))
-	} else {
-		lines = append(lines, "evolve off")
+	lines = append(lines, styleDim.Render("cata"))
+
+	lines = m.appendEnvSidebarSections(lines, innerW)
+	lines = m.appendSessionSidebarSections(lines, innerW)
+	lines = m.appendActivitySidebarSections(lines, innerW)
+
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) appendEnvSidebarSections(lines []string, innerW int) []string {
+	e := m.runtime
+	first := len(lines) <= 1
+
+	plat := []string{
+		"宿主平台  " + e.HostPlatform(),
+		"命令平台  " + e.CommandPlatform(),
+		"架构      " + e.Arch,
 	}
+	lines = appendSidebarSection(lines, innerW, sidebarSection{"平台", plat}, !first)
+	first = false
+
+	shell := []string{"类型  " + e.Shell}
+	if e.ShellPath != "" {
+		shell = append(shell, e.ShellPath)
+	}
+	shell = append(shell, "语法  "+e.ShellSyntaxLabel())
+	lines = appendSidebarSection(lines, innerW, sidebarSection{"Shell", shell}, true)
+
+	if e.Terminal != "" {
+		lines = appendSidebarSection(lines, innerW, sidebarSection{"终端", []string{e.Terminal}}, true)
+	}
+
+	lines = appendSidebarSection(lines, innerW, sidebarSection{"PATH 工具", e.Tools.SidebarToolLines()}, true)
+	lines = appendSidebarSection(lines, innerW, sidebarSection{"Cata 工具", m.cataToolsSidebarLines()}, true)
+
+	return lines
+}
+
+func (m *model) cataToolsSidebarLines() []string {
+	cfg := config.Config
+	if cfg == nil {
+		return []string{"（配置未加载）"}
+	}
+	return []string{
+		"run_command  " + sidebarOnOff(cfg.Exec.Enabled),
+		"文件工具     " + sidebarOnOff(cfg.WorkspaceFilesEnabled()),
+		"browser MCP  " + sidebarOnOff(cfg.MCP.Enabled),
+		"run_skill    开",
+	}
+}
+
+func sidebarOnOff(on bool) string {
+	if on {
+		return "开"
+	}
+	return "关"
+}
+
+func (m *model) appendSessionSidebarSections(lines []string, innerW int) []string {
+	var body []string
 	if m.stats.wsID != "" {
-		lines = append(lines, "ws "+trunc(m.stats.wsID, 22))
+		body = append(body, "workspace  "+m.stats.wsID)
+	}
+	if m.stats.focusPath != "" {
+		body = append(body, m.stats.focusPath)
 	}
 	if m.stats.outputCwd != "" {
-		lines = append(lines, trunc(m.stats.outputCwd, 24))
+		body = append(body, "产出区  "+m.stats.outputCwd)
 	}
-	if m.stats.round > 0 {
-		lines = append(lines, fmt.Sprintf("r%d t%d", m.stats.round, m.stats.turns))
+	if m.stats.mode != "" {
+		body = append(body, "mode  "+m.stats.mode)
+	}
+	if m.stats.evolveOn {
+		body = append(body, fmtEvolveLine(m.stats.evolveSec))
+	} else {
+		body = append(body, "evolve  关")
+	}
+	if len(body) == 0 {
+		return lines
+	}
+	return appendSidebarSection(lines, innerW, sidebarSection{"会话", body}, true)
+}
+
+func (m *model) appendActivitySidebarSections(lines []string, innerW int) []string {
+	var body []string
+	if m.stats.round > 0 || m.stats.turns > 0 {
+		body = append(body, fmt.Sprintf("round %d  turns %d", m.stats.round, m.stats.turns))
 	}
 	if m.stats.sessionTok > 0 {
-		lines = append(lines, fmt.Sprintf("~%d tok", m.stats.sessionTok))
+		body = append(body, fmt.Sprintf("tokens  ~%d", m.stats.sessionTok))
 	}
 	if m.stats.lastTool != "" {
-		lines = append(lines, trunc(m.stats.lastTool, 24))
+		body = append(body, "last  "+m.stats.lastTool)
 	}
 	if m.stats.state != "" && m.stats.state != "ready" {
-		lines = append(lines, trunc(m.stats.state, 24))
+		body = append(body, "state  "+m.stats.state)
 	}
-	return strings.Join(lines, "\n")
+	if len(body) == 0 {
+		return lines
+	}
+	return appendSidebarSection(lines, innerW, sidebarSection{"本轮", body}, true)
+}
+
+func (m *model) statusDump() string {
+	m.loadEvolve()
+	var b strings.Builder
+	b.WriteString("── status ──\n")
+	if m.stats.wsID != "" {
+		b.WriteString("ws: " + m.stats.wsID + "\n")
+	}
+	if m.stats.focusPath != "" {
+		b.WriteString("focus: " + m.stats.focusPath + "\n")
+	}
+	b.WriteString("out: " + m.stats.outputCwd + "\n")
+	b.WriteString(fmt.Sprintf("round %d turns %d tools %d\n", m.stats.round, m.stats.turns, m.stats.tools))
+	if cfg := config.Config; cfg != nil {
+		b.WriteString(cfg.LLM.Provider + " / " + cfg.LLM.Model + "\n")
+	}
+	e := m.runtime
+	b.WriteString("\n── environment ──\n")
+	b.WriteString(fmt.Sprintf("host: %s  command: %s  arch: %s\n", e.HostPlatform(), e.CommandPlatform(), e.Arch))
+	b.WriteString(fmt.Sprintf("terminal: %s\n", e.Terminal))
+	b.WriteString(fmt.Sprintf("shell: %s", e.Shell))
+	if e.ShellPath != "" {
+		b.WriteString(" (" + e.ShellPath + ")")
+	}
+	b.WriteString("\n")
+	b.WriteString("shell syntax: " + e.ShellSyntaxLabel() + "\n")
+	b.WriteString("\n" + e.ToolsAvailabilityBlock())
+	b.WriteString("\n" + brain.ServerRegisteredToolsBlock())
+	return b.String()
 }
 
 func fmtEvolveLine(sec int) string {

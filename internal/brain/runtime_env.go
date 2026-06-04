@@ -8,14 +8,29 @@ import (
 
 // RuntimeEnv 描述产出区所在机器与终端（由 cata chat 每轮上报，注入 LLM）。
 type RuntimeEnv struct {
-	// OS 喂给 LLM 的命令体系：linux（WSL/bash）或 windows（cmd/PowerShell/Git Bash on Win）
+	// OS 喂给 LLM 的命令体系：linux | darwin | windows（WSL 会话内为 linux）
 	OS string `json:"os"`
-	// HostOS 实际 cata 二进制 GOOS（windows/linux），仅供调试
+	// HostOS 实际 cata 二进制 GOOS（windows | linux | darwin），仅供调试与平台说明
 	HostOS    string `json:"host_os,omitempty"`
 	Arch      string `json:"arch"`
-	Shell     string `json:"shell"` // bash | powershell | cmd | ...
+	Shell     string `json:"shell"` // bash | powershell | cmd | zsh | ...
 	ShellPath string `json:"shell_path,omitempty"`
 	Terminal  string `json:"terminal,omitempty"`
+	// Tools 客户端 PATH 探测（python/node 等）；由 ProbeTools 填充
+	Tools HostTools `json:"tools,omitempty"`
+}
+
+// HostTools PATH 中探测到的可执行文件（空字符串表示未找到）。
+type HostTools struct {
+	Python  string `json:"python,omitempty"`
+	Python3 string `json:"python3,omitempty"`
+	Node    string `json:"node,omitempty"`
+	NPM     string `json:"npm,omitempty"`
+	NPX     string `json:"npx,omitempty"`
+	Go      string `json:"go,omitempty"`
+	Git     string `json:"git,omitempty"`
+	Bash    string `json:"bash,omitempty"`
+	Pwsh    string `json:"pwsh,omitempty"`
 }
 
 var (

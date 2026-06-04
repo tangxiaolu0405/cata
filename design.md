@@ -516,4 +516,4 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 - 无内置 git 操作
 - 无 Web UI
 - 无多机分布式
-- CLI `catacli` 已废弃
+- 无 `catacli` 独立二进制（统一 `cata` TUI）

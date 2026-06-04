@@ -24,7 +24,8 @@ func connLineReaderFrom(ctx context.Context) *connLineReader {
 }
 
 // connLineReader multiplexes client→server lines during a streaming chat round
-// (chat_cancel, exec_confirm, user_choice) on a single bufio.Reader.
+// (chat_cancel, exec_confirm, user_choice). It must share br with the connection
+// read loop — a second bufio.Reader on the same net.Conn steals the next chat line.
 type connLineReader struct {
 	conn     net.Conn
 	br       *bufio.Reader
@@ -32,25 +33,41 @@ type connLineReader struct {
 	onCancel func()
 	stopOnce sync.Once
 	stopCh   chan struct{}
+	wg       sync.WaitGroup
 }
 
-func newConnLineReader(conn net.Conn, onCancel func()) *connLineReader {
+func newConnLineReader(br *bufio.Reader, conn net.Conn, onCancel func()) *connLineReader {
 	r := &connLineReader{
 		conn:     conn,
-		br:       bufio.NewReader(conn),
+		br:       br,
 		inbox:    make(chan json.RawMessage, 8),
 		onCancel: onCancel,
 		stopCh:   make(chan struct{}),
 	}
+	r.wg.Add(1)
 	go r.pump()
 	return r
 }
 
+func clearConnReadDeadline(conn net.Conn) {
+	if conn != nil {
+		_ = conn.SetReadDeadline(time.Time{})
+	}
+}
+
 func (r *connLineReader) Stop() {
-	r.stopOnce.Do(func() { close(r.stopCh) })
+	r.stopOnce.Do(func() {
+		close(r.stopCh)
+		// Unblock pump if it is waiting on ReadBytes; then wait until it exits
+		// so the main connection loop can read the next chat command from br.
+		_ = r.conn.SetReadDeadline(time.Now())
+		r.wg.Wait()
+		clearConnReadDeadline(r.conn)
+	})
 }
 
 func (r *connLineReader) pump() {
+	defer r.wg.Done()
 	defer close(r.inbox)
 	for {
 		select {
@@ -104,6 +121,11 @@ func (r *connLineReader) readLine(deadline time.Time) (json.RawMessage, error) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
+		}
+		select {
+		case <-r.stopCh:
+			return nil, fmt.Errorf("stopped")
+		default:
 		}
 		_ = r.conn.SetReadDeadline(time.Time{})
 		return json.RawMessage(line), nil

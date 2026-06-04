@@ -407,14 +407,18 @@ type Message struct {
 
 // ChatRequest 聊天请求
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	MaxTokens int     `json:"max_tokens,omitempty"`
-	Temperature float64 `json:"temperature,omitempty"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"`
 	// Tools / ToolChoice 用于 OpenAI 风格的 tool calling（可选）
 	Tools      []Tool      `json:"tools,omitempty"`
 	ToolChoice interface{} `json:"tool_choice,omitempty"`
 	Stream     bool        `json:"stream,omitempty"`
+	// NoBrainInject 为 true 时不注入 boot-leader / brain 节选（演进决策等）。
+	NoBrainInject bool `json:"-"`
+	// DisableThinking 为 true 时强制 DeepSeek thinking=disabled，保证 JSON 落在 content。
+	DisableThinking bool `json:"-"`
 }
 
 // ChatResponse 聊天响应
@@ -624,21 +628,17 @@ func (c *Client) Chat(messages []Message) (string, error) {
 	return resp.Choices[0].Message.Content, nil
 }
 
-// evolutionMaxTokens 自主演进决策 JSON 的输出上限（控制成本）。
-const evolutionMaxTokens = 1024
-
-// ChatEvolution 演进决策：低温度、限制 max_tokens、不写 llm.log（skipAppendLog）。
-// 仍经 chat() 注入 boot-assembler 与 brain 节选；messages 中可另含 evolve 专用 system。
-func (c *Client) ChatEvolution(messages []Message) (string, error) {
-	maxTok := evolutionMaxTokens
-	if c.maxTokens > 0 && c.maxTokens < maxTok {
-		maxTok = c.maxTokens
-	}
+// ChatEvolution 演进决策：低温度、不写 llm.log（skipAppendLog）。
+// maxTokens=0 时不设 API max_tokens（由模型默认输出上限）；>0 则限制输出长度。
+// 不注入 boot-leader / brain 节选；禁用 thinking，避免 JSON 落在 reasoning_content。
+func (c *Client) ChatEvolution(messages []Message, maxTokens int) (string, error) {
 	req := ChatRequest{
-		Model:       c.model,
-		Messages:    messages,
-		MaxTokens:   maxTok,
-		Temperature: 0.2,
+		Model:           c.model,
+		Messages:        messages,
+		MaxTokens:       maxTokens,
+		Temperature:     0.2,
+		NoBrainInject:   true,
+		DisableThinking: true,
 	}
 	resp, _, err := c.chat(req, nil, "", true)
 	if err != nil {
@@ -650,7 +650,8 @@ func (c *Client) ChatEvolution(messages []Message) (string, error) {
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no response from LLM")
 	}
-	return resp.Choices[0].Message.Content, nil
+	msg := resp.Choices[0].Message
+	return assistantText(msg.Content, msg.ReasoningContent), nil
 }
 
 // ChatWithTools 调用带有 tools 列表的对话接口，返回助手回复和工具调用列表。
@@ -688,20 +689,22 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, toolChoice stri
 }
 
 // buildHTTPChatRequest 构建 HTTP 请求（stream 为 true 时使用 SSE）。
-// injectBrain 为 true 时注入 boot-leader 与 brain 节选（终端对话）；演进模块应传 false。
-func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool, injectBrain bool) (*http.Request, error) {
+// injectBrain 由 req.NoBrainInject 控制；演进模块应设 NoBrainInject=true。
+func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("API key is empty")
 	}
-	if injectBrain {
-		req.Messages = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages)))
+	msgs := req.Messages
+	if !req.NoBrainInject {
+		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages)))
 	} else {
-		req.Messages = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
+		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
+	req.Messages = msgs
 	log.Printf("LLM Request: URL=%s, Model=%s, Provider=%T, stream=%v, APIKey present=%v",
 		c.apiURL, c.model, c.provider, stream, c.apiKey != "")
 
-	httpReq, err := c.provider.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream)
+	httpReq, err := c.provider.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream, req.DisableThinking)
 	if err != nil {
 		return nil, err
 	}
@@ -716,7 +719,7 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 
 // chat 发送 HTTP 请求到 LLM API（内部统一入口）。skipAppendLog 为 true 时不写 llm.log（由调用方统一写）。
 func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppendLog bool) (*ChatResponse, []ToolCall, error) {
-	httpReq, err := c.buildHTTPChatRequest(context.Background(), req, tools, toolChoice, false, true)
+	httpReq, err := c.buildHTTPChatRequest(context.Background(), req, tools, toolChoice, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -818,6 +821,16 @@ func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppe
 	}
 
 	return chatResp, toolCalls, nil
+}
+
+// assistantText 合并 content 与 reasoning_content（DeepSeek thinking 可能只填后者）。
+func assistantText(content, reasoning string) string {
+	content = strings.TrimSpace(content)
+	reasoning = strings.TrimSpace(reasoning)
+	if content != "" {
+		return content
+	}
+	return reasoning
 }
 
 // inferPromptSources 标注本条请求里各段 system，便于阅读 llm.log。

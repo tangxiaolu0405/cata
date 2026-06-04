@@ -36,6 +36,9 @@ type AppConfig struct {
 	MCP            MCPConfig            `json:"mcp"`
 }
 
+// DefaultPlaywrightMCPVersion 默认 pin 的 @playwright/mcp 版本（避免 @latest 行为漂移）。
+const DefaultPlaywrightMCPVersion = "0.0.75"
+
 // MCPConfig MCP 工具服务（stdio）；默认 browser 使用 @playwright/mcp。
 type MCPConfig struct {
 	Enabled            bool             `json:"enabled"`
@@ -90,6 +93,8 @@ type EvolutionConfig struct {
 	CycleInterval        int     `json:"cycle_interval"`
 	ContextCompressRatio float64 `json:"context_compress_ratio"`
 	SessionCompressTurns int     `json:"session_compress_turns"`
+	// DecisionMaxTokens 演进决策 JSON 的 max_tokens；0 或未配置=不限制（请求中省略 max_tokens）。
+	DecisionMaxTokens int `json:"decision_max_tokens"`
 }
 
 // ExecToolConfig 终端 chat 的 run_command（os/exec，不经 shell）。
@@ -241,9 +246,9 @@ func getDefaultConfig() *AppConfig {
 				Name:    "browser",
 				Enabled: true,
 				Command: "npx",
-				Args:    []string{"-y", "@playwright/mcp@latest", "--console"},
+				Args:    defaultPlaywrightMCPArgs(),
 			}},
-			ToolTimeoutSeconds: 120,
+			ToolTimeoutSeconds: 300,
 			MaxOutputBytes:     256 * 1024,
 		},
 	}
@@ -391,14 +396,7 @@ func validateAndSetDefaults(config *AppConfig) error {
 	return nil
 }
 
-// ApplyInitDefaults 在 cata init 时写入 config.json 的推荐默认值（不覆盖用户已配置的时区等）。
-func ApplyInitDefaults(cfg *AppConfig) {
-	if cfg == nil {
-		return
-	}
-	ensureServerTimezone(cfg)
-}
-
+// ensureServerTimezone 在 validateAndSetDefaults / init 路径写入默认时区。
 func ensureServerTimezone(cfg *AppConfig) {
 	if strings.TrimSpace(cfg.Server.Timezone) == "" {
 		cfg.Server.Timezone = clock.DefaultTimezone
@@ -406,12 +404,34 @@ func ensureServerTimezone(cfg *AppConfig) {
 	_ = clock.Init(cfg.Server.Timezone)
 }
 
+func defaultPlaywrightMCPArgs() []string {
+	return []string{"-y", "@playwright/mcp@" + DefaultPlaywrightMCPVersion}
+}
+
+// migrateLegacyPlaywrightMCPArgs 升级旧默认（@latest + --console）为 pin 版本、去掉 console 噪音。
+func migrateLegacyPlaywrightMCPArgs(args []string) ([]string, bool) {
+	if !isLegacyPlaywrightMCPArgs(args) {
+		return args, false
+	}
+	return defaultPlaywrightMCPArgs(), true
+}
+
+func isLegacyPlaywrightMCPArgs(args []string) bool {
+	if len(args) < 2 || len(args) > 3 || args[0] != "-y" || args[1] != "@playwright/mcp@latest" {
+		return false
+	}
+	if len(args) == 2 {
+		return true
+	}
+	return args[2] == "--console"
+}
+
 func normalizeMCPConfig(m *MCPConfig) {
 	if m == nil {
 		return
 	}
 	if m.ToolTimeoutSeconds <= 0 {
-		m.ToolTimeoutSeconds = 120
+		m.ToolTimeoutSeconds = 300
 	}
 	if m.MaxOutputBytes <= 0 {
 		m.MaxOutputBytes = 256 * 1024
@@ -427,8 +447,16 @@ func normalizeMCPConfig(m *MCPConfig) {
 			Name:    "browser",
 			Enabled: true,
 			Command: "npx",
-			Args:    []string{"-y", "@playwright/mcp@latest", "--console"},
+			Args:    defaultPlaywrightMCPArgs(),
 		}}
+	}
+	for i := range m.Servers {
+		if m.Servers[i].Name != "browser" {
+			continue
+		}
+		if migrated, ok := migrateLegacyPlaywrightMCPArgs(m.Servers[i].Args); ok {
+			m.Servers[i].Args = migrated
+		}
 	}
 }
 

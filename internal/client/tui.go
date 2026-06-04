@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	sidebarWidth     = 28
-	minMainWidth     = 48
+	sidebarWidth         = 42
+	sidebarActivateWidth = 96 // 主区 + 侧栏最小总宽（见 agents.md）
+	minMainWidth         = 48
 	inputMinLines    = 3
 	inputMaxLines    = 8
 	inputLinesBorder = 2
@@ -34,7 +35,8 @@ var (
 	styleTool    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	styleErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	styleBorder  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238"))
-	styleSidebar = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
+	styleSidebar      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
+	styleSidebarLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 )
 
 type overlayMode int
@@ -80,6 +82,7 @@ type model struct {
 	height int
 
 	vp     viewport.Model
+	sidebarVP viewport.Model
 	input  textarea.Model
 	log    string
 	lastIn string
@@ -88,11 +91,13 @@ type model struct {
 	overlay   *overlayState
 
 	stats    paneStats
+	runtime  brain.RuntimeEnv
 	quitting bool
 	errLine  string
 
 	composeSendSeq uint64 // 当前挂起的 Enter 发送代号，0 表示无
 	slashList      *list.Model
+	hoverPane      hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
 }
 
 type streamTickMsg struct {
@@ -122,14 +127,16 @@ func newModel(s *session, cwd string) model {
 	vp.SetContent(welcome)
 
 	m := model{
-		sess:   s,
-		cwd:    cwd,
-		vp:     vp,
-		input:  ti,
-		log:    welcome,
-		stats:  paneStats{state: "ready", outputCwd: cwd},
-		width:  100,
-		height: 24,
+		sess:      s,
+		cwd:       cwd,
+		vp:        vp,
+		sidebarVP: newSidebarViewport(),
+		input:     ti,
+		log:     welcome,
+		stats:   paneStats{state: "ready", outputCwd: cwd},
+		runtime: brain.DetectRuntimeEnvFromProcess(),
+		width:   100,
+		height:  24,
 	}
 	if w := brain.Active(); w != nil {
 		m.stats.wsID = w.ID
@@ -171,7 +178,7 @@ func RunChat(dirs []string) {
 
 	bindStats(cwd)
 	m := newModel(s, cwd)
-	p := tea.NewProgram(&m, tea.WithAltScreen())
+	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
 	}
@@ -186,6 +193,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.overlay != nil {
 			return m.updateOverlayKey(msg)
+		}
+		if m.handleSidebarScroll(msg) {
+			return m, nil
 		}
 		if m.streaming {
 			switch msg.String() {
@@ -229,6 +239,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamTickMsg:
 		return m.handleStream(msg.ev)
+
+	case tea.MouseMsg:
+		if nm, cmd, handled := m.handleMouse(msg); handled {
+			return nm, cmd
+		}
 	}
 
 	var cmd tea.Cmd
@@ -236,14 +251,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.syncInputSize()
 	listCmd := m.syncSlashList()
 	if !m.streaming {
-		m.vp, _ = m.vp.Update(msg)
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && m.hoverPane == hoverChat && chatScrollKey(keyMsg) {
+			m.vp, _ = m.vp.Update(msg)
+		}
 	}
 	return m, tea.Batch(cmd, listCmd)
 }
 
 func (m *model) mainInputWidth() int {
 	side := 0
-	if m.sidebarText() != "" {
+	if sidebarActive(m.width) {
 		side = sidebarWidth
 	}
 	mainW := m.width - side - 2
@@ -396,10 +413,16 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.vp.GotoBottom()
 			m.lastIn = ""
 			return m, nil
+		case "cls":
+			m.log = styleDim.Render("— view cleared") + "\n"
+			m.vp.SetContent(m.log)
+			m.vp.GotoBottom()
+			return m, nil
 		case "help":
-			m.appendLog("/clear /exit /status /retry /config\n", true)
+			m.appendLog("/clear /cls /exit /status /retry /config\n", true)
 			return m, nil
 		case "status":
+			m.refreshRuntime()
 			m.appendLog(m.statusDump()+"\n", true)
 			return m, nil
 		case "config":
@@ -448,7 +471,12 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
 			m.appendLog(styleDim.Render("disconnected — try again\n"), true)
-			if ns, e := dial(); e == nil {
+			if err := EnsureServer(); err != nil {
+				m.appendLog(styleErr.Render("! server: "+err.Error())+"\n", true)
+			} else if ns, e := dial(); e == nil {
+				if old := m.sess; old != nil && old.conn != nil {
+					_ = old.conn.Close()
+				}
 				m.sess = ns
 				m.appendLog(styleDim.Render("reconnected\n"), true)
 			}
@@ -467,6 +495,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		}
 	case "stats":
 		m.applyStats(ev.raw)
+		m.syncSidebarViewport()
 	case "progress":
 		m.stats.state = str(ev.raw["message"])
 	case "tool_start":
@@ -475,7 +504,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			m.appendLog(styleTool.Render("\n▸ "+n)+"\n", true)
 		}
 	case "tool_result":
-		if line := formatEventLine("tool_result", ev.raw); line != "" {
+		if line := formatToolResultLine("tool_result", ev.raw); line != "" {
 			m.appendLog(styleDim.Render(line)+"\n", true)
 		}
 	case "exec_confirm_required":
@@ -485,7 +514,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	case "exec_done":
 		m.sess.lastExecCmd = execLine(ev.raw)
 		m.sess.lastExecCwd = str(ev.raw["cwd"])
-		m.appendLog(formatEventLine("exec_done", ev.raw)+"\n", true)
+		m.appendLog(formatToolResultLine("exec_done", ev.raw)+"\n", true)
 	case "error":
 		m.appendLog(styleErr.Render("! "+str(ev.raw["message"]))+"\n", true)
 	case "user_choice":
@@ -616,7 +645,7 @@ func (m *model) syncInputSize() {
 		return
 	}
 	side := 0
-	if m.sidebarText() != "" {
+	if sidebarActive(m.width) {
 		side = sidebarWidth
 	}
 	mainW := m.width - side - 2
@@ -638,7 +667,7 @@ func (m *model) layoutViewports() {
 	)
 	linesInputBox := m.inputLineCount() + inputLinesBorder + m.slashMenuLines()
 	side := 0
-	if m.sidebarText() != "" {
+	if sidebarActive(m.width) {
 		side = sidebarWidth
 	}
 	mainW := m.width - side - 2
@@ -652,6 +681,7 @@ func (m *model) layoutViewports() {
 	}
 	m.vp.Width = mainW
 	m.vp.Height = mainH
+	m.syncSidebarViewport()
 }
 
 func (m *model) View() string {
@@ -661,14 +691,21 @@ func (m *model) View() string {
 	m.layoutViewports()
 	main := styleBorder.Width(m.vp.Width + 2).Render(m.vp.View())
 	in := m.renderInputPane()
-	body := lipgloss.JoinVertical(lipgloss.Left, main, in)
-	if side := m.sidebarText(); side != "" {
-		bodyH := lipgloss.Height(main) + lipgloss.Height(in)
-		sb := styleSidebar.Width(sidebarWidth).Height(bodyH).Render(side)
+	body := lipgloss.JoinVertical(lipgloss.Top, main, in)
+	if sidebarActive(m.width) {
+		bodyH := m.leftBodyHeight()
+		sb := styleSidebar.
+			Width(sidebarWidth).
+			Height(bodyH).
+			MaxHeight(bodyH).
+			Render(m.sidebarVP.View())
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, sb)
 	}
 
-	foot := styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit")
+	foot := styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · wheel scrolls pane under cursor")
+	if sidebarActive(m.width) {
+		foot = styleDim.Render("wheel: chat/sidebar · sidebar keys: ctrl+↑↓ home/end · ctrl+[/] · enter · ctrl+c quit")
+	}
 	if m.slashList != nil {
 		foot = styleDim.Render("↑↓ select · enter run (or apply) · tab complete · esc clear")
 	}
@@ -686,18 +723,8 @@ func (m *model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, body, foot)
 }
 
-func (m *model) statusDump() string {
-	var b strings.Builder
-	b.WriteString("── status ──\n")
-	if m.stats.wsID != "" {
-		b.WriteString("ws: " + m.stats.wsID + "\n")
-	}
-	b.WriteString("out: " + m.stats.outputCwd + "\n")
-	b.WriteString(fmt.Sprintf("round %d turns %d\n", m.stats.round, m.stats.turns))
-	if cfg := config.Config; cfg != nil {
-		b.WriteString(cfg.LLM.Provider + " / " + cfg.LLM.Model + "\n")
-	}
-	return b.String()
+func (m *model) refreshRuntime() {
+	m.runtime = brain.DetectRuntimeEnvFromProcess()
 }
 
 func matchSlash(line string) (string, bool) {

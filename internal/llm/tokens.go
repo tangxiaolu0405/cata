@@ -11,35 +11,29 @@ import (
 // 粗算 token：混合中英文约 3.2 字符/token（无 tiktoken 时的保守估计）。
 const charsPerTokenEstimate = 3.2
 
-// DefaultContextWindow 按模型名猜测上下文窗口；未知模型默认 32k。
+// 主流 OpenAI 兼容 / DeepSeek 等模型上下文已普遍为 1M；Claude 等仍单独标注。
+const contextWindow1M = 1_000_000
+const contextWindow200K = 200_000
+
+// DefaultContextWindow 按模型名猜测上下文窗口；未知模型默认 1M。
 func DefaultContextWindow(model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	case strings.Contains(m, "gpt-4o"), strings.Contains(m, "gpt-4-turbo"), strings.Contains(m, "gpt-4.1"):
-		return 128000
-	case strings.Contains(m, "gpt-4"):
-		return 128000
 	case strings.Contains(m, "gpt-3.5"):
 		return 16385
-	case strings.Contains(m, "o1"), strings.Contains(m, "o3"):
-		return 128000
-	case strings.Contains(m, "deepseek"):
-		if strings.Contains(m, "v4-pro") || strings.Contains(m, "reasoner") {
-			return 128000
-		}
-		return 128000
+	case strings.Contains(m, "claude"):
+		return contextWindow200K
 	case strings.Contains(m, "qwen"), strings.Contains(m, "tongyi"), strings.Contains(m, "dashscope"):
-		if strings.Contains(m, "max") || strings.Contains(m, "plus") {
-			return 128000
+		if strings.Contains(m, "turbo") && !strings.Contains(m, "max") &&
+			!strings.Contains(m, "plus") && !strings.Contains(m, "long") {
+			return 32000
 		}
-		return 32000
-	case strings.Contains(m, "claude-3"), strings.Contains(m, "claude"):
-		return 200000
+		return contextWindow1M
 	default:
-		return 32000
+		// deepseek-v4*、gpt-4*、o1/o3、gemini 等
+		return contextWindow1M
 	}
 }
-
 // ContextWindowTokens 返回当前客户端使用的上下文上限。
 func (c *Client) ContextWindowTokens() int {
 	if config.Config != nil && config.Config.LLM.ContextWindow > 0 {
@@ -60,11 +54,10 @@ func ContextCompressRatioValue() float64 {
 // ContextCompressThreshold 达到该 token 数时触发会话压缩。
 func ContextCompressThreshold(window int) int {
 	if window <= 0 {
-		window = 32000
+		window = contextWindow1M
 	}
 	return int(float64(window) * ContextCompressRatioValue())
 }
-
 // EstimatedChatInputTokens 估算发往 API 前的输入 token（含 boot-leader + brain 节选注入）。
 func (c *Client) EstimatedChatInputTokens(messages []Message, tools []Tool) int {
 	wired := withBootLeaderSystemMessage(messages)

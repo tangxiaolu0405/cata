@@ -7,14 +7,14 @@
 
 只在 triggers 成立时修改；若 triggers 含 fill:*，**本轮必须**用 updates 填好仍为空壳的 **本 workspace** 文档（不可 idle）。
 
-输出：单个 JSON 对象。
+输出：单个 JSON 对象（紧凑；reason/learning 各 ≤120 字；updates ≤3 条，单条 content ≤800 字）。
 字段：action, reason, learning, updates[]
 
 **patch 模式**（updates[].mode）：write | overwrite | append | append_section | replace_section | delete | delete_section
 
 **写入路由（本 workspace 内）**
 | 路径 | 写什么 |
-| modes/<mode>/persona.md | **本 workspace** 下用户偏好与习惯（从本格 short-term 提炼） |
+| modes/_default/persona.md | **本 workspace** 下用户偏好与习惯（从本格 short-term 提炼） |
 | persona.local.md | **本 focus_path 项目**：仓库用途、技术栈、当前任务 |
 | memory/long/*.md | 本项目的细节、长事实 |
 | memory/short/current.md | 本 workspace 对话流水（consolidate 后可 write/overwrite/delete 归档） |
@@ -25,4 +25,4 @@
 - consolidate：新事实按上表分流，**仅写入本 workspace**
 - capabilities.yaml：禁止 append（skill 名由 server 追加）；write/overwrite 须保留 mcp:
 
-默认 idle。
+默认 mode 目录名为 **`_default`**（带前导下划线），勿写 `modes/default/`。

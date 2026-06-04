@@ -2,8 +2,10 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -142,19 +144,20 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 
 	var chatHistory []llm.Message
 
-	scanner := bufio.NewScanner(conn)
-	lineBuf := make([]byte, 0, 64*1024)
-	scanner.Buffer(lineBuf, 4<<20)
+	br := bufio.NewReaderSize(conn, 64*1024)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	for {
+		line, err := readClientLine(br)
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("Error reading from connection: %v", err)
+			}
+			break
 		}
 
 		// 解析请求
 		var req Request
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
+		if err := json.Unmarshal(line, &req); err != nil {
 			ss.sendResponse(conn, Response{
 				Success: false,
 				Message: fmt.Sprintf("Invalid request: %v", err),
@@ -185,7 +188,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if _, err := brain.ResolveWorkspace(cwd); err != nil {
 				log.Printf("resolve brain: %v", err)
 			}
-			if err := ss.handleTerminalChatStream(conn, &chatHistory, req.Text); err != nil {
+			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			continue
@@ -205,9 +208,18 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			ss.sendResponse(conn, resp)
 		}
 	}
+}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading from connection: %v", err)
+func readClientLine(br *bufio.Reader) ([]byte, error) {
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 {
+			return line, nil
+		}
 	}
 }
 

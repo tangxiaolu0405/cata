@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,12 +39,16 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 }
 
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
-func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.Message, userText string) (err error) {
+func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
+	var lr *connLineReader
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("chat stream panic: %v\n%s", r, debug.Stack())
+			if lr != nil {
+				lr.Stop()
+			}
 			_ = ss.emitStreamLine(conn, map[string]interface{}{
 				"type": "error", "message": fmt.Sprintf("internal error: %v", r),
 			})
@@ -80,15 +85,14 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	lr := newConnLineReader(conn, cancel)
-	defer lr.Stop()
+	lr = newConnLineReader(br, conn, cancel)
 	ctx = withChatConnReader(ctx, lr)
 
 	var sessPromptTok, sessCompletionTok int
 
 	for round := 1; ; round++ {
 		if ctx.Err() != nil {
-			return ss.emitChatCancelled(conn)
+			return ss.emitChatCancelled(conn, lr)
 		}
 		ss.maybeContextCompress(conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
@@ -126,9 +130,10 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, "")
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				return ss.emitChatCancelled(conn)
+				return ss.emitChatCancelled(conn, lr)
 			}
 			msg := err.Error() + "\n\n本连接对话上下文已保留（含已执行的工具结果）。直接输入「继续」即可接着做，无需从头重述任务。"
+			lr.Stop()
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 			return err
@@ -178,8 +183,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 				log.Printf("short-term memory: %v", err)
 			}
 			ss.maybeContextCompress(conn, client, history, tools)
-			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": true})
-			return nil
+			return ss.emitChatDone(conn, lr, true, false)
 		}
 
 		*history = append(*history, llm.Message{
@@ -192,7 +196,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 		fatalBrowser := false
 		for _, tc := range toolCalls {
 			if ctx.Err() != nil {
-				return ss.emitChatCancelled(conn)
+				return ss.emitChatCancelled(conn, lr)
 			}
 			name := tc.Function.Name
 			ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, &sessPromptTok, &sessCompletionTok, name)
@@ -226,10 +230,23 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 	}
 }
 
-func (ss *SocketServer) emitChatCancelled(conn net.Conn) error {
+func (ss *SocketServer) emitChatDone(conn net.Conn, lr *connLineReader, success, cancelled bool) error {
+	if lr != nil {
+		lr.Stop()
+	}
+	ev := map[string]interface{}{"type": "done", "success": success}
+	if cancelled {
+		ev["cancelled"] = true
+	}
+	return ss.emitStreamLine(conn, ev)
+}
+
+func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *connLineReader) error {
+	if lr != nil {
+		lr.Stop()
+	}
 	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": "已停止"})
-	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false, "cancelled": true})
-	return nil
+	return ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false, "cancelled": true})
 }
 
 // maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。

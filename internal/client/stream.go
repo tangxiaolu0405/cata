@@ -83,12 +83,8 @@ func trunc(s string, max int) string {
 	return s[:max] + "…"
 }
 
-func formatEventLine(kind string, ev map[string]any) string {
+func formatToolResultLine(kind string, ev map[string]any) string {
 	switch kind {
-	case "progress":
-		return "… " + str(ev["message"])
-	case "tool_start":
-		return "▸ " + str(ev["name"])
 	case "tool_result":
 		name := str(ev["name"])
 		out := str(ev["output"])
@@ -96,14 +92,8 @@ func formatEventLine(kind string, ev map[string]any) string {
 			return "  (" + name + " done)"
 		}
 		return fmt.Sprintf("  %s: %s", name, trunc(out, 400))
-	case "error":
-		return "! " + str(ev["message"])
-	case "exec_denied":
-		return "— command cancelled"
 	case "exec_done":
 		return fmt.Sprintf("$ %s (exit %d)", execLine(ev), int(num(ev["exit_code"])))
-	case "file_written":
-		return fmt.Sprintf("✎ %s (%d B)", str(ev["path"]), int(num(ev["bytes"])))
 	default:
 		return ""
 	}

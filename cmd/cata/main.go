@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"cata/internal/brain"
 	"cata/internal/client"
+	"cata/internal/clock"
 	"cata/internal/config"
 	"cata/internal/server"
 )
@@ -17,59 +19,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(os.Args) < 2 {
+	args := os.Args[1:]
+	if len(args) == 0 {
 		client.RunChat(nil)
 		return
 	}
 
-	command := os.Args[1]
-	switch command {
+	switch args[0] {
 	case "help", "--help", "-h":
 		printUsage()
 	case "chat":
-		dirs := parseDirs(os.Args[2:])
-		client.RunChat(dirs)
+		client.RunChat(client.ParseOutputDirs(args[1:]))
 	case "init":
 		runInit()
 	case "config":
-		handleConfigCommand(os.Args[2:])
+		handleConfigCommand(args[1:])
 	case "run":
-		runServer(os.Args[2:])
+		runServer(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "Error: Unknown command: %s\n\n", command)
+		fmt.Fprintf(os.Stderr, "Error: Unknown command: %s\n\n", args[0])
 		printUsage()
 		os.Exit(1)
 	}
-}
-
-func parseDirs(args []string) []string {
-	var dirs []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--dir" && i+1 < len(args) {
-			abs, err := filepath.Abs(args[i+1])
-			if err == nil {
-				dirs = append(dirs, abs)
-			}
-			i++
-		}
-	}
-	return dirs
 }
 
 func printUsage() {
 	fmt.Println("Cata — terminal agent (one binary: server + chat client)")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  cata                    Start chat (default)")
+	fmt.Println("  cata                    Start chat (default, TUI)")
 	fmt.Println("  cata chat [--dir <path>]  Start chat at output dir")
 	fmt.Println("  cata run                Start server (one per machine; foreground)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout")
 	fmt.Println("  cata config             Manage configuration")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  cata                         # uses current directory as output area")
-	fmt.Println("  cata chat --dir ~/project    # project as output area")
-	fmt.Println("  cata chat --dir ~/a --dir ~/b  # first dir is main output area")
+	fmt.Println("  cata")
+	fmt.Println("  cata chat --dir ~/project")
+	fmt.Println("  cata chat --dir ~/a --dir ~/b")
 	fmt.Println()
 	fmt.Println("Same output directory: second `cata` exits with an error.")
 	fmt.Println("See README.md and agents.md")
@@ -96,7 +83,6 @@ func runInit() {
 	if len(cfg.Exec.Whitelist) == 0 {
 		cfg.Exec.Whitelist = []string{"*"}
 	}
-	config.ApplyInitDefaults(cfg)
 
 	configPath := config.GetConfigPath()
 	created := false
@@ -107,21 +93,12 @@ func runInit() {
 		fmt.Fprintf(os.Stderr, "Warning: failed to save config file: %v\n", err)
 	} else if created {
 		fmt.Printf("Configuration file created: %s\n", configPath)
-	} else {
-		fmt.Printf("Configuration file updated: %s\n", configPath)
 	}
 
-	fmt.Printf("Brain directory initialized successfully!\n")
-	fmt.Printf("Brain directory: %s\n", cfg.Brain.Dir)
-	fmt.Printf("Configuration file: %s\n", configPath)
-	fmt.Println("\nConfiguration:")
-	fmt.Printf("  LLM Provider: %s\n", cfg.LLM.Provider)
-	fmt.Printf("  LLM Enabled: %v\n", cfg.LLM.Enabled)
-	fmt.Printf("  Autonomous evolution: enabled=%v cycle_interval=%ds\n",
-		cfg.Evolution.Enabled, cfg.Evolution.CycleInterval)
-	fmt.Printf("  run_command (exec): enabled=%v\n", cfg.Exec.Enabled)
-	fmt.Printf("  timezone: %s\n", cfg.Server.Timezone)
-	fmt.Println("\nNext: cata")
+	fmt.Printf("Brain initialized: %s\n", cfg.Brain.Dir)
+	fmt.Printf("Config: %s (llm=%s evolution=%ds exec=%v)\n",
+		configPath, cfg.LLM.Provider, cfg.Evolution.CycleInterval, cfg.Exec.Enabled)
+	fmt.Println("Next: cata")
 }
 
 func runServer(args []string) {
@@ -130,15 +107,6 @@ func runServer(args []string) {
 		if a == "--managed" {
 			managed = true
 			break
-		}
-	}
-
-	if config.Config == nil {
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load config: %v\n", err)
-		} else {
-			config.Config = cfg
 		}
 	}
 
@@ -159,4 +127,147 @@ func runServer(args []string) {
 	}
 
 	srv.Wait()
+}
+
+func handleConfigCommand(args []string) {
+	if len(args) < 1 {
+		printConfigUsage()
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "show":
+		handleConfigShow()
+	case "set":
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "Error: config set requires key and value\n")
+			fmt.Fprintf(os.Stderr, "Usage: cata config set <key> <value>\n")
+			os.Exit(1)
+		}
+		handleConfigSet(args[1], args[2])
+	case "get":
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Error: config get requires key\n")
+			fmt.Fprintf(os.Stderr, "Usage: cata config get <key>\n")
+			os.Exit(1)
+		}
+		handleConfigGet(args[1])
+	case "keys":
+		handleConfigKeys()
+	case "edit":
+		handleConfigEdit()
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unknown config subcommand: %s\n", args[0])
+		printConfigUsage()
+		os.Exit(1)
+	}
+}
+
+func printConfigUsage() {
+	fmt.Println("Configuration Management")
+	fmt.Println()
+	fmt.Println("Usage: cata config <subcommand> [args]")
+	fmt.Println()
+	fmt.Println("Subcommands:")
+	fmt.Println("  show              Show current configuration")
+	fmt.Println("  keys              List keys supported by get/set")
+	fmt.Println("  get <key>         Get a configuration value")
+	fmt.Println("  set <key> <value> Set a configuration value")
+	fmt.Println("  edit              Print config file path")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  cata config show")
+	fmt.Println("  cata config get mcp.tool_timeout_seconds")
+	fmt.Println("  cata config set llm.provider deepseek")
+	fmt.Println("  cata config set mcp.tool_timeout_seconds 300")
+	fmt.Println(`  cata config set mcp.browser.args '["-y","@playwright/mcp@0.0.75","--extension"]'`)
+	fmt.Println("  # 或环境变量 DEEPSEEK_API_KEY；千问见 config.json 内 llm_previous_qwen")
+}
+
+func handleConfigShow() {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	data, err := json.MarshalIndent(config.RedactConfig(cfg), "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error formatting config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(string(data))
+}
+
+func handleConfigKeys() {
+	for _, k := range config.ConfigKeys() {
+		fmt.Println(k)
+	}
+}
+
+func handleConfigGet(key string) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	value, ok, err := config.GetKey(cfg, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: key not found: %s\n", key)
+		os.Exit(1)
+	}
+
+	fmt.Println(formatConfigValue(value))
+}
+
+func handleConfigSet(key, value string) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	clockInit, err := config.SetKey(cfg, key, value)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error setting config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := config.SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+	if clockInit {
+		_ = clock.Init(value)
+	}
+
+	fmt.Printf("Configuration updated: %s = %s\n", key, value)
+}
+
+func handleConfigEdit() {
+	fmt.Printf("Config file: %s\n", config.GetConfigPath())
+	fmt.Println("Edit manually or use: cata config set <key> <value>")
+}
+
+func formatConfigValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case bool:
+		return fmt.Sprintf("%v", x)
+	case int:
+		return fmt.Sprintf("%d", x)
+	case int64:
+		return fmt.Sprintf("%d", x)
+	case float64:
+		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", x), "0"), ".")
+	default:
+		return fmt.Sprintf("%v", x)
+	}
 }

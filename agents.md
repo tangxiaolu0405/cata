@@ -33,7 +33,7 @@
 | 区域 | 作用 |
 |------|------|
 | **`cmd/cata`** | `init`（初始化 ~/.cata/brain）、`config`、`run`（socket + 后台演进） |
-| **`cmd/cata`（`chat`）** | 默认流式 LLM 客户端；协议：`chat`（`stream:true`）、`chat_reset`、`ping`；`cmd/catacli` 已废弃 |
+| **`cmd/cata`（`chat`）** | 默认 Bubble Tea TUI；协议：`chat`（`stream:true`）、`chat_reset`、`ping` |
 | **`internal/server`** | Unix socket、终端 chat 工具循环 |
 | **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
 | **`internal/brain`** | 路径常量、`InitDirectory`、终端节选 |
@@ -77,7 +77,7 @@
 
 ## MCP 与 Skill（已接入）
 
-- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@latest`，name=`browser`）；`modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。
+- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@0.0.75`，无 `--console`；`tool_timeout_seconds` 300）；`modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。小红书/已登录发布见 **`docs/mcp-browser.md`**（`--extension`）。
 - **Skill**：`capabilities.yaml` → `skills: [id]`；`SKILL.md` 查找顺序：`brain/workspaces/<ws>/skills/` → `~/.cata/skills/` → `~/.cursor/skills-cursor/`。
 - **run_skill**：执行脑子内 `skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化；**不删** `mcp: [browser]`。
 - **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 并自动 append capabilities；下次 chat 生效。
@@ -123,7 +123,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 **② brain 节选**（`internal/brain/terminal_context.go`）单条 `system`，自上而下：
 
-1. **路径块** — `TerminalPathsSystemBlock()`（`context_paths.go`）：脑子 vs 产出区、`focus_path`、`output_cwd`、运行时 shell/OS（`Runtime` 由 client 上报）
+1. **路径块** — `TerminalPathsSystemBlock()`（`context_paths.go`）：脑子 vs 产出区、`focus_path`、`output_cwd`、**host/command 平台**（windows/linux/darwin）、终端/shell 语法、**PATH 探测**（python/node/go 等）、**Cata 已注册工具**（`Runtime` 由 client 每轮上报）
 2. **Skills** — `SkillsPromptBlock()`：读 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（workspace → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
 3. **记忆索引** — `MemoryIndexPromptBlock()` ← `memory/index.json`（≤2800 bytes）
 4. **文档块** — `global/constraints.md`、`global/behavior.md`、`modes/<mode>/persona.md`、`persona.local.md`（legacy 无 workspace 时回退 `brain/constraints.md` 等）

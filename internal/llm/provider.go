@@ -46,7 +46,8 @@ type Provider interface {
 	// BuildRequest 构建 HTTP 请求
 	// tools: 允许为空；toolChoice: 目前简单使用字符串（如 "auto"、"none"），留空则走默认策略
 	// stream: true 时请求 OpenAI 兼容 SSE（data: 行）
-	BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error)
+	// disableThinking: true 时强制 DeepSeek thinking=disabled（演进 JSON 等）
+	BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error)
 	// ParseResponse 解析 HTTP 响应，返回 assistant 内容和（可选的）tool_calls
 	ParseResponse(body []byte) (string, []ToolCall, error)
 	// GetAPIKeyHeader 获取 API Key 的 Header 名称和格式
@@ -77,9 +78,12 @@ func isDeepSeekAPIURL(apiURL string) bool {
 }
 
 // resolveDeepSeekThinking 见 https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-func resolveDeepSeekThinking(apiURL string, tools []Tool) *wireThinking {
+func resolveDeepSeekThinking(apiURL string, tools []Tool, forceDisabled bool) *wireThinking {
 	if !isDeepSeekAPIURL(apiURL) {
 		return nil
+	}
+	if forceDisabled {
+		return &wireThinking{Type: "disabled"}
 	}
 	mode := "auto"
 	if config.Config != nil {
@@ -130,14 +134,14 @@ func messagesForChatCompletionsWire(messages []Message) []map[string]interface{}
 	return out
 }
 
-func marshalChatCompletionsBody(apiURL, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
+func marshalChatCompletionsBody(apiURL, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) ([]byte, error) {
 	req := wireChatRequest{
 		Model:       model,
 		Messages:    messagesForChatCompletionsWire(messages),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 		Stream:      stream,
-		Thinking:    resolveDeepSeekThinking(apiURL, tools),
+		Thinking:    resolveDeepSeekThinking(apiURL, tools, disableThinking),
 	}
 	if len(tools) > 0 {
 		req.Tools = tools
@@ -148,8 +152,8 @@ func marshalChatCompletionsBody(apiURL, model string, messages []Message, maxTok
 	return json.Marshal(req)
 }
 
-func (p *OpenAIProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
-	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream)
+func (p *OpenAIProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
+	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -200,7 +204,11 @@ func (p *OpenAIProvider) ParseResponse(body []byte) (string, []ToolCall, error) 
 	if len(tc) == 0 {
 		tc = first.ToolCalls
 	}
-	return first.Message.Content, tc, nil
+	text := strings.TrimSpace(first.Message.Content)
+	if text == "" {
+		text = strings.TrimSpace(first.Message.ReasoningContent)
+	}
+	return text, tc, nil
 }
 
 func (p *OpenAIProvider) GetAPIKeyHeader(apiKey string) (string, string) {
@@ -232,8 +240,8 @@ type QwenResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-func (p *QwenProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
-	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream)
+func (p *QwenProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
+	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -334,7 +342,11 @@ func (p *QwenProvider) ParseResponse(body []byte) (string, []ToolCall, error) {
 	}
 	
 	first := openAIResp.Choices[0]
-	return first.Message.Content, first.Message.ToolCalls, nil
+	text := strings.TrimSpace(first.Message.Content)
+	if text == "" {
+		text = strings.TrimSpace(first.Message.ReasoningContent)
+	}
+	return text, first.Message.ToolCalls, nil
 }
 
 func (p *QwenProvider) GetAPIKeyHeader(apiKey string) (string, string) {

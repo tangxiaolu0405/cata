@@ -28,17 +28,11 @@ func (w *Workspace) metaPath() string { return filepath.Join(w.Dir(), RelMetaJSO
 
 // ModeDir 返回某 mode 目录。
 func (w *Workspace) ModeDir(modeID string) string {
-	if strings.TrimSpace(modeID) == "" {
-		modeID = ModeDefaultID
-	}
-	return filepath.Join(w.Dir(), DirModes, modeID)
+	return filepath.Join(w.Dir(), DirModes, NormalizeModeID(modeID))
 }
 
 func (w *Workspace) modeID() string {
-	if w.ActiveMode != "" {
-		return w.ActiveMode
-	}
-	return ModeDefaultID
+	return NormalizeModeID(w.ActiveMode)
 }
 
 // PersonaLocalPath workspace 级项目说明。
@@ -87,7 +81,7 @@ func (w *Workspace) saveMeta() error {
 		"root_path":   w.RootPath,
 		"kind":        string(w.Kind),
 		"name":        w.Name,
-		"active_mode": w.ActiveMode,
+		"active_mode": NormalizeModeID(w.ActiveMode),
 		"updated_at":  clock.RFC3339(),
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -139,6 +133,9 @@ func (w *Workspace) EnsureScaffold() error {
 		return err
 	}
 	if err := ensureFile(w.MemoryIndexPath(), `{"version":1,"entries":[]}`+"\n"); err != nil {
+		return err
+	}
+	if err := w.migrateDefaultModeAlias(); err != nil {
 		return err
 	}
 	return writeProjectLink(w)
@@ -195,7 +192,7 @@ func readProjectWorkspaceYAML(root string) projectWorkspaceYAML {
 			y.Name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
 		}
 		if strings.HasPrefix(line, "active_mode:") {
-			y.ActiveMode = strings.TrimSpace(strings.TrimPrefix(line, "active_mode:"))
+			y.ActiveMode = NormalizeModeID(strings.TrimSpace(strings.TrimPrefix(line, "active_mode:")))
 		}
 	}
 	return y

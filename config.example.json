@@ -11,7 +11,7 @@
     "models": null,
     "max_tokens": 8192,
     "timeout": 600,
-    "context_window": 128000,
+    "context_window": 1000000,
     "thinking": "auto",
     "enabled": true
   },
@@ -30,7 +30,11 @@
     "enabled": true,
     "cycle_interval": 300,
     "context_compress_ratio": 0.85,
-    "session_compress_turns": 12
+    "session_compress_turns": 12,
+    "decision_max_tokens": 4096
+  },
+  "evolution_config_help": {
+    "_comment": "evolution.decision_max_tokens：自主演进 LLM 决策 JSON 的 max_tokens。省略或 0=不限制（由模型/API 默认输出上限）；正整数=限制生成长度。JSON 被截断时可设为 4096–8192。可通过 cata config set evolution.decision_max_tokens 4096 修改。"
   },
   "exec": {
     "enabled": true,
@@ -53,11 +57,15 @@
         "name": "browser",
         "enabled": true,
         "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest"],
+        "args": ["-y", "@playwright/mcp@0.0.75"],
         "env": null
       }
     ],
-    "tool_timeout_seconds": 120,
-    "max_output_bytes": 262144
+    "tool_timeout_seconds": 300,
+    "max_output_bytes": 26214400
+  },
+  "mcp_browser_extension_example": {
+    "_comment": "小红书创作平台等需已登录 Chrome：安装 Playwright MCP Bridge 扩展后，把 mcp.servers[browser].args 改为下方 args。详见 docs/mcp-browser.md",
+    "args": ["-y", "@playwright/mcp@0.0.75", "--extension"]
   }
 }

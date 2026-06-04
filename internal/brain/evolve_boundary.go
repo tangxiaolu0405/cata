@@ -108,7 +108,7 @@ func NormalizeEvolveUpdatePath(p string) (string, error) {
 	if mapped, ok := legacy[p]; ok {
 		return mapped, nil
 	}
-	return p, nil
+	return normalizeModePathRel(p), nil
 }
 
 // IsEvolveSharedGlobalPath 判断是否为全机共享的 global/* 路径。

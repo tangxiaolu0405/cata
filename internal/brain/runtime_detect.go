@@ -26,6 +26,7 @@ func DetectRuntimeEnvFromProcess() RuntimeEnv {
 	if e.OS == "" {
 		e.OS = runtime.GOOS
 	}
+	e.ProbeTools()
 	return e
 }
 

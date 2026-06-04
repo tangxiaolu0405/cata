@@ -47,7 +47,7 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 			ws.Name = y.Name
 		}
 		if y.ActiveMode != "" {
-			ws.ActiveMode = y.ActiveMode
+			ws.ActiveMode = NormalizeModeID(y.ActiveMode)
 		}
 		_ = ws.EnsureScaffold()
 		touchRegistryEntry(ent.ID)
@@ -63,7 +63,7 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 		RootPath:   root,
 		Kind:       kind,
 		Name:       y.Name,
-		ActiveMode: y.ActiveMode,
+		ActiveMode: NormalizeModeID(y.ActiveMode),
 	}
 	if ws.ActiveMode == "" {
 		ws.ActiveMode = ModeDefaultID
@@ -202,7 +202,7 @@ func entryToWorkspace(e *RegistryEntry) *Workspace {
 		RootPath:   e.RootPath,
 		Kind:       e.Kind,
 		Name:       e.Name,
-		ActiveMode: e.ActiveMode,
+		ActiveMode: NormalizeModeID(e.ActiveMode),
 	}
 }
 
@@ -212,7 +212,7 @@ func workspaceToEntry(w *Workspace) RegistryEntry {
 		RootPath:   w.RootPath,
 		Kind:       w.Kind,
 		Name:       w.Name,
-		ActiveMode: w.ActiveMode,
+		ActiveMode: NormalizeModeID(w.ActiveMode),
 		LastSeenAt: clock.RFC3339(),
 	}
 }

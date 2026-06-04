@@ -216,7 +216,7 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 		MaxTokens:     maxTokens,
 		Temperature:   temperature,
 	}
-	httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true, true)
+	httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
 	if err != nil {
 		return "", "", nil, "", usage, err
 	}

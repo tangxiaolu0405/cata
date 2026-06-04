@@ -145,12 +145,23 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		{Role: "user", Content: decisionPrompt},
 	}
 
-	reply, err := client.ChatEvolution(messages)
+	reply, err := client.ChatEvolution(messages, decisionMaxTokens())
 	if err != nil {
 		return fmt.Errorf("decide: %w", err)
 	}
 
 	dec, err := parseDecision(reply)
+	if err != nil {
+		log.Printf("Autonomous evolution [%s]: parse failed (%v), retry once; raw prefix: %.120q", ws.ID, err, reply)
+		retryMsgs := append(append([]llm.Message(nil), messages...),
+			llm.Message{Role: "assistant", Content: reply},
+			llm.Message{Role: "user", Content: "Response truncated or invalid. Output ONLY one compact JSON object: action, reason (≤120 chars), learning (≤120 chars), updates (≤3 items; keep each content ≤800 chars). No markdown."},
+		)
+		if reply2, err2 := client.ChatEvolution(retryMsgs, decisionMaxTokens()); err2 == nil {
+			reply = reply2
+			dec, err = parseDecision(reply2)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
