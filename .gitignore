@@ -2,6 +2,8 @@
 .*
 !/.gitignore
 !.gitattributes
+!/.github/
+!/.github/**
 
 # Build artifacts
 cata.exe

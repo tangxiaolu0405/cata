@@ -10,41 +10,40 @@ on:
 jobs:
   build:
     name: Build ${{ matrix.artifact }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
             artifact: cata-linux-amd64
             archive_ext: tar.gz
+            bin_name: cata
 
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: amd64
             artifact: cata-darwin-amd64
             archive_ext: tar.gz
+            bin_name: cata
 
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: arm64
             artifact: cata-darwin-arm64
             archive_ext: tar.gz
+            bin_name: cata
 
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: 386
             artifact: cata-windows-386
             archive_ext: zip
+            bin_name: cata.exe
 
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: amd64
             artifact: cata-windows-amd64
             archive_ext: zip
-
-    runs-on: ${{ matrix.os }}
+            bin_name: cata.exe
 
     steps:
       - name: Checkout
@@ -60,20 +59,21 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
           ARTIFACT: ${{ matrix.artifact }}
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          BIN_NAME: ${{ matrix.bin_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            go build -ldflags="-s -w" -o dist/cata.exe ./cmd/cata
-            ARCHIVE="${ARTIFACT}.${ARCHIVE_EXT}"
-            (cd dist && zip -r "../${ARCHIVE}" cata.exe)
+          go build -ldflags="-s -w" -o "dist/${BIN_NAME}" ./cmd/cata
+
+          ARCHIVE="${ARTIFACT}.${ARCHIVE_EXT}"
+          if [ "${ARCHIVE_EXT}" = "zip" ]; then
+            (cd dist && zip -r "../${ARCHIVE}" "${BIN_NAME}")
           else
-            go build -ldflags="-s -w" -o dist/cata ./cmd/cata
-            chmod +x dist/cata
-            ARCHIVE="${ARTIFACT}.${ARCHIVE_EXT}"
-            tar -czf "${ARCHIVE}" -C dist cata
+            chmod +x "dist/${BIN_NAME}"
+            tar -czf "${ARCHIVE}" -C dist "${BIN_NAME}"
           fi
           ls -la "${ARCHIVE}"
 
