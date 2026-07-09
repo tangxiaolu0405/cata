@@ -272,7 +272,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/event-stream") && !strings.Contains(ct, "application/x-ndjson") {
 		body, _ := io.ReadAll(resp.Body)
-		content, toolCalls2, perr := c.provider.ParseResponse(body)
+		content, toolCalls2, perr := c.adapter.ParseResponse(body)
 		if perr != nil {
 			return "", "", nil, "", usage, fmt.Errorf("expected SSE stream (Content-Type=%s), got parse error: %v", ct, perr)
 		}
@@ -283,14 +283,14 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		return content, "", toolCalls2, "stop", usage, nil
 	}
 
-	assistant, reasoning, toolCalls, finishReason, usage, err = ReadOpenAIChatStream(resp.Body, onDelta)
+	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, ct, resp.Body, onDelta)
 	if err != nil {
 		return "", "", nil, "", usage, err
 	}
 
 	// 若干 OpenAI 兼容端在 SSE 下 finish_reason=tool_calls 但 delta 未携带可合并的 tool_calls；
 	// 再发一次非流式请求拿到完整 tool_calls，才能进入服务端多轮工具循环。
-	if strings.EqualFold(finishReason, "tool_calls") && len(toolCalls) == 0 && len(tools) > 0 {
+	if (strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use")) && len(toolCalls) == 0 && len(tools) > 0 {
 		log.Printf("LLM: stream finish_reason=tool_calls but 0 parsed tool_calls; retrying non-stream once")
 		nreq := ChatRequest{
 			Model:           c.model,

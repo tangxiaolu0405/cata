@@ -67,7 +67,10 @@ type BrainConfig struct {
 
 // LLMConfig LLM API 配置。
 type LLMConfig struct {
-	Provider      string            `json:"provider"`
+	// Provider 仅作展示标签（deepseek、mimo 等），不参与协议选择。
+	Provider string `json:"provider"`
+	// APIFormat 协议兜底：openai（Chat Completions 兼容）| anthropic（Messages 兼容）。
+	APIFormat     string            `json:"api_format"`
 	APIKey        string            `json:"api_key"`
 	APIURL        string            `json:"api_url"`
 	Model         string            `json:"model"`
@@ -242,7 +245,8 @@ func getDefaultConfig() *AppConfig {
 	return &AppConfig{
 		Brain: BrainConfig{},
 		LLM: LLMConfig{
-			Provider:  getDefaultProvider(),
+			Provider:  getDefaultProviderLabel(),
+			APIFormat: NormalizeAPIFormat("", getDefaultAPIURL(), getDefaultProviderLabel()),
 			APIKey:    getDefaultAPIKey(),
 			APIURL:    getDefaultAPIURL(),
 			Model:     getDefaultModel(),
@@ -308,9 +312,13 @@ func applyEnvOverrides(config *AppConfig) {
 	if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "1" || strings.EqualFold(v, "true") {
 		config.Exec.Enabled = true
 	}
+	if apiKey := os.Getenv("LLM_API_KEY"); apiKey != "" && config.LLM.APIKey == "" {
+		config.LLM.APIKey = apiKey
+		config.LLM.Enabled = true
+	}
 	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" && config.LLM.APIKey == "" {
 		config.LLM.APIKey = apiKey
-		if config.LLM.Provider == "" || config.LLM.Provider == "qwen" {
+		if config.LLM.Provider == "" {
 			config.LLM.Provider = "deepseek"
 		}
 		config.LLM.Enabled = true
@@ -353,6 +361,11 @@ func applyEnvOverrides(config *AppConfig) {
 	if config.LLM.Provider == "" {
 		if provider := os.Getenv("LLM_PROVIDER"); provider != "" {
 			config.LLM.Provider = provider
+		}
+	}
+	if config.LLM.APIFormat == "" {
+		if f := strings.TrimSpace(os.Getenv("LLM_API_FORMAT")); f != "" {
+			config.LLM.APIFormat = f
 		}
 	}
 }
@@ -400,18 +413,18 @@ func validateAndSetDefaults(config *AppConfig) error {
 	BrainBaseDir = config.Brain.BaseDir
 
 	if config.LLM.Provider == "" {
-		config.LLM.Provider = getDefaultProvider()
+		config.LLM.Provider = getDefaultProviderLabel()
 	}
 	if config.LLM.APIKey == "" {
 		config.LLM.APIKey = getDefaultAPIKey()
 	}
+	normalizeLLMConfig(&config.LLM)
 	if config.LLM.APIURL == "" {
-		config.LLM.APIURL = getDefaultAPIURLForProvider(config.LLM.Provider)
+		config.LLM.APIURL = getDefaultAPIURLForFormat(config.LLM.APIFormat)
 	}
 	if config.LLM.Model == "" {
-		config.LLM.Model = getDefaultModelForProvider(config.LLM.Provider)
+		config.LLM.Model = getDefaultModelForFormat(config.LLM.APIFormat)
 	}
-	normalizeLLMConfig(&config.LLM)
 	ensureLLMModelRoles(&config.LLM)
 	if config.LLM.APIKey != "" {
 		config.LLM.Enabled = true
@@ -711,9 +724,13 @@ func FindProjectRoot() string {
 	return ""
 }
 
-func getDefaultProvider() string {
+// getDefaultProviderLabel 返回展示用 provider 标签（不参与协议选择）。
+func getDefaultProviderLabel() string {
 	if provider := os.Getenv("LLM_PROVIDER"); provider != "" {
 		return provider
+	}
+	if os.Getenv("LLM_API_KEY") != "" {
+		return "custom"
 	}
 	if os.Getenv("DEEPSEEK_API_KEY") != "" {
 		return "deepseek"
@@ -722,12 +739,18 @@ func getDefaultProvider() string {
 		return "qwen"
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		return "claude"
+		return "anthropic"
+	}
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		return "openai"
 	}
 	return "openai"
 }
 
 func getDefaultAPIKey() string {
+	if key := os.Getenv("LLM_API_KEY"); key != "" {
+		return key
+	}
 	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
 		return key
 	}
@@ -750,19 +773,15 @@ func getDefaultAPIURL() string {
 	if url := os.Getenv("OPENAI_API_URL"); url != "" {
 		return url
 	}
-	return getDefaultAPIURLForProvider(getDefaultProvider())
+	return getDefaultAPIURLForFormat(NormalizeAPIFormat("", "", getDefaultProviderLabel()))
 }
 
-func getDefaultAPIURLForProvider(provider string) string {
+func getDefaultAPIURLForFormat(apiFormat string) string {
 	if url := os.Getenv("LLM_API_URL"); url != "" {
 		return url
 	}
-	switch provider {
-	case "deepseek":
-		return "https://api.deepseek.com/chat/completions"
-	case "qwen", "tongyi", "dashscope":
-		return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-	case "claude", "anthropic":
+	switch NormalizeAPIFormat(apiFormat, "", "") {
+	case "anthropic":
 		return "https://api.anthropic.com/v1/messages"
 	default:
 		if url := os.Getenv("OPENAI_API_URL"); url != "" {
@@ -779,19 +798,49 @@ func getDefaultModel() string {
 	if model := os.Getenv("OPENAI_MODEL"); model != "" {
 		return model
 	}
-	return getDefaultModelForProvider(getDefaultProvider())
+	return getDefaultModelForFormat(NormalizeAPIFormat("", "", getDefaultProviderLabel()))
 }
 
-// normalizeLLMConfig 修正 OpenAI 兼容端点（DeepSeek 等仅需 base_url 时补全路径）。
+// NormalizeAPIFormat 解析 llm.api_format；空时从 api_url / provider 标签推断（向后兼容）。
+func NormalizeAPIFormat(apiFormat, apiURL, providerLabel string) string {
+	switch strings.ToLower(strings.TrimSpace(apiFormat)) {
+	case "openai", "anthropic":
+		return strings.ToLower(strings.TrimSpace(apiFormat))
+	}
+	u := strings.ToLower(strings.TrimSpace(apiURL))
+	if strings.Contains(u, "anthropic") || strings.Contains(u, "/v1/messages") {
+		return "anthropic"
+	}
+	p := strings.ToLower(strings.TrimSpace(providerLabel))
+	if p == "claude" || p == "anthropic" {
+		return "anthropic"
+	}
+	return "openai"
+}
+
+// normalizeLLMConfig 规范化 api_format 与常见 base URL。
 func normalizeLLMConfig(llm *LLMConfig) {
 	if llm == nil {
 		return
 	}
+	llm.APIFormat = NormalizeAPIFormat(llm.APIFormat, llm.APIURL, llm.Provider)
 	u := strings.TrimRight(strings.TrimSpace(llm.APIURL), "/")
-	switch strings.ToLower(strings.TrimSpace(llm.Provider)) {
-	case "deepseek":
-		if u == "https://api.deepseek.com" {
+	switch llm.APIFormat {
+	case "openai":
+		switch u {
+		case "https://api.deepseek.com":
 			llm.APIURL = u + "/chat/completions"
+		case "https://api.xiaomimimo.com/v1":
+			llm.APIURL = u + "/chat/completions"
+		case "https://api.openai.com", "https://api.openai.com/v1":
+			llm.APIURL = u + "/chat/completions"
+		}
+	case "anthropic":
+		switch u {
+		case "https://api.anthropic.com", "https://api.anthropic.com/v1":
+			llm.APIURL = u + "/messages"
+		case "https://api.xiaomimimo.com", "https://api.xiaomimimo.com/anthropic":
+			llm.APIURL = strings.TrimSuffix(u, "/anthropic") + "/anthropic/v1/messages"
 		}
 	}
 }
@@ -806,17 +855,13 @@ func ensureLLMModelRoles(llm *LLMConfig) {
 	}
 }
 
-func getDefaultModelForProvider(provider string) string {
+func getDefaultModelForFormat(apiFormat string) string {
 	if model := os.Getenv("LLM_MODEL"); model != "" {
 		return model
 	}
-	switch provider {
-	case "deepseek":
-		return "deepseek-v4-flash"
-	case "qwen", "tongyi", "dashscope":
-		return "qwen-turbo"
-	case "claude", "anthropic":
-		return "claude-3-sonnet-20240229"
+	switch NormalizeAPIFormat(apiFormat, "", "") {
+	case "anthropic":
+		return "claude-sonnet-4-20250514"
 	default:
 		if model := os.Getenv("OPENAI_MODEL"); model != "" {
 			return model

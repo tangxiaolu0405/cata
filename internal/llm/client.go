@@ -82,14 +82,16 @@ func compactMessageContentForAPI(msgs []Message) []Message {
 
 // Client LLM 客户端
 type Client struct {
-	apiKey     string
-	apiURL     string
-	model      string
-	maxTokens  int
+	apiKey       string
+	apiURL       string
+	model        string
+	providerLabel string // 展示标签，不参与协议选择
+	apiFormat    string
+	maxTokens    int
 	timeout            time.Duration
 	httpClient         *http.Client
 	streamHTTPClient   *http.Client
-	provider           Provider
+	adapter            APIAdapter
 }
 
 func streamRoundTimeout(base time.Duration) time.Duration {
@@ -225,103 +227,77 @@ func NewClientForRole(role Role) (*Client, error) {
 	if config.Config != nil && config.Config.LLM.Enabled {
 		llmCfg := config.Config.LLM
 		model := resolveModelForRole(llmCfg, role)
-		return NewClientFromConfig(
-			llmCfg.Provider,
-			llmCfg.APIKey,
-			llmCfg.APIURL,
-			model,
-			llmCfg.MaxTokens,
-			time.Duration(llmCfg.Timeout)*time.Second,
-		)
+		return NewClientFromLLMConfig(llmCfg, model)
 	}
 
 	// 配置未启用或未加载，沿用现有环境变量与默认逻辑
 	return NewClient()
 }
 
-// NewClient 创建新的 LLM 客户端（从环境变量或配置读取）
-func NewClient() (*Client, error) {
-	return NewClientFromConfig("", "", "", "", 0, 0)
+// NewClientFromLLMConfig 从 LLMConfig 片段创建客户端（api_format 决定协议，provider 仅标签）。
+func NewClientFromLLMConfig(llmCfg config.LLMConfig, model string) (*Client, error) {
+	return NewClientFromConfig(
+		llmCfg.Provider,
+		llmCfg.APIFormat,
+		llmCfg.APIKey,
+		llmCfg.APIURL,
+		model,
+		llmCfg.MaxTokens,
+		time.Duration(llmCfg.Timeout)*time.Second,
+	)
 }
 
-// NewClientFromConfig 从配置创建客户端
-func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, timeout time.Duration) (*Client, error) {
-	// 如果 provider 为空，根据环境变量自动检测
-	if provider == "" {
-		provider = os.Getenv("LLM_PROVIDER")
-		if provider == "" {
-			// 根据可用的 API Key 自动检测提供商
-			if os.Getenv("DEEPSEEK_API_KEY") != "" {
-				provider = "deepseek"
-			} else if os.Getenv("DASHSCOPE_API_KEY") != "" {
-				provider = "qwen"
-			} else if os.Getenv("ANTHROPIC_API_KEY") != "" {
-				provider = "claude"
-			} else if os.Getenv("OPENAI_API_KEY") != "" {
-				provider = "openai"
-			} else {
-				provider = "openai" // 默认提供商
-			}
+// NewClient 创建新的 LLM 客户端（从环境变量或配置读取）
+func NewClient() (*Client, error) {
+	return NewClientFromConfig("", "", "", "", "", 0, 0)
+}
+
+// NewClientFromConfig 从配置创建客户端。providerLabel 仅作展示；apiFormat 为 openai|anthropic。
+func NewClientFromConfig(providerLabel, apiFormat, apiKey, apiURL, model string, maxTokens int, timeout time.Duration) (*Client, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv("LLM_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("DEEPSEEK_API_KEY")
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("DASHSCOPE_API_KEY")
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM API key not set (set LLM_API_KEY or configure llm.api_key)")
 		}
 	}
 
-	// 如果 apiKey 为空，根据 provider 从环境变量读取
-	if apiKey == "" {
-		switch provider {
-		case "deepseek":
-			apiKey = os.Getenv("DEEPSEEK_API_KEY")
-		case "qwen", "tongyi", "dashscope":
-			apiKey = os.Getenv("DASHSCOPE_API_KEY")
-		case "claude", "anthropic":
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
-		case "openai", "":
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		}
-		
-		if apiKey == "" {
-			return nil, fmt.Errorf("LLM API key not set (set %s_API_KEY or configure in config file)", strings.ToUpper(provider))
-		}
+	if providerLabel == "" {
+		providerLabel = os.Getenv("LLM_PROVIDER")
 	}
 
 	if apiURL == "" {
-		// 优先使用通用环境变量
 		apiURL = os.Getenv("LLM_API_URL")
 		if apiURL == "" {
-			// 根据 provider 设置默认 URL
-			switch provider {
-			case "deepseek":
-				apiURL = "https://api.deepseek.com/chat/completions"
-			case "qwen", "tongyi", "dashscope":
-				apiURL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-			case "claude", "anthropic":
-				apiURL = "https://api.anthropic.com/v1/messages"
-			default:
-				apiURL = os.Getenv("OPENAI_API_URL")
-				if apiURL == "" {
-					apiURL = DefaultOpenAIAPIURL
-				}
-			}
+			apiURL = os.Getenv("OPENAI_API_URL")
 		}
 	}
 
+	apiFormat = ResolveAPIFormat(apiFormat, apiURL, providerLabel)
+
+	if apiURL == "" {
+		apiURL = defaultAPIURLForFormat(apiFormat)
+	}
+	apiURL = normalizeAPIURL(apiFormat, apiURL)
+
 	if model == "" {
-		// 优先使用通用环境变量
 		model = os.Getenv("LLM_MODEL")
 		if model == "" {
-			// 根据 provider 设置默认模型
-			switch provider {
-			case "deepseek":
-				model = "deepseek-v4-flash"
-			case "qwen", "tongyi", "dashscope":
-				model = "qwen-turbo"
-			case "claude", "anthropic":
-				model = "claude-3-sonnet-20240229"
-			default:
-				model = os.Getenv("OPENAI_MODEL")
-				if model == "" {
-					model = DefaultModel
-				}
-			}
+			model = os.Getenv("OPENAI_MODEL")
+		}
+		if model == "" {
+			model = defaultModelForFormat(apiFormat)
 		}
 	}
 
@@ -334,33 +310,72 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 
 	httpClient, streamClient := newHTTPClientPair(timeout)
 
-	log.Printf("Creating LLM Client: Provider=%s, URL=%s, Model=%s, APIKey present=%v, timeout=%s stream_timeout=%s",
-		provider, apiURL, model, apiKey != "", timeout, streamRoundTimeout(timeout))
+	log.Printf("Creating LLM Client: label=%s format=%s URL=%s Model=%s APIKey present=%v timeout=%s stream_timeout=%s",
+		providerLabel, apiFormat, apiURL, model, apiKey != "", timeout, streamRoundTimeout(timeout))
 
 	return &Client{
 		apiKey:           apiKey,
 		apiURL:           apiURL,
 		model:            model,
+		providerLabel:    providerLabel,
+		apiFormat:        apiFormat,
 		maxTokens:        maxTokens,
 		timeout:          timeout,
-		provider:         GetProvider(provider),
+		adapter:          GetAPIAdapter(apiFormat),
 		httpClient:       httpClient,
 		streamHTTPClient: streamClient,
 	}, nil
 }
 
-// NewClientWithConfig 使用自定义配置创建客户端
-func NewClientWithConfig(apiKey, apiURL, model string, maxTokens int, timeout time.Duration) *Client {
-	return NewClientWithProvider(apiKey, apiURL, model, "openai", maxTokens, timeout)
+func defaultAPIURLForFormat(apiFormat string) string {
+	switch ResolveAPIFormat(apiFormat, "", "") {
+	case APIFormatAnthropic:
+		return DefaultAnthropicURL
+	default:
+		return DefaultOpenAIAPIURL
+	}
 }
 
-// NewClientWithProvider 使用提供商创建客户端
-func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int, timeout time.Duration) *Client {
+func defaultModelForFormat(apiFormat string) string {
+	switch ResolveAPIFormat(apiFormat, "", "") {
+	case APIFormatAnthropic:
+		return "claude-sonnet-4-20250514"
+	default:
+		return DefaultModel
+	}
+}
+
+func normalizeAPIURL(apiFormat, apiURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	switch ResolveAPIFormat(apiFormat, apiURL, "") {
+	case APIFormatOpenAI:
+		switch u {
+		case "https://api.deepseek.com", "https://api.openai.com", "https://api.openai.com/v1", "https://api.xiaomimimo.com/v1":
+			return u + "/chat/completions"
+		}
+	case APIFormatAnthropic:
+		switch u {
+		case "https://api.anthropic.com", "https://api.anthropic.com/v1":
+			return u + "/messages"
+		case "https://api.xiaomimimo.com", "https://api.xiaomimimo.com/anthropic":
+			return strings.TrimSuffix(u, "/anthropic") + "/anthropic/v1/messages"
+		}
+	}
+	return apiURL
+}
+
+// NewClientWithConfig 使用自定义配置创建客户端
+func NewClientWithConfig(apiKey, apiURL, model string, maxTokens int, timeout time.Duration) *Client {
+	return NewClientWithAPIFormat(apiKey, apiURL, model, APIFormatOpenAI, maxTokens, timeout)
+}
+
+// NewClientWithAPIFormat 指定 api_format 创建客户端（测试用）。
+func NewClientWithAPIFormat(apiKey, apiURL, model, apiFormat string, maxTokens int, timeout time.Duration) *Client {
 	if apiURL == "" {
-		apiURL = DefaultOpenAIAPIURL
+		apiURL = defaultAPIURLForFormat(apiFormat)
 	}
 	if model == "" {
-		model = DefaultModel
+		model = defaultModelForFormat(apiFormat)
 	}
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
@@ -370,16 +385,24 @@ func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int
 	}
 
 	httpClient, streamClient := newHTTPClientPair(timeout)
+	format := ResolveAPIFormat(apiFormat, apiURL, "")
 	return &Client{
 		apiKey:           apiKey,
-		apiURL:           apiURL,
+		apiURL:           normalizeAPIURL(format, apiURL),
 		model:            model,
+		apiFormat:        format,
 		maxTokens:        maxTokens,
 		timeout:          timeout,
-		provider:         GetProvider(provider),
+		adapter:          GetAPIAdapter(format),
 		httpClient:       httpClient,
 		streamHTTPClient: streamClient,
 	}
+}
+
+// NewClientWithProvider 兼容旧名；provider 参数现作 api_format 或标签，默认 openai。
+func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int, timeout time.Duration) *Client {
+	format := ResolveAPIFormat("", apiURL, provider)
+	return NewClientWithAPIFormat(apiKey, apiURL, model, format, maxTokens, timeout)
 }
 
 // Message 消息结构（兼容 OpenAI Chat：含 tool_calls / tool 角色）
@@ -696,10 +719,10 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
 	req.Messages = msgs
-	log.Printf("LLM Request: URL=%s, Model=%s, Provider=%T, stream=%v, APIKey present=%v",
-		c.apiURL, c.model, c.provider, stream, c.apiKey != "")
+	log.Printf("LLM Request: URL=%s, Model=%s, format=%s label=%s adapter=%T, stream=%v, APIKey present=%v",
+		c.apiURL, c.model, c.apiFormat, c.providerLabel, c.adapter, stream, c.apiKey != "")
 
-	httpReq, err := c.provider.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream, req.DisableThinking)
+	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream, req.DisableThinking)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +745,7 @@ func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppe
 	// 调试：检查 header 是否设置（仅在开发时启用）
 	if os.Getenv("DEBUG_LLM") == "true" {
 		log.Printf("DEBUG: API URL: %s", c.apiURL)
-		log.Printf("DEBUG: Provider: %T", c.provider)
+		log.Printf("DEBUG: Provider adapter: %T format=%s", c.adapter, c.apiFormat)
 		log.Printf("DEBUG: API Key length: %d", len(c.apiKey))
 		authHeader := httpReq.Header.Get("Authorization")
 		if len(authHeader) > 20 {
@@ -787,7 +810,7 @@ func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppe
 	}
 
 	// 使用 provider 解析响应（得到文本与 tools 调用）
-	content, toolCalls, err := c.provider.ParseResponse(body)
+	content, toolCalls, err := c.adapter.ParseResponse(body)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -918,9 +941,25 @@ func llmLogKind(req ChatRequest) string {
 
 // IsAvailable 检查 LLM 客户端是否可用（检查 API key）
 func IsAvailable() bool {
-	// 检查任何可用的 API Key
-	return os.Getenv("OPENAI_API_KEY") != "" ||
+	return os.Getenv("LLM_API_KEY") != "" ||
+		os.Getenv("OPENAI_API_KEY") != "" ||
 		os.Getenv("DASHSCOPE_API_KEY") != "" ||
 		os.Getenv("ANTHROPIC_API_KEY") != "" ||
-		os.Getenv("LLM_API_KEY") != ""
+		os.Getenv("DEEPSEEK_API_KEY") != ""
+}
+
+// APIFormatLabel 当前客户端协议格式。
+func (c *Client) APIFormatLabel() string {
+	if c == nil {
+		return ""
+	}
+	return c.apiFormat
+}
+
+// ProviderLabel 展示用 provider 标签。
+func (c *Client) ProviderLabel() string {
+	if c == nil {
+		return ""
+	}
+	return c.providerLabel
 }

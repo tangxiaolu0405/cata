@@ -307,7 +307,7 @@ func (m *model) statusDump() string {
 	}
 	b.WriteString(fmt.Sprintf("round %d turns %d tools %d\n", m.stats.round, m.stats.turns, m.stats.tools))
 	if cfg := config.Config; cfg != nil {
-		b.WriteString(cfg.LLM.Provider + " / " + cfg.LLM.Model + "\n")
+		b.WriteString(cfg.LLM.Provider + " / " + cfg.LLM.APIFormat + " / " + cfg.LLM.Model + "\n")
 		if byRole := llm.ModelsByRole(); len(byRole) > 0 {
 			b.WriteString("models: ")
 			var parts []string

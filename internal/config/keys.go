@@ -67,6 +67,7 @@ var configFields = map[string]fieldSpec{
 	"brain.dir":                      {get: strGet(func(c *AppConfig) string { return c.Brain.Dir }), set: strSet(func(c *AppConfig, v string) { c.Brain.Dir = v })},
 	"brain.base_dir":                 {get: strGet(func(c *AppConfig) string { return c.Brain.BaseDir }), set: strSet(func(c *AppConfig, v string) { c.Brain.BaseDir = v })},
 	"llm.provider":                   {get: strGet(func(c *AppConfig) string { return c.LLM.Provider }), set: strSet(func(c *AppConfig, v string) { c.LLM.Provider = v })},
+	"llm.api_format":                 {get: strGet(func(c *AppConfig) string { return c.LLM.APIFormat }), set: strSet(func(c *AppConfig, v string) { c.LLM.APIFormat = v })},
 	"llm.api_key":                    {get: apiKeyGet, set: apiKeySet},
 	"llm.api_url":                    {get: strGet(func(c *AppConfig) string { return c.LLM.APIURL }), set: strSet(func(c *AppConfig, v string) { c.LLM.APIURL = v })},
 	"llm.model":                      {get: strGet(func(c *AppConfig) string { return c.LLM.Model }), set: strSet(func(c *AppConfig, v string) { c.LLM.Model = v })},
