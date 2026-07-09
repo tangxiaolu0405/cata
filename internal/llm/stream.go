@@ -266,7 +266,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		if len(msg) > 800 {
 			msg = msg[:800] + "..."
 		}
-		return "", "", nil, "", usage, fmt.Errorf("stream API status %d: %s", resp.StatusCode, msg)
+		return "", "", nil, "", usage, fmt.Errorf("stream API status %d (url=%s): %s", resp.StatusCode, c.apiURL, msg)
 	}
 
 	ct := resp.Header.Get("Content-Type")

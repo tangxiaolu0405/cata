@@ -8,11 +8,9 @@ func TestNormalizeAPIFormat(t *testing.T) {
 	}{
 		{"openai", "", "", "openai"},
 		{"anthropic", "", "", "anthropic"},
-		{"", "https://api.anthropic.com/v1/messages", "", "anthropic"},
-		{"", "https://api.xiaomimimo.com/anthropic/v1/messages", "mimo", "anthropic"},
-		{"", "https://api.deepseek.com/chat/completions", "deepseek", "openai"},
+		{"", "https://api.anthropic.com/v1/messages", "", "openai"},
 		{"", "", "claude", "anthropic"},
-		{"", "https://api.xiaomimimo.com/v1/chat/completions", "mimo", "openai"},
+		{"anthropic", "https://api.xiaomimimo.com/v1/chat/completions", "mimo", "anthropic"},
 	}
 	for _, tc := range tests {
 		got := NormalizeAPIFormat(tc.format, tc.url, tc.label)
@@ -22,23 +20,19 @@ func TestNormalizeAPIFormat(t *testing.T) {
 	}
 }
 
-func TestNormalizeLLMConfigBaseURL(t *testing.T) {
+func TestNormalizeLLMConfigAppendPath(t *testing.T) {
 	llm := &LLMConfig{
-		Provider: "mimo",
-		APIURL:   "https://api.xiaomimimo.com/v1",
+		APIFormat: "openai",
+		APIURL:    "https://api.xiaomimimo.com/v1",
 	}
 	normalizeLLMConfig(llm)
-	if llm.APIFormat != "openai" {
-		t.Fatalf("api_format=%q", llm.APIFormat)
-	}
 	if llm.APIURL != "https://api.xiaomimimo.com/v1/chat/completions" {
-		t.Fatalf("api_url=%q", llm.APIURL)
+		t.Fatalf("openai api_url=%q", llm.APIURL)
 	}
 
 	llm2 := &LLMConfig{
-		Provider:  "mimo",
 		APIFormat: "anthropic",
-		APIURL:    "https://api.xiaomimimo.com",
+		APIURL:    "https://api.xiaomimimo.com/anthropic",
 	}
 	normalizeLLMConfig(llm2)
 	if llm2.APIURL != "https://api.xiaomimimo.com/anthropic/v1/messages" {

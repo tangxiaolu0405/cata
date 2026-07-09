@@ -289,7 +289,7 @@ func NewClientFromConfig(providerLabel, apiFormat, apiKey, apiURL, model string,
 	if apiURL == "" {
 		apiURL = defaultAPIURLForFormat(apiFormat)
 	}
-	apiURL = normalizeAPIURL(apiFormat, apiURL)
+	apiURL = NormalizeAPIURL(apiFormat, apiURL)
 
 	if model == "" {
 		model = os.Getenv("LLM_MODEL")
@@ -345,25 +345,6 @@ func defaultModelForFormat(apiFormat string) string {
 	}
 }
 
-func normalizeAPIURL(apiFormat, apiURL string) string {
-	u := strings.TrimRight(strings.TrimSpace(apiURL), "/")
-	switch ResolveAPIFormat(apiFormat, apiURL, "") {
-	case APIFormatOpenAI:
-		switch u {
-		case "https://api.deepseek.com", "https://api.openai.com", "https://api.openai.com/v1", "https://api.xiaomimimo.com/v1":
-			return u + "/chat/completions"
-		}
-	case APIFormatAnthropic:
-		switch u {
-		case "https://api.anthropic.com", "https://api.anthropic.com/v1":
-			return u + "/messages"
-		case "https://api.xiaomimimo.com", "https://api.xiaomimimo.com/anthropic":
-			return strings.TrimSuffix(u, "/anthropic") + "/anthropic/v1/messages"
-		}
-	}
-	return apiURL
-}
-
 // NewClientWithConfig 使用自定义配置创建客户端
 func NewClientWithConfig(apiKey, apiURL, model string, maxTokens int, timeout time.Duration) *Client {
 	return NewClientWithAPIFormat(apiKey, apiURL, model, APIFormatOpenAI, maxTokens, timeout)
@@ -388,7 +369,7 @@ func NewClientWithAPIFormat(apiKey, apiURL, model, apiFormat string, maxTokens i
 	format := ResolveAPIFormat(apiFormat, apiURL, "")
 	return &Client{
 		apiKey:           apiKey,
-		apiURL:           normalizeAPIURL(format, apiURL),
+		apiURL:           NormalizeAPIURL(format, apiURL),
 		model:            model,
 		apiFormat:        format,
 		maxTokens:        maxTokens,

@@ -801,15 +801,11 @@ func getDefaultModel() string {
 	return getDefaultModelForFormat(NormalizeAPIFormat("", "", getDefaultProviderLabel()))
 }
 
-// NormalizeAPIFormat 解析 llm.api_format；空时从 api_url / provider 标签推断（向后兼容）。
-func NormalizeAPIFormat(apiFormat, apiURL, providerLabel string) string {
+// NormalizeAPIFormat 解析 llm.api_format；未配置时默认 openai（provider 标签 claude/anthropic 可推断）。
+func NormalizeAPIFormat(apiFormat, _, providerLabel string) string {
 	switch strings.ToLower(strings.TrimSpace(apiFormat)) {
 	case "openai", "anthropic":
 		return strings.ToLower(strings.TrimSpace(apiFormat))
-	}
-	u := strings.ToLower(strings.TrimSpace(apiURL))
-	if strings.Contains(u, "anthropic") || strings.Contains(u, "/v1/messages") {
-		return "anthropic"
 	}
 	p := strings.ToLower(strings.TrimSpace(providerLabel))
 	if p == "claude" || p == "anthropic" {
@@ -818,30 +814,33 @@ func NormalizeAPIFormat(apiFormat, apiURL, providerLabel string) string {
 	return "openai"
 }
 
-// normalizeLLMConfig 规范化 api_format 与常见 base URL。
+// normalizeLLMConfig 规范化 api_format，并按格式拼接默认 API 路径。
 func normalizeLLMConfig(llm *LLMConfig) {
 	if llm == nil {
 		return
 	}
 	llm.APIFormat = NormalizeAPIFormat(llm.APIFormat, llm.APIURL, llm.Provider)
-	u := strings.TrimRight(strings.TrimSpace(llm.APIURL), "/")
-	switch llm.APIFormat {
-	case "openai":
-		switch u {
-		case "https://api.deepseek.com":
-			llm.APIURL = u + "/chat/completions"
-		case "https://api.xiaomimimo.com/v1":
-			llm.APIURL = u + "/chat/completions"
-		case "https://api.openai.com", "https://api.openai.com/v1":
-			llm.APIURL = u + "/chat/completions"
-		}
+	if u := strings.TrimSpace(llm.APIURL); u != "" {
+		llm.APIURL = appendAPIFormatPath(llm.APIFormat, u)
+	}
+}
+
+func appendAPIFormatPath(apiFormat, apiURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	if u == "" {
+		return apiURL
+	}
+	switch NormalizeAPIFormat(apiFormat, apiURL, "") {
 	case "anthropic":
-		switch u {
-		case "https://api.anthropic.com", "https://api.anthropic.com/v1":
-			llm.APIURL = u + "/messages"
-		case "https://api.xiaomimimo.com", "https://api.xiaomimimo.com/anthropic":
-			llm.APIURL = strings.TrimSuffix(u, "/anthropic") + "/anthropic/v1/messages"
+		if strings.Contains(u, "/v1/messages") {
+			return u
 		}
+		return u + "/v1/messages"
+	default:
+		if strings.Contains(u, "/chat/completions") {
+			return u
+		}
+		return u + "/chat/completions"
 	}
 }
 
