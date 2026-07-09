@@ -4,7 +4,7 @@
 
 输出单个 JSON：action, reason, learning, updates[]
 - action 应为 crystallize_skill（无合适固化则 idle）
-- path 相对 **本 workspace** 根，仅允许 skills/<skill-id>/…（禁止 global/*）
+- path 为逻辑相对路径 `skills/<skill-id>/…`，写入 **项目** `focus_path/.cata/`（禁止 global/*）
 - skill-id 用小写英文与连字符，如 zhangtingban-lianban
 - **禁止** patch modes/*/capabilities.yaml（服务端会自动 append skills 列表）
 - **禁止** 写入 mcp: [] 或删除 browser；未覆盖站点仍依赖 browser 基础能力

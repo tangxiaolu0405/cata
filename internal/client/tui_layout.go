@@ -1,6 +1,12 @@
 package client
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
 
 type hoverPane int
 
@@ -31,7 +37,7 @@ func (m *model) paneLayout() paneLayout {
 		side = 0
 	}
 	inputH := m.inputLineCount() + inputLinesBorder + m.slashMenuLines()
-	chatH := m.vp.Height + inputLinesBorder
+	chatH := m.vp.Height + 2 // 主区圆角边框上下各 1 行
 	leftBodyH := chatH + inputH
 	return paneLayout{
 		mainW:     mainW,
@@ -89,6 +95,54 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	// Wheel over input/footer: do not scroll chat or sidebar.
 	return m, nil, true
+}
+
+// wrapChatLog 按视口宽度硬折行，使 viewport 行数与终端可见行一致（避免滚到底仍被 lipgloss 二次折行截断）。
+func wrapChatLog(width int, text string) string {
+	if text == "" {
+		return text
+	}
+	if width < 1 {
+		width = 1
+	}
+	rendered := lipgloss.NewStyle().Width(width).Render(text)
+	lines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// viewColumnHeight 在给定聊天区内高（不含边框）下，测算左列（聊天+输入+页脚）实际渲染行数。
+func (m *model) viewColumnHeight(mainH int) int {
+	saved := m.vp.Height
+	m.vp.Height = mainH
+	main := styleBorder.Width(m.vp.Width + 2).Render(m.vp.View())
+	col := lipgloss.JoinVertical(lipgloss.Top, main, m.renderInputPane())
+	total := lipgloss.JoinVertical(lipgloss.Left, col, m.footerView())
+	h := lipgloss.Height(total)
+	m.vp.Height = saved
+	return h
+}
+
+// setChatContent 将原始 log 折行后写入 viewport，并尽量保持滚动位置。
+func (m *model) setChatContent(scrollToBottom bool) {
+	w := m.vp.Width
+	if w < 1 {
+		w = 80
+	}
+	atBottom := scrollToBottom || m.vp.AtBottom()
+	pct := m.vp.ScrollPercent()
+	m.vp.SetContent(wrapChatLog(w, m.log))
+	if atBottom {
+		m.vp.GotoBottom()
+		return
+	}
+	maxOff := m.vp.TotalLineCount() - m.vp.Height
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	m.vp.SetYOffset(int(pct * float64(maxOff)))
 }
 
 func chatScrollKey(msg tea.KeyMsg) bool {

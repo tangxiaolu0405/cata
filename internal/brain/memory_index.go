@@ -210,7 +210,7 @@ func MemoryIndexPromptBlock(maxBytes int) string {
 	}
 	var b strings.Builder
 	b.WriteString("【Cata 记忆索引】\n\n")
-	b.WriteString("> 条目为脑子内文档摘要；需要全文时用 read_file 读 source 路径（相对 workspace 根，在 ~/.cata/brain/workspaces/<id>/）。\n\n")
+	b.WriteString("> 条目为脑子内文档摘要；`read_file` 用 source 路径（如 `brain/persona.local.md` 或 `brain/memory/long/…`）；磁盘位置见【Cata 路径】块 resolved 映射。\n\n")
 	used := 0
 	count := 0
 	for _, e := range idx.entriesByPriority() {

@@ -12,13 +12,16 @@ type brainDocFillCheck struct {
 	path    string
 }
 
-// brainDocFillChecks 仅 workspace 格子内文档；global/* 为全机共享，不由 per-workspace evolve 填充。
+// brainDocFillChecks 项目 .cata 内 active mode 主要内容；global/* 引导不由 per-workspace evolve 填充。
 func brainDocFillChecks(w *brain.Workspace) []brainDocFillCheck {
-	modeDir := filepath.Dir(w.PersonaPath())
+	mode := brain.NormalizeModeID(w.ActiveMode)
+	modeDir := w.ModeDir(mode)
+	modeRel := "modes/" + mode + "/"
 	return []brainDocFillCheck{
+		{modeRel + "persona.md", "fill:mode_persona", filepath.Join(modeDir, brain.FilePersona)},
 		{"persona.local.md", "fill:persona.local", w.PersonaLocalPath()},
-		{"modes/.../behavior.md", "fill:mode_behavior", filepath.Join(modeDir, brain.FileBehavior)},
-		{"modes/.../constraints.md", "fill:mode_constraints", filepath.Join(modeDir, brain.FileConstraints)},
+		{modeRel + "behavior.md", "fill:mode_behavior", filepath.Join(modeDir, brain.FileBehavior)},
+		{modeRel + "constraints.md", "fill:mode_constraints", filepath.Join(modeDir, brain.FileConstraints)},
 	}
 }
 

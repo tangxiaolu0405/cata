@@ -33,6 +33,7 @@ type AppConfig struct {
 	Evolution      EvolutionConfig      `json:"evolution"`
 	Exec           ExecToolConfig       `json:"exec"`
 	WorkspaceFiles WorkspaceFilesConfig `json:"workspace_files"`
+	Subagent       SubagentConfig       `json:"subagent"`
 	MCP            MCPConfig            `json:"mcp"`
 }
 
@@ -126,6 +127,47 @@ func (c *AppConfig) WorkspaceFilesEnabled() bool {
 	return *c.WorkspaceFiles.Enabled
 }
 
+// SubagentConfig delegate_task worker：并行上限与低成本执行参数。
+type SubagentConfig struct {
+	MaxConcurrent      int      `json:"max_concurrent,omitempty"`
+	DefaultMaxRounds   int      `json:"default_max_rounds,omitempty"`
+	MaxToolResultBytes int      `json:"max_tool_result_bytes,omitempty"`
+	MaxOutputTokens    int      `json:"max_output_tokens,omitempty"`
+	DefaultTools       []string `json:"default_tools,omitempty"`
+}
+
+// MaxSubagentConcurrent 同时运行的子 Agent 数（默认 4）。
+func MaxSubagentConcurrent() int {
+	if Config != nil && Config.Subagent.MaxConcurrent > 0 {
+		return Config.Subagent.MaxConcurrent
+	}
+	return 4
+}
+
+// DefaultSubagentMaxRounds delegate_task 默认工具轮次上限（默认 6）。
+func DefaultSubagentMaxRounds() int {
+	if Config != nil && Config.Subagent.DefaultMaxRounds > 0 {
+		return Config.Subagent.DefaultMaxRounds
+	}
+	return 6
+}
+
+// SubagentMaxOutputTokens worker 单次 completion 上限（0 = 用 LLM 客户端默认）。
+func SubagentMaxOutputTokens() int {
+	if Config != nil && Config.Subagent.MaxOutputTokens > 0 {
+		return Config.Subagent.MaxOutputTokens
+	}
+	return 0
+}
+
+// DefaultSubagentTools 未在 delegate_task 指定 tools 时的默认白名单；nil/空=不限制（全套 worker 工具）。
+func DefaultSubagentTools() []string {
+	if Config == nil || len(Config.Subagent.DefaultTools) == 0 {
+		return nil
+	}
+	return Config.Subagent.DefaultTools
+}
+
 // LoadConfig 加载配置文件。
 func LoadConfig() (*AppConfig, error) {
 	configPath := getConfigPath()
@@ -204,7 +246,7 @@ func getDefaultConfig() *AppConfig {
 			APIKey:    getDefaultAPIKey(),
 			APIURL:    getDefaultAPIURL(),
 			Model:     getDefaultModel(),
-			MaxTokens: 2000,
+			MaxTokens: 8192,
 			Timeout:   600,
 			Enabled:   getDefaultAPIKey() != "",
 		},
@@ -239,6 +281,11 @@ func getDefaultConfig() *AppConfig {
 			Enabled:       &wfOn,
 			MaxReadBytes:  512 * 1024,
 			MaxWriteBytes: 512 * 1024,
+		},
+		Subagent: SubagentConfig{
+			MaxConcurrent:      4,
+			DefaultMaxRounds:   6,
+			MaxToolResultBytes: 8192,
 		},
 		MCP: MCPConfig{
 			Enabled: true,
@@ -365,12 +412,14 @@ func validateAndSetDefaults(config *AppConfig) error {
 		config.LLM.Model = getDefaultModelForProvider(config.LLM.Provider)
 	}
 	normalizeLLMConfig(&config.LLM)
+	ensureLLMModelRoles(&config.LLM)
 	if config.LLM.APIKey != "" {
 		config.LLM.Enabled = true
 	}
 
 	normalizeExecConfig(&config.Exec)
 	normalizeWorkspaceFiles(&config.WorkspaceFiles)
+	normalizeSubagentConfig(&config.Subagent)
 	normalizeMCPConfig(&config.MCP)
 
 	if config.LLM.Enabled && !config.Exec.Enabled {
@@ -469,6 +518,21 @@ func normalizeWorkspaceFiles(w *WorkspaceFilesConfig) {
 	}
 	if w.MaxWriteBytes <= 0 {
 		w.MaxWriteBytes = 512 * 1024
+	}
+}
+
+func normalizeSubagentConfig(s *SubagentConfig) {
+	if s == nil {
+		return
+	}
+	if s.MaxConcurrent <= 0 {
+		s.MaxConcurrent = 4
+	}
+	if s.DefaultMaxRounds <= 0 {
+		s.DefaultMaxRounds = 6
+	}
+	if s.MaxToolResultBytes <= 0 {
+		s.MaxToolResultBytes = 8192
 	}
 }
 
@@ -729,6 +793,16 @@ func normalizeLLMConfig(llm *LLMConfig) {
 		if u == "https://api.deepseek.com" {
 			llm.APIURL = u + "/chat/completions"
 		}
+	}
+}
+
+// ensureLLMModelRoles 保证 Models map 存在；不强制拆分模型（单模型时各 role 回退 llm.model）。
+func ensureLLMModelRoles(llm *LLMConfig) {
+	if llm == nil {
+		return
+	}
+	if llm.Models == nil {
+		llm.Models = make(map[string]string)
 	}
 }
 

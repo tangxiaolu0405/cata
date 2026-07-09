@@ -28,22 +28,22 @@ func EvolvePathCatalog() []EvolvePathRole {
 		{
 			Rel: "modes/<mode>/persona.md", WrittenBy: "evolve",
 			EvolveObserve: true, EvolveInput: true, EvolvePatch: true, ContextInject: true,
-			Notes: "身份结晶；全 patch 模式",
+			Notes: "身份结晶；路径 focus_path/.cata/modes/<mode>/persona.md",
 		},
 		{
 			Rel: "persona.local.md", WrittenBy: "evolve",
 			EvolveObserve: false, EvolveInput: true, EvolvePatch: true, ContextInject: true,
-			Notes: "focus_path 项目说明",
+			Notes: "focus_path/.cata/persona.local.md",
 		},
 		{
 			Rel: "modes/<mode>/behavior.md", WrittenBy: "evolve",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: true, ContextInject: true,
-			Notes: "mode SOP 覆盖",
+			Notes: "项目主要内容 SOP；focus_path/.cata/modes/<mode>/behavior.md",
 		},
 		{
 			Rel: "modes/<mode>/constraints.md", WrittenBy: "evolve",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: true, ContextInject: true,
-			Notes: "mode 级约束补充",
+			Notes: "项目主要内容约束；focus_path/.cata/modes/<mode>/constraints.md",
 		},
 		{
 			Rel: "modes/<mode>/capabilities.yaml", WrittenBy: "init + evolve（skill 名）",
@@ -68,7 +68,7 @@ func EvolvePathCatalog() []EvolvePathRole {
 		{
 			Rel: "skills/<id>/SKILL.md|manifest.yaml|script.*", WrittenBy: "evolve（crystallize）",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: true, ContextInject: true,
-			Notes: "SKILL.md 经 SkillsPromptBlock 注入；脚本在产出区执行",
+			Notes: "SKILL.md 经 SkillsIndexBlockCached 注入索引；全文 read_skill、执行 run_skill",
 		},
 		{
 			Rel: "meta.json", WrittenBy: "server + evolve",
@@ -83,7 +83,7 @@ func EvolvePathCatalog() []EvolvePathRole {
 		{
 			Rel: "global/*", WrittenBy: "init + 用户",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: false, ContextInject: true,
-			Notes: "全机共享；per-workspace evolve 禁止 patch；chat 可用 global/… 读写",
+			Notes: "引导型提示词（~/.cata/global）；per-workspace evolve 禁止 patch",
 		},
 	}
 }
@@ -132,5 +132,6 @@ func ResolveEvolveUpdateAbs(w *Workspace, rel string) (abs, storeRel string, err
 		abs, err := PathUnderBase(globalDir(), sub)
 		return abs, rel, err
 	}
-	return w.Path(rel), rel, nil
+	abs, err = ResolveBrainDocAbs(w, rel)
+	return abs, rel, err
 }

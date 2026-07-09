@@ -31,9 +31,18 @@ func ResolveChatFilePath(rel string) (abs string, err error) {
 		sub := strings.TrimPrefix(rel, "brain/")
 		sub = strings.TrimPrefix(sub, "./")
 		if sub == "" || sub == "." {
-			return filepath.Abs(w.Dir())
+			return filepath.Abs(w.ProjectCataRoot())
 		}
-		return PathUnderBase(w.Dir(), filepath.FromSlash(sub))
+		if sub == "memory" || strings.HasPrefix(sub, "memory/") {
+			if sub == "memory" {
+				return filepath.Abs(filepath.Join(w.Dir(), "memory"))
+			}
+			return PathUnderBase(w.Dir(), filepath.FromSlash(sub))
+		}
+		if sub == RelMetaJSON || sub == RelEvolutionLog {
+			return PathUnderBase(w.Dir(), filepath.FromSlash(sub))
+		}
+		return PathUnderBase(w.ProjectCataRoot(), filepath.FromSlash(sub))
 	}
 
 	if rel == "global" || strings.HasPrefix(rel, ChatGlobalPrefix) {

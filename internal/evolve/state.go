@@ -18,6 +18,8 @@ type Snapshot struct {
 	FocusPath             string   `json:"focus_path,omitempty"`
 	WorkspaceName         string   `json:"workspace_name,omitempty"`
 	HotModTime            string   `json:"hot_mod_time,omitempty"`
+	PersonaBytes          int64    `json:"persona_bytes,omitempty"`
+	PersonaLocalBytes     int64    `json:"persona_local_bytes,omitempty"`
 	ShortTermModTime      string   `json:"short_term_mod_time,omitempty"`
 	ShortTermBytes        int64    `json:"short_term_bytes"`
 	LongTermFileCount     int      `json:"long_term_file_count"`
@@ -53,6 +55,10 @@ func Observe(ws *brain.Workspace) (*Snapshot, error) {
 
 	if info, err := os.Stat(ws.PersonaPath()); err == nil {
 		s.HotModTime = clock.FormatTime(info.ModTime(), time.RFC3339)
+		s.PersonaBytes = info.Size()
+	}
+	if info, err := os.Stat(ws.PersonaLocalPath()); err == nil {
+		s.PersonaLocalBytes = info.Size()
 	}
 
 	shortPath := ws.ShortTermPath()

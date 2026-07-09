@@ -22,7 +22,14 @@ var (
 func Init(name string) error {
 	mu.Lock()
 	defer mu.Unlock()
+	ensureLocationLocked(name)
+	return nil
+}
 
+func ensureLocationLocked(name string) {
+	if loc != nil {
+		return
+	}
 	if name == "" {
 		name = os.Getenv(EnvTimezone)
 	}
@@ -35,16 +42,13 @@ func Init(name string) error {
 	}
 	loc = l
 	time.Local = l
-	return nil
 }
 
 // Location 返回当前配置的时区。
 func Location() *time.Location {
 	mu.Lock()
 	defer mu.Unlock()
-	if loc == nil {
-		_ = Init("")
-	}
+	ensureLocationLocked("")
 	return loc
 }
 

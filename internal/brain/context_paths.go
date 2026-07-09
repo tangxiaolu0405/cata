@@ -38,22 +38,37 @@ func TerminalPathsSystemBlock() string {
 	b.WriteString(TerminalPathsSystemPrefix)
 	b.WriteString("\n\n")
 	b.WriteString("## 路径约定（必遵）\n\n")
-	b.WriteString("- **脑子（Brain）**：`")
+	b.WriteString("- **CATA_HOME `")
 	b.WriteString(home)
-	b.WriteString("/`（CATA_HOME）。记忆、persona、short-term、evolution_log 只在脑子目录；**禁止**把用户项目交付物写入脑子。\n")
+	b.WriteString("/`**：引导型提示词（boot-assembler、global/constraints、global/behavior）+ 运行时记忆（short-term、long-term、index）；**禁止**把项目交付物写入此处。\n")
 	b.WriteString("- **产出区（Output）**：当前工作目录。默认相对路径、`run_command`、构建与交付物在此。\n")
-	b.WriteString("- **文件工具路径**：默认=产出区；`brain/…`=当前脑子 workspace 格；`global/…`=全机 global（`")
+	b.WriteString("- **文件工具路径**：默认=产出区；`brain/…`=项目 `.cata` 或 home 记忆（见下）；`global/…`=`")
 	b.WriteString(home)
-	b.WriteString("/global/`）。\n")
-	b.WriteString("- 项目内 `.cata/workspace.yaml` 仅是**门牌**（绑定哪一格脑子），不是脑子正文。\n\n")
+	b.WriteString("/global/`（引导，非 evolve 写入）。\n")
+	b.WriteString("- **项目 `.cata/`**（focus_path 下）：主要内容提示词（persona、modes、skills）；`workspace.yaml` 为门牌。\n\n")
 	b.WriteString("## 当前绑定\n\n")
 	if w := Active(); w != nil {
-		b.WriteString("- 脑子分区目录：`")
+		b.WriteString("- 脑子 home 格：`")
 		b.WriteString(w.Dir())
 		b.WriteString("`\n")
+		b.WriteString("- 项目脑子文档：`")
+		b.WriteString(w.ProjectCataRoot())
+		b.WriteString("`（persona、modes、skills）\n")
 		b.WriteString("- 脑子绑定键 focus_path：`")
 		b.WriteString(w.RootPath)
 		b.WriteString("`（用于选哪一格脑子，≠ 产出区）\n")
+		b.WriteString("\n### brain/ 工具路径解析（本轮）\n\n")
+		b.WriteString("- `brain/persona.local.md` → `")
+		b.WriteString(w.PersonaLocalPath())
+		b.WriteString("`\n")
+		b.WriteString("- `brain/modes/")
+		b.WriteString(w.modeID())
+		b.WriteString("/persona.md` → `")
+		b.WriteString(w.PersonaPath())
+		b.WriteString("`\n")
+		b.WriteString("- `brain/memory/…` → `")
+		b.WriteString(w.Dir())
+		b.WriteString("/memory/…`\n")
 	} else {
 		b.WriteString("- 脑子分区：（未解析）\n")
 	}
@@ -91,10 +106,12 @@ func TerminalPathsSystemBlock() string {
 	b.WriteString("\n")
 	b.WriteString(ServerRegisteredToolsBlock())
 	b.WriteString("\n")
+	b.WriteString(SubagentDelegateGuideBlock())
+	b.WriteString("\n")
 	b.WriteString(env.ToolsAvailabilityBlock())
 	b.WriteString("\n")
 	b.WriteString(env.runCommandHints())
-	b.WriteString("\n改产出区用默认路径；改脑子文档用 `brain/modes/...` 或 `global/constraints.md`；也可读 system 已注入节选。\n")
+	b.WriteString("\n改产出区用默认路径；改**项目内容**用 `brain/modes/...`、`brain/persona.local.md`；改**全机引导**用 `global/constraints.md`（须用户明确同意，evolve 不写）。\n")
 	b.WriteString("改文件优先 **read_file** → **search_replace** / **append_file**；跑命令用 **run_command**。禁止只写代码块或 XML 假装已执行。\n")
 	return b.String()
 }
@@ -118,11 +135,29 @@ func ServerRegisteredToolsBlock() string {
 		b.WriteString("- 产出区文件工具：**未启用**\n")
 	}
 	if cfg.MCP.Enabled {
-		b.WriteString("- **browser_*（MCP Playwright）**：已启用 — 见 capabilities\n")
+		names := MCPToolNames()
+		if len(names) > 0 {
+			b.WriteString("- **MCP 工具**（本轮已导出）：")
+			b.WriteString(strings.Join(names, ", "))
+			b.WriteString("\n")
+		} else {
+			b.WriteString("- **browser MCP**：已启用（工具列表待连接后生成）\n")
+		}
 	} else {
 		b.WriteString("- browser MCP：**未启用**\n")
 	}
-	b.WriteString("- **run_skill / ask_user**：已注册\n")
+	b.WriteString("- **read_skill / run_skill / ask_user / delegate_task / delegate_wait**：已注册")
+	if cfg != nil && cfg.Subagent.MaxConcurrent > 0 {
+		b.WriteString(fmt.Sprintf("（子 Agent 并行上限 %d）", cfg.Subagent.MaxConcurrent))
+	}
+	b.WriteString("\n")
 	return b.String()
+}
+
+func MCPToolNames() []string {
+	if MCPToolNamesProvider == nil {
+		return nil
+	}
+	return MCPToolNamesProvider()
 }
 

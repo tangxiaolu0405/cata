@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// SkillDir 返回 workspace 脑子内某 skill 的目录。
+// SkillDir 返回项目 .cata 内某 skill 的目录。
 func (w *Workspace) SkillDir(skillID string) string {
-	return filepath.Join(w.Dir(), DirSkills, strings.TrimSpace(skillID))
+	return filepath.Join(w.ProjectCataRoot(), DirSkills, strings.TrimSpace(skillID))
 }
 
 // SkillMarkdownPath workspace 脑子内 SKILL.md。
@@ -26,7 +26,7 @@ func ListWorkspaceSkillIDs(w *Workspace) ([]string, error) {
 	if w == nil {
 		return nil, nil
 	}
-	root := filepath.Join(w.Dir(), DirSkills)
+	root := filepath.Join(w.ProjectCataRoot(), DirSkills)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {

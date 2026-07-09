@@ -17,14 +17,19 @@
 
 | 位置 | 角色 |
 |------|------|
-| **`~/.cata/`** | **脑子**：记忆、persona、演进、config、socket |
-| **当前工作目录 cwd** | **产出区**：代码与命令结果；`run_command` 在此 |
-| **项目内 `.cata/`** | 脑子门牌（yaml/link），不是脑子正文 |
-| **仓库 `brain/`** | 脑子模板种子 |
+| **`~/.cata/`** | **CATA_HOME**：引导型提示词（`global/`）、运行时记忆（`brain/workspaces/<id>/memory`）、config、socket、registry |
+| **`focus_path/.cata/`** | **项目主要内容**：`persona.local`、`modes/<mode>/*`、`skills/<id>/*`、`workspace.yaml` |
+| **当前工作目录 cwd** | **产出区**：代码与命令结果；`run_command` 与默认文件工具在此 |
+| **仓库 `brain/`** | 模板种子（`cata init` → `~/.cata/global/`） |
 
-`focus_path`（git 根 / yaml 目录 / cwd）只用于**选中哪一格脑子**，不把产出存进 `~/.cata`。
+`focus_path`（git 根 / `.cata/workspace.yaml` / cwd）决定绑定哪一格脑子（`ws_id`），**不把产出存进 `~/.cata`**。
 
-**脑子正文（persona、persona.local、behavior、constraints、记忆）由 server + 后台 evolve（LLM）维护；用户不编辑 `~/.cata`。`cata init` 仅创建目录与种子模板。**
+**双根写入**：
+- **引导**（`~/.cata/global/`）：constraints、behavior、boot-assembler — 用户或 `cata init` 维护；**evolve 不写**
+- **主要内容**（`focus_path/.cata/`）：persona、modes、skills — **server + 后台 evolve** 维护
+- **运行时记忆**（`~/.cata/brain/workspaces/<id>/`）：short/long/archive、index、evolution_log — server 追加 + evolve 提炼
+
+首次 `ResolveWorkspace` → `EnsureScaffold` 会把旧版 home 格内的 persona/modes/skills **迁移**到项目 `.cata/`。
 
 ---
 
@@ -32,11 +37,11 @@
 
 | 区域 | 作用 |
 |------|------|
-| **`cmd/cata`** | `init`（初始化 ~/.cata/brain）、`config`、`run`（socket + 后台演进） |
+| **`cmd/cata`** | `init`（初始化 ~/.cata）、`config`、`run`（socket + 后台演进） |
 | **`cmd/cata`（`chat`）** | 默认 Bubble Tea TUI；协议：`chat`（`stream:true`）、`chat_reset`、`ping` |
 | **`internal/server`** | Unix socket、终端 chat 工具循环 |
 | **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
-| **`internal/brain`** | 路径常量、`InitDirectory`、终端节选 |
+| **`internal/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
 | **`internal/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
 | **`internal/config`** | `~/.cata/config.json`：LLM（`deepseek` / `qwen` 等 OpenAI 兼容）、exec、`evolution.enabled` / `cycle_interval` |
 
@@ -46,18 +51,20 @@
 
 ## 记忆流（摘要）
 
-| 层 | 写入方 |
-|----|--------|
-| Socket 会话历史 | server（内存，chat_reset 清空） |
-| `memory/short/current.md`（每格脑子） | **每轮 cata chat 成功后 server 规则追加**（`session_memory.go`） |
-| mode `hot.md` 等 | **仅** `internal/evolve` 从 short-term 提炼 |
-| `long-term/`、`archive/` | evolve |
+| 层 | 物理位置 | 写入方 |
+|----|----------|--------|
+| Socket 会话历史 | server 内存 | 每轮对话（`chat_reset` 清空） |
+| `memory/short/current.md` | home 脑子格 | **每轮 cata chat 成功后 server 规则追加**（`session_memory.go`） |
+| `modes/<active_mode>/persona.md` 等 | 项目 `.cata/` | **仅** `internal/evolve` 从 short-term 提炼 |
+| `long-term/`、`archive/` | home 脑子格 | evolve |
 
 详见 **`brain/constraints.md` §记忆分层**。
 
 ## 自主演进（摘要）
 
 - **触发**：short-term 有新内容等门控（见 `internal/evolve`）；默认周期 600s。
+- **patch 路由**：主要内容 → `focus_path/.cata/`（**active_mode**）；记忆/审计 → home 格；**禁止** `global/*`
+- **防膨胀**：按场景选 patch 模式（`replace_section` / `append` / `overwrite`，见 `prompt/evolve/patch_modes.md`）；超 3.5KB 触发 `compact:*`；补丁后自动去重。
 - **无** 手动 `cata evolve` 命令。
 
 ---
@@ -77,10 +84,11 @@
 
 ## MCP 与 Skill（已接入）
 
-- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@0.0.75`，无 `--console`；`tool_timeout_seconds` 300）；`modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。小红书/已登录发布见 **`docs/mcp-browser.md`**（`--extension`）。
-- **Skill**：`capabilities.yaml` → `skills: [id]`；`SKILL.md` 查找顺序：`brain/workspaces/<ws>/skills/` → `~/.cata/skills/` → `~/.cursor/skills-cursor/`。
-- **run_skill**：执行脑子内 `skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化；**不删** `mcp: [browser]`。
-- **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 并自动 append capabilities；下次 chat 生效。
+- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@0.0.75`，无 `--console`；`tool_timeout_seconds` 300）；`focus_path/.cata/modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。小红书/已登录发布见 **`docs/mcp-browser.md`**（`--extension`）。
+- **双模型**：`llm.models.chat`（主对话）/ `evolution` / `worker`（`delegate_task`）；未配置时回退 `llm.model`
+- **delegate_task**：主 Agent 委派**有界子任务**给 worker（低成本、可并行）；`delegate_wait` 收集摘要；留痕 `~/.cata/subagent_runs/<产出区>.csv`；TUI「委托」或 `d` 查看
+- **run_skill**：执行项目 `.cata/skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化；**不删** `mcp: [browser]`。
+- **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 到**项目 `.cata`** 并自动 append capabilities；下次 chat 生效。
 
 ## 产出区（Output Area / Workspace）
 
@@ -99,8 +107,8 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 **脑子绑定**：
 - 产出区用于文件工具和 `run_command` 的操作范围
-- 脑子格子（`workspaces/<id>/`）由 `focus_path`（git root / workspace.yaml）决定
-- 多产出区共享同一个脑子（如果它们属于同一个 git 项目）
+- home 脑子格（`~/.cata/brain/workspaces/<id>/`）由 `focus_path` 决定；**主要内容**在 `focus_path/.cata/`
+- 多产出区共享同一个脑子（若属于同一 git 项目）
 - 不同产出区可并行开多个 chat（各自独立 output lock）
 
 **实现要点**：
@@ -117,18 +125,19 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 | 顺序 | API `messages[]` | 来源（代码） |
 |------|------------------|--------------|
 | ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点 |
-| ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`：路径块 + Skills + 记忆索引 + global/mode 文档 |
+| ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`（单条 system，内部分段） |
 | ③+ | `user` / `assistant` / `tool` | `internal/server/socket_chat.go` 内存 history |
 | 并行 | `tools[]` | 内置工具 + MCP（不经 messages 拼接正文） |
 
-**② brain 节选**（`internal/brain/terminal_context.go`）单条 `system`，自上而下：
+**② brain 节选**（`internal/brain/terminal_context.go`）自上而下：
 
-1. **路径块** — `TerminalPathsSystemBlock()`（`context_paths.go`）：脑子 vs 产出区、`focus_path`、`output_cwd`、**host/command 平台**（windows/linux/darwin）、终端/shell 语法、**PATH 探测**（python/node/go 等）、**Cata 已注册工具**（`Runtime` 由 client 每轮上报）
-2. **Skills** — `SkillsPromptBlock()`：读 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（workspace → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
-3. **记忆索引** — `MemoryIndexPromptBlock()` ← `memory/index.json`（≤2800 bytes）
-4. **文档块** — `global/constraints.md`、`global/behavior.md`、`modes/<mode>/persona.md`、`persona.local.md`（legacy 无 workspace 时回退 `brain/constraints.md` 等）
+1. **路径块** — `TerminalPathsSystemBlock()`：CATA_HOME vs 项目 `.cata` vs 产出区、`focus_path`、`output_cwd`、平台/shell、工具注册
+2. **Skills** — `SkillsPromptBlock()`：读项目 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（项目 → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
+3. **记忆索引** — `MemoryIndexPromptBlock()` ← home 格 `memory/index.json`（≤2800 bytes）
+4. **【Cata 引导 · ~/.cata/global】** — `constraints.md`、`behavior.md`（引导型，evolve 不写）
+5. **【Cata 项目内容 · focus_path/.cata】** — `modes/<active_mode>/persona|behavior|constraints`、`persona.local.md`
 
-**演进 LLM**（`internal/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt()` 等）+ `user`（`buildDecisionPrompt()`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**（`ChatEvolution` 注释写「不注入」与实现不一致，以代码为准）。
+**演进 LLM**（`internal/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**。
 
 **其它 LLM 调用**：`Summarize` / 查询预处理等在 `client.go` 内联 `system` + `user`，走 `chat()` 时也会带上 ①②。
 
@@ -174,9 +183,9 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 ## 给 AI 的约束
 
 1. 改功能先看 **`internal/server`**、**`cmd/cata`**、**`internal/client`**、**`internal/evolve`**。
-2. 路径以 **`internal/brain/paths.go`**、`layout.go`、`context_paths.go` 与 **`~/.cata/global/`** 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
+2. 路径以 **`internal/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
 3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
-4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（脑子）混为一谈；勿把 focus_path 当成产出区。
+4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
 
 ---
 
@@ -188,3 +197,4 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 4. 提示词代码：`internal/llm/client.go`、`internal/brain/terminal_context.go`、`internal/llm/prompt_log.go`  
 5. 对话循环：`internal/server/socket_chat.go`、`internal/client/tui.go`  
 6. 演进：`internal/evolve/engine.go`  
+

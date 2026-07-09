@@ -11,7 +11,7 @@ import (
 // 终端 cata chat 的 history 仅含 user / assistant / tool；①② 由客户端注入，工具走 tools 字段。
 const (
 	PromptPartBootLeader   = "boot-leader"   // ① system：global/boot-assembler 或 boot-leader（每次请求注入）
-	PromptPartBrainExcerpt = "brain-excerpt" // ② system：路径块 + global/mode persona 节选（每次请求注入）
+	PromptPartBrainExcerpt = "brain-excerpt" // ② system：路径块 + ~/.cata 引导 + 项目 .cata 内容节选
 	PromptPartConversation = "conversation"  // user / assistant / tool 多轮历史（调用方传入）
 	PromptPartTools        = "tools"         // OpenAI tools JSON（同请求，非 messages）
 	PromptPartAPIParams    = "api-params"    // model、max_tokens、temperature、tool_choice
@@ -76,10 +76,10 @@ func buildPromptManifest(effective []Message, tools []Tool, toolChoice string, m
 			})
 			convStart = i + 1
 		case m.Role == "system" && (strings.HasPrefix(c, brain.TerminalPathsSystemPrefix) ||
-			strings.HasPrefix(c, brain.TerminalBundleSystemPrefix)):
+			brain.BrainExcerptInjected(c)):
 			static = append(static, promptComponentLog{
 				ID: PromptPartBrainExcerpt, Role: "system",
-				Source: "brain/core.md+workflow.md+hot.md", Chars: ch,
+				Source: "~/.cata/global + focus_path/.cata", Chars: ch,
 				Preview: previewRunes(c, llmLogPreviewRunes),
 			})
 			convStart = i + 1

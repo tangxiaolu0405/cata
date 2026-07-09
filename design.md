@@ -18,15 +18,22 @@
     │
     ├── LLM (internal/llm) ─── OpenAI 兼容 API
     │
-    ├── 脑子 (~/.cata/brain/workspaces/<id>/)
-    │   ├── memory/short/current.md    ← 每轮写入
-    │   ├── memory/long/               ← evolve 归档
-    │   ├── memory/index.json          ← 记忆索引
-    │   ├── modes/<mode>/persona.md    ← evolve 维护
-    │   └── skills/                    ← evolve 固化
+    ├── CATA_HOME (~/.cata/)
+    │   ├── global/                    ← 引导型提示词（constraints、behavior、boot-assembler）
+    │   └── brain/workspaces/<id>/     ← 运行时记忆
+    │       ├── memory/short/current.md
+    │       ├── memory/long/、archive/
+    │       ├── memory/index.json
+    │       ├── meta.json
+    │       └── evolution_log.json
+    │
+    ├── 项目主要内容 (focus_path/.cata/)
+    │   ├── persona.local.md
+    │   ├── modes/<mode>/persona|behavior|constraints|capabilities.yaml
+    │   └── skills/<id>/
     │
     └── Evolve (internal/evolve) ─── 后台异步
-        观察 → LLM 决策 → 文档补丁 → 索引同步
+        观察 → LLM 决策 → 补丁（项目内容 + home 记忆）→ 索引同步
 ```
 
 ### 核心模型
@@ -59,19 +66,21 @@ cata chat --dir ~/project         # 产出区 = ~/project
 cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 ```
 
-**产出区 vs 脑子的关系**：
+**产出区 vs 脑子（双根）**：
 
 ```
-产出区 (output dirs)          脑子 (~/.cata)
-─────────────────────         ─────────────────────
-文件工具操作范围              persona / 记忆 / 技能
-run_command 执行目录          演进日志 / 注册表
-项目 .git 检测起点            不存用户代码
+产出区 (output dirs)              CATA_HOME (~/.cata/)           项目 .cata (focus_path/.cata/)
+─────────────────────             ─────────────────────          ─────────────────────────────
+文件工具、run_command             global/ 引导型提示词             persona.local、modes/*、skills/*
+用户代码与构建产物                brain/ws/<id>/ 运行时记忆        可随 git 提交（按需忽略）
+                                  config、socket、registry         workspace.yaml 门牌
 ```
 
-- **产出区** = 用户的项目文件所在位置（代码、文档、构建产物）
-- **脑子** = Agent 的记忆和 persona（永远在 `~/.cata/`）
-- **focus_path** = 从产出区向上查找 `.git` 或 `.cata/workspace.yaml`，决定绑定哪个脑子格子
+- **产出区** = 用户项目文件（代码、文档、构建产物）
+- **引导** = `~/.cata/global/`（全机约束与 SOP；**evolve 不写**）
+- **主要内容** = `focus_path/.cata/`（身份、项目说明、mode 文档、技能；**evolve 迭代 active_mode**）
+- **运行时记忆** = `~/.cata/brain/workspaces/<id>/`（short/long/archive、index、审计）
+- **focus_path** = 从产出区向上查找 `.git` 或 `.cata/workspace.yaml`，决定绑定哪格脑子
 - 借鉴 Claude Code：`--add-dir` → cata 的多个 `--dir`；Claude 的 launch dir → cata 的第一个 `--dir` 或 cwd
 
 **规则**：
@@ -156,47 +165,62 @@ ok  internal/auth  0.234s                     ← stderr, 完整命令输出
 
 ---
 
-### 存储层结构
+### 存储层结构（双根）
 
 ```
-~/.cata/
-├── registry/workspaces.json      # 工作区注册表
-├── global/
-│   ├── constraints.md            # 全局约束
-│   ├── behavior.md               # 全局行为 SOP
-│   └── boot-assembler.md         # Boot leader 指令
-├── brain/workspaces/<ws_id>/
-│   ├── meta.json
-│   ├── persona.local.md          # 聚焦上下文
-│   ├── evolution_log.json        # 演进日志
-│   ├── memory/
-│   │   ├── index.json            # 记忆索引（常驻 context）
-│   │   ├── short/current.md      # 短期记忆（每轮写入）
-│   │   ├── long/                 # 长期记忆（evolve 归档）
-│   │   └── archive/              # 冷记忆
-│   ├── modes/<mode>/
-│   │   ├── persona.md            # 模式 persona（evolve 维护）
-│   │   ├── behavior.md
-│   │   ├── constraints.md
-│   │   └── capabilities.yaml     # MCP + skills 声明
-│   └── skills/<id>/
-│       ├── SKILL.md
-│       ├── manifest.yaml
-│       └── script.py
-├── skills/                       # 全局共享技能
-├── locks/                        # 产出区锁文件
-└── cata.sock                     # Unix socket
+~/.cata/                                    # CATA_HOME
+├── config.json
+├── cata.sock
+├── registry/workspaces.json
+├── global/                                 # 引导型提示词（evolve 禁止 patch）
+│   ├── constraints.md
+│   ├── behavior.md
+│   └── boot-assembler.md
+├── locks/
+├── skills/                                 # 全局共享 skill 回退
+└── brain/workspaces/<ws_id>/               # home 脑子格（运行时记忆）
+    ├── meta.json
+    ├── evolution_log.json
+    └── memory/
+        ├── index.json
+        ├── short/current.md
+        ├── long/
+        └── archive/
+
+<focus_path>/.cata/                         # 项目主要内容（evolve 维护）
+├── workspace.yaml                          # 可选：name、active_mode
+├── workspace.link                          # 可选：id → home 格
+├── persona.local.md
+├── modes/<mode>/
+│   ├── persona.md
+│   ├── behavior.md
+│   ├── constraints.md
+│   └── capabilities.yaml
+└── skills/<id>/
+    ├── SKILL.md
+    ├── manifest.yaml
+    └── script.*
 ```
 
-### 记忆分层（与 design.md 对齐）
+**路径路由**（`internal/brain/ResolveBrainDocAbs`、`chat_paths.go`）：
+- `memory/*`、`meta.json`、`evolution_log.json` → home 格
+- `persona.local`、`modes/*`、`skills/*` → 项目 `.cata/`
+- `global/*` → `~/.cata/global/`
 
-| 层 | 位置 | 写入方 | 作用 |
-|----|------|--------|------|
-| Socket 会话历史 | server 内存 | 每轮对话 | 当前 session 上下文，chat_reset 清空 |
-| short/current.md | 每格脑子 | 每轮 chat 成功后追加 | 对话原文，evolve 的输入 |
-| memory/index.json | 每格脑子 | evolve 同步 | 摘要索引，常驻 context（< 2800 bytes） |
-| modes/…/persona.md | modes/<mode>/ | evolve 提炼 | 偏好 + 流程，注入 ② brain 节选 |
-| long/ + archive/ | 每格脑子 | evolve 归档 | 低频事实，按需召回 |
+首次 `EnsureScaffold` 会将旧版 home 格内的 persona/modes/skills **迁移**到项目 `.cata/`（`workspace_migrate_project.go`）。
+
+### 记忆与提示词分层
+
+| 层 | 物理位置 | 类型 | 写入方 | 作用 |
+|----|----------|------|--------|------|
+| Socket 会话历史 | server 内存 | 运行时 | 每轮对话 | 当前 session，`chat_reset` 清空 |
+| short/current.md | home 脑子格 | 运行时记忆 | server 每轮追加 | evolve 输入 |
+| memory/index.json | home 脑子格 | 运行时记忆 | evolve 同步 | 摘要索引，注入 ②（≤2800B） |
+| global/constraints、behavior | ~/.cata/global | **引导** | 用户 / init | 全机硬规则与 SOP；evolve **不写** |
+| modes/…/persona 等 | 项目 `.cata/` | **主要内容** | evolve（active_mode） | 身份、项目 SOP，注入 ② |
+| persona.local.md | 项目 `.cata/` | **主要内容** | evolve | 仓库用途、栈、当前任务 |
+| long/ + archive/ | home 脑子格 | 运行时记忆 | evolve 归档 | 低频事实，经 index 召回 |
+| boot-assembler | ~/.cata/global | **引导** | init / 用户 | ① system 前缀 |
 
 ### Context 组装（每次终端 LLM 出站前）
 
@@ -227,15 +251,20 @@ socket_chat history (user/assistant/tool only)
 **发往 API 的 `messages` 顺序**（终端，有 boot 文件时）：
 
 ```
-[0] system  ① boot-assembler 全文（≤10000 runes，internal/llm/client.go）
-[1] system  ② 单条 brain 节选（internal/brain/terminal_context.go），结构为：
-        · 路径块 TerminalPathsSystemBlock
-        · 【Cata Skills】…（capabilities.yaml → SKILL.md）
-        · memory/index.json 紧凑块
-        · 【Cata 脑子节选…】global/constraints, global/behavior,
-          modes/<mode>/persona.md, persona.local.md
+[0] system  ① boot-assembler（~/.cata/global/，≤10000 runes）
+[1] system  ② 单条 brain 节选（terminal_context.go），自上而下：
+        · 【Cata 路径：脑子与产出区】TerminalPathsSystemBlock
+        · 【Cata Skills】capabilities → SKILL.md（项目 skills 优先）
+        · memory/index.json 紧凑块（home 格）
+        · 【Cata 引导 · ~/.cata/global】constraints、behavior
+        · 【Cata 项目内容 · focus_path/.cata】modes/<active_mode>/persona|behavior|constraints、persona.local
 [2…] user / assistant / tool   ← socket 内存 history
 ```
+
+**文件工具 `brain/…` 路由**（`internal/brain/chat_paths.go`）：
+- `brain/memory/…`、`brain/meta.json` → home 格
+- `brain/modes/…`、`brain/persona.local.md`、`brain/skills/…` → 项目 `.cata/`
+- `global/…` → `~/.cata/global/`
 
 **工具**：OpenAI `tools` 数组（`server.buildTerminalChatTools`：内置 + MCP），**不**拼进 system 正文。
 
@@ -263,16 +292,27 @@ socket_chat history (user/assistant/tool only)
 ### 自主演进
 
 ```
+双根 patch（per workspace，active_mode）:
+    主要内容 → focus_path/.cata/（persona.local、modes/<active_mode>/*、skills/*）
+    运行时记忆 → ~/.cata/brain/workspaces/<id>/（memory/*、meta.json、evolution_log.json）
+    禁止 → global/*（引导层）
+
 触发条件:
-    short-term > shortTermTriggerBytes（有足够新内容）
-    或 short-term 自上次演进后有变化 + >= shortTermActivityBytes
-    或 archive 文件数 >= archiveSummarizeMinFiles
+    short-term 有新内容（见 internal/evolve/gate.go）
+    或 fill:*（项目 .cata 空壳文档须本轮填充）
 
 周期:
-    默认 600s，由 evolve.cycle_interval 控制
+    默认 600s，由 evolution.cycle_interval 控制
 
 动作:
-    observe → LLM 决策 (idle|update|consolidate|crystallize) → 文档补丁 → 索引同步
+    observe → LLM 决策 (idle|consolidate|crystallize_skill|…) → ApplyUpdates → 确定性 compact（去重）→ 索引同步
+
+项目主要内容约束:
+    按意图选 patch 模式（见 prompt/evolve/patch_modes.md）
+    更新已有 ## 节 → replace_section；memory 流水 → append；fill/compact → overwrite
+    超 3500B 触发 compact:*；补丁后 CompactMarkdown 去重
+
+决策 prompt 含: workspace_scope（id、focus_path、active_mode、project_cata、home_brain）
 
 无手动演进命令。
 ```
@@ -296,7 +336,7 @@ socket_chat history (user/assistant/tool only)
 
 记忆膨胀:
     short/current.md 上限 96KB → 触发 trim
-    persona.md 超 6500 bytes → 触发 consolidate
+    modes/<mode>/persona.md 超 6500 bytes → 触发 consolidate（写入项目 .cata）
     index.json 超 2800 bytes → 触发 summary 压缩
 ```
 
@@ -506,6 +546,24 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 **建议改动的包**（实现时）：`internal/config`、`internal/llm`（Message、wire、tokens）、`internal/server`（ingest、history）、`internal/client`（TUI、session req）、新建 `internal/attachment`（可选）。
 
 **刻意不做（与多模态相关）**：不把图片写入 `memory/short/current.md` 全文；不让 evolve 自动选 vision 模型；不在 v1 支持「管道 `cata chat < img.png`」。
+
+---
+
+### 子 Agent（delegate_task / worker）
+
+主 Agent（`llm.models.chat`）负责规划与整合；**worker**（`llm.models.worker`）执行有界子任务，降低成本。
+
+| 项 | 行为 |
+|----|------|
+| 触发 | 仅主 Agent 调用 `delegate_task` |
+| 上下文 | worker **不注入** boot/brain；仅 task + context + 工具结果 |
+| 工具 | 默认全套（可 `subagent.default_tools` 白名单）；禁止 `ask_user`、嵌套 `delegate_task` |
+| 并行 | `subagent.max_concurrent`（默认 4）；槽满时 `subagent_queued` 事件 |
+| 收集 | `delegate_wait`：`ids` 拉指定任务（含已完成）；`all:true` 本会话全部；空 ids 仅等运行中 |
+| 留痕 | `~/.cata/subagent_runs/<产出区路径_.csv>`；`delegate_wait` 摘要写入 short-term |
+| 审计 | `llm.log` 中 `kind: worker_round` + `subagent_id` + `session_id` |
+
+**browser/MCP**：勿多 worker 并行浏览器；宜父 Agent 串行或单 worker + tools 白名单。
 
 ---
 

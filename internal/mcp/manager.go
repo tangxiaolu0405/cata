@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,11 @@ func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) e
 }
 
 func mcpCapsKey(caps brain.Capabilities) string {
+	return CapsKey(caps)
+}
+
+// CapsKey 当前 capabilities 的 MCP 列表键（供 tools 缓存）。
+func CapsKey(caps brain.Capabilities) string {
 	parts := make([]string, len(caps.MCP))
 	copy(parts, caps.MCP)
 	for i := 0; i < len(parts); i++ {
@@ -157,8 +163,8 @@ func EnsureInit() {
 		lastMCPKey = ""
 		return
 	}
-	caps := brain.LoadActiveCapabilities()
-	key := mcpCapsKey(caps)
+	caps := brain.LoadActiveCapabilitiesCached()
+	key := CapsKey(caps)
 	if global != nil && key == lastMCPKey {
 		return
 	}
@@ -310,6 +316,36 @@ func isTransientMCPError(err error) bool {
 // IsBrowserTool reports whether name is an MCP browser tool.
 func IsBrowserTool(name string) bool {
 	return strings.HasPrefix(name, "browser_")
+}
+
+// ExportedToolNames 返回已注册 MCP 工具名（排序）。
+func ExportedToolNames() []string {
+	if global == nil {
+		return nil
+	}
+	return global.ToolNames()
+}
+
+// ToolNames 已导出工具名。
+func (mgr *Manager) ToolNames() []string {
+	if mgr == nil {
+		return nil
+	}
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	names := make([]string, 0, len(mgr.routes))
+	for n := range mgr.routes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ActiveCapsKey 当前 MCP 初始化所用的 capabilities 键。
+func ActiveCapsKey() string {
+	initMu.Lock()
+	defer initMu.Unlock()
+	return lastMCPKey
 }
 
 // Shutdown 关闭所有 MCP 子进程。

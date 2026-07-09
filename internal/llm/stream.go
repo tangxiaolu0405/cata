@@ -202,8 +202,32 @@ func finalizeStreamToolCalls(aggs map[int]*streamToolAgg) []ToolCall {
 	return NormalizeToolCalls(out)
 }
 
-// ChatStreamRound 单次流式 chat/completions 请求。
+// streamRoundFlags 可选流式轮次行为（worker 等）。
+type streamRoundFlags struct {
+	noBrainInject   bool
+	disableThinking bool
+	logKind         string
+	subagentID      string
+	sessionID       string
+}
+
+// ChatStreamRound 单次流式 chat/completions 请求（主 chat：注入 brain）。
 func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{}, onDelta)
+}
+
+// ChatWorkerStreamRound 子 Agent 流式轮次：不注入 brain、低温度、禁用 thinking。
+func (c *Client) ChatWorkerStreamRound(ctx context.Context, messages []Message, tools []Tool, maxTokens int, meta WorkerRoundMeta, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+	return c.chatStreamRound(ctx, messages, tools, "auto", maxTokens, 0.2, streamRoundFlags{
+		noBrainInject:   true,
+		disableThinking: true,
+		logKind:         "worker_round",
+		subagentID:      meta.SubagentID,
+		sessionID:       meta.SessionID,
+	}, onDelta)
+}
+
+func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	if maxTokens <= 0 {
 		maxTokens = c.maxTokens
 	}
@@ -211,10 +235,15 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 		temperature = 0.7
 	}
 	req := ChatRequest{
-		Model:         c.model,
-		Messages:      SanitizeMessagesToolCalls(messages),
-		MaxTokens:     maxTokens,
-		Temperature:   temperature,
+		Model:           c.model,
+		Messages:        SanitizeMessagesToolCalls(messages),
+		MaxTokens:       maxTokens,
+		Temperature:     temperature,
+		NoBrainInject:   flags.noBrainInject,
+		DisableThinking: flags.disableThinking,
+		LogKind:         flags.logKind,
+		SubagentID:      flags.subagentID,
+		SessionID:       flags.sessionID,
 	}
 	httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
 	if err != nil {
@@ -264,10 +293,15 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	if strings.EqualFold(finishReason, "tool_calls") && len(toolCalls) == 0 && len(tools) > 0 {
 		log.Printf("LLM: stream finish_reason=tool_calls but 0 parsed tool_calls; retrying non-stream once")
 		nreq := ChatRequest{
-			Model:         c.model,
-			Messages:      messages,
-			MaxTokens:     maxTokens,
-			Temperature:   temperature,
+			Model:           c.model,
+			Messages:        messages,
+			MaxTokens:       maxTokens,
+			Temperature:     temperature,
+			NoBrainInject:   flags.noBrainInject,
+			DisableThinking: flags.disableThinking,
+			LogKind:         flags.logKind,
+			SubagentID:      flags.subagentID,
+			SessionID:       flags.sessionID,
 		}
 		cr, tc2, err2 := c.chat(nreq, tools, toolChoice, true)
 		if err2 != nil {

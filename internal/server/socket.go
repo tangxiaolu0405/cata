@@ -17,14 +17,20 @@ import (
 	"cata/internal/client"
 	"cata/internal/config"
 	"cata/internal/llm"
+	"cata/internal/mcp"
 )
 
 // SocketServer 处理客户端连接
 type SocketServer struct {
-	server       *Server
-	ln           net.Listener
-	chatSessions int32        // 仅统计 cata chat 长连接；ping 探测不计入
-	tools        *ToolRegistry // built-in tool registry
+	server           *Server
+	ln               net.Listener
+	chatSessions     int32         // 仅统计 cata chat 长连接；ping 探测不计入
+	tools            *ToolRegistry // built-in tool registry
+	subagentSem      *subagentLimiter
+	workerToolsCache []llm.Tool
+	chatToolsCache   []llm.Tool
+	chatToolsKey     string
+	workerToolsKey   string
 }
 
 // ChatSessions 返回当前交互式 chat 会话数（不含 ping 探活连接）。
@@ -83,8 +89,12 @@ func NewSocketServer(srv *Server) (*SocketServer, error) {
 		server: srv,
 		ln:     ln,
 		tools:  reg,
+		subagentSem: newSubagentLimiter(config.MaxSubagentConcurrent()),
 	}
 	ss.RegisterBuiltinTools(reg)
+	brain.MCPToolNamesProvider = func() []string {
+		return mcp.ExportedToolNames()
+	}
 	return ss, nil
 }
 
@@ -112,7 +122,7 @@ func (ss *SocketServer) Start() {
 			}
 			
 			// 处理每个连接
-			go ss.handleConnection(conn)
+			go ss.handleConnection(guardConn(conn))
 		}
 	}()
 }
@@ -185,10 +195,11 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 				e := brain.DetectRuntimeEnvFromProcess()
 				brain.SetRuntimeEnv(&e)
 			}
-			if _, err := brain.ResolveWorkspace(cwd); err != nil {
+			ws, err := brain.ResolveWorkspace(cwd)
+			if err != nil {
 				log.Printf("resolve brain: %v", err)
 			}
-			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text); err != nil {
+			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text, ws); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			continue

@@ -29,7 +29,7 @@ func shouldInvokeLLM(snap *Snapshot, cooldownUntil time.Time, lastFingerprint st
 
 func hasFillTrigger(snap *Snapshot) bool {
 	for _, t := range snap.Triggers {
-		if strings.HasPrefix(t, "fill:") {
+		if strings.HasPrefix(t, "fill:") || strings.HasPrefix(t, "compact:") {
 			return true
 		}
 	}
@@ -55,4 +55,5 @@ func computeTriggers(s *Snapshot, ws *brain.Workspace) {
 	}
 
 	appendBrainDocFillTriggers(s, ws)
+	appendProjectContentCompactTriggers(s, ws)
 }

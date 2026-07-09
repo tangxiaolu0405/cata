@@ -45,6 +45,8 @@ const (
 	overlayNone overlayMode = iota
 	overlayConfirm
 	overlayChoice
+	overlaySubagentPick
+	overlaySubagentView
 )
 
 type overlayState struct {
@@ -53,6 +55,8 @@ type overlayState struct {
 	confirmID string
 	choiceID  string
 	multi     bool
+	subagentID string
+	subagentVP viewport.Model
 }
 
 type paneStats struct {
@@ -65,6 +69,9 @@ type paneStats struct {
 	evolveOn              bool
 	evolveSec             int
 	evolveLast            string
+	chatModel             string
+	subagentRunning       int
+	subagentMax           int
 }
 
 type pickItem struct {
@@ -98,6 +105,7 @@ type model struct {
 	composeSendSeq uint64 // 当前挂起的 Enter 发送代号，0 表示无
 	slashList      *list.Model
 	hoverPane      hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
+	subagents      []subagentRecord
 }
 
 type streamTickMsg struct {
@@ -124,7 +132,6 @@ func newModel(s *session, cwd string) model {
 
 	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste") + "\n"
 	vp := viewport.New(80, 20)
-	vp.SetContent(welcome)
 
 	m := model{
 		sess:      s,
@@ -144,6 +151,7 @@ func newModel(s *session, cwd string) model {
 		m.stats.mode = w.ActiveMode
 	}
 	m.loadEvolve()
+	m.setChatContent(true)
 	return m
 }
 
@@ -201,12 +209,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "ctrl+c":
 				_ = m.sess.write(req{Command: "chat_cancel"})
-				return m, waitStream(m.sess)
+				return m, nil
+			}
+			if m.hoverPane == hoverChat && chatScrollKey(msg) {
+				m.vp, _ = m.vp.Update(msg)
+				return m, nil
 			}
 			return m, nil
 		}
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if msg.String() == "d" && len(m.subagents) > 0 {
+			return m.openSubagentPicker()
 		}
 		// 粘贴（bracketed paste）整段进编辑区，不触发发送。
 		if msg.Paste {
@@ -241,6 +256,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStream(msg.ev)
 
 	case tea.MouseMsg:
+		if nm, cmd, handled := m.handleSidebarClick(msg); handled {
+			return nm, cmd
+		}
 		if nm, cmd, handled := m.handleMouse(msg); handled {
 			return nm, cmd
 		}
@@ -250,10 +268,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.syncInputSize()
 	listCmd := m.syncSlashList()
-	if !m.streaming {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok && m.hoverPane == hoverChat && chatScrollKey(keyMsg) {
-			m.vp, _ = m.vp.Update(msg)
-		}
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && m.hoverPane == hoverChat && chatScrollKey(keyMsg) {
+		m.vp, _ = m.vp.Update(msg)
 	}
 	return m, tea.Batch(cmd, listCmd)
 }
@@ -409,14 +425,12 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.stats.sessionTok = 0
 			m.stats.state = "ready"
 			m.log = styleDim.Render("— session cleared") + "\n"
-			m.vp.SetContent(m.log)
-			m.vp.GotoBottom()
+			m.setChatContent(true)
 			m.lastIn = ""
 			return m, nil
 		case "cls":
 			m.log = styleDim.Render("— view cleared") + "\n"
-			m.vp.SetContent(m.log)
-			m.vp.GotoBottom()
+			m.setChatContent(true)
 			return m, nil
 		case "help":
 			m.appendLog("/clear /cls /exit /status /retry /config\n", true)
@@ -448,6 +462,9 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	m.input.Blur()
 
 	outCwd, _ := os.Getwd()
+	if m.cwd != "" {
+		outCwd = m.cwd
+	}
 	rt := brain.DetectRuntimeEnvFromProcess()
 	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt}); err != nil {
 		m.streaming = false
@@ -507,6 +524,9 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		if line := formatToolResultLine("tool_result", ev.raw); line != "" {
 			m.appendLog(styleDim.Render(line)+"\n", true)
 		}
+	case "subagent_start", "subagent_queued", "subagent_progress", "subagent_tool", "subagent_done":
+		m.handleSubagentStream(ev.kind, ev.raw)
+		m.syncSidebarViewport()
 	case "exec_confirm_required":
 		return m.startConfirmOverlay(ev.raw)
 	case "exec_denied":
@@ -579,12 +599,22 @@ func (m *model) startChoiceOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
+		if m.overlay.mode == overlaySubagentView {
+			m.overlay = nil
+			if m.streaming {
+				return m, waitStream(m.sess)
+			}
+			return m, nil
+		}
 		m.overlay = nil
 		if m.streaming {
 			return m, waitStream(m.sess)
 		}
 		return m, nil
 	case "enter":
+		if m.overlay.mode == overlaySubagentView {
+			return m, nil
+		}
 		it, ok := m.overlay.list.SelectedItem().(pickItem)
 		if !ok {
 			return m, nil
@@ -601,7 +631,6 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case overlayChoice:
 			var sel []string
 			if m.overlay.multi {
-				// simple multi: toggle not implemented in v1 — pick one
 				sel = []string{it.id}
 			} else {
 				sel = []string{it.id}
@@ -609,7 +638,14 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			_ = m.sess.writeChoice(m.overlay.choiceID, sel)
 			m.overlay = nil
 			return m, waitStream(m.sess)
+		case overlaySubagentPick:
+			return m.openSubagentView(it.id)
 		}
+	}
+	if m.overlay.mode == overlaySubagentView {
+		var cmd tea.Cmd
+		m.overlay.subagentVP, cmd = m.overlay.subagentVP.Update(key)
+		return m, cmd
 	}
 	var cmd tea.Cmd
 	m.overlay.list, cmd = m.overlay.list.Update(key)
@@ -618,10 +654,7 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) appendLog(s string, scroll bool) {
 	m.log += s
-	m.vp.SetContent(m.log)
-	if scroll {
-		m.vp.GotoBottom()
-	}
+	m.setChatContent(scroll)
 }
 
 func (m *model) inputLineCount() int {
@@ -660,12 +693,6 @@ func (m *model) syncInputSize() {
 
 // layoutViewports sizes the chat viewport to fit the terminal without clipping the top row.
 func (m *model) layoutViewports() {
-	const (
-		linesFooter     = 1
-		linesMainBorder = 2
-		linesMargin     = 1
-	)
-	linesInputBox := m.inputLineCount() + inputLinesBorder + m.slashMenuLines()
 	side := 0
 	if sidebarActive(m.width) {
 		side = sidebarWidth
@@ -675,13 +702,44 @@ func (m *model) layoutViewports() {
 		mainW = m.width - 2
 		side = 0
 	}
-	mainH := m.height - linesFooter - linesInputBox - linesMainBorder - linesMargin
+	widthChanged := m.vp.Width != mainW
+	wasAtBottom := m.vp.AtBottom() || m.vp.PastBottom()
+	m.vp.Width = mainW
+	if m.input.Width() != mainW {
+		m.input.SetWidth(mainW)
+	}
+
+	// 用 lipgloss 实测左列总高，避免手算行数偏差导致整页底部被终端裁掉（常见少 1～2 行）。
+	mainH := m.height - lipgloss.Height(m.renderInputPane()) - lipgloss.Height(m.footerView()) - 2
 	if mainH < 4 {
 		mainH = 4
 	}
-	m.vp.Width = mainW
+	for mainH >= 4 && m.viewColumnHeight(mainH) > m.height {
+		mainH--
+	}
+
 	m.vp.Height = mainH
+	if m.log != "" {
+		if widthChanged {
+			m.setChatContent(false)
+		} else if wasAtBottom {
+			m.vp.GotoBottom()
+		}
+	}
 	m.syncSidebarViewport()
+}
+
+func (m *model) footerView() string {
+	if m.streaming {
+		return styleDim.Render("streaming… ctrl+c cancel round")
+	}
+	if m.slashList != nil {
+		return styleDim.Render("↑↓ select · enter run (or apply) · tab complete · esc clear")
+	}
+	if sidebarActive(m.width) {
+		return styleDim.Render("滚轮切换区 · d 子任务 · /status 详情 · ctrl+c")
+	}
+	return styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · wheel scrolls pane under cursor")
 }
 
 func (m *model) View() string {
@@ -702,23 +760,19 @@ func (m *model) View() string {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, sb)
 	}
 
-	foot := styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · wheel scrolls pane under cursor")
-	if sidebarActive(m.width) {
-		foot = styleDim.Render("wheel: chat/sidebar · sidebar keys: ctrl+↑↓ home/end · ctrl+[/] · enter · ctrl+c quit")
-	}
-	if m.slashList != nil {
-		foot = styleDim.Render("↑↓ select · enter run (or apply) · tab complete · esc clear")
-	}
-	if m.streaming {
-		foot = styleDim.Render("streaming… ctrl+c cancel round")
-	}
+	foot := m.footerView()
 	if m.overlay != nil {
-		overlay := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("205")).
-			Padding(1, 2).
-			Render(m.overlay.list.View())
-		body = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+		overlay := m.renderSubagentOverlay()
+		if overlay == "" && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice || m.overlay.mode == overlaySubagentPick) {
+			overlay = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("205")).
+				Padding(1, 2).
+				Render(m.overlay.list.View())
+		}
+		if overlay != "" {
+			body = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, body, foot)
 }

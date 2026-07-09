@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,7 +40,8 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 }
 
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
-func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string) (err error) {
+// chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
+func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	var lr *connLineReader
@@ -87,6 +89,8 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 	defer cancel()
 	lr = newConnLineReader(br, conn, cancel)
 	ctx = withChatConnReader(ctx, lr)
+	pool := newSubagentPool(ctx, ss, conn)
+	ctx = withChatSubagentPool(ctx, pool)
 
 	var sessPromptTok, sessCompletionTok int
 
@@ -108,6 +112,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		var asst string
 		var reasoning string
 		var toolCalls []llm.ToolCall
+		var finishReason string
 		var roundUsage llm.StreamUsage
 		var err error
 		for attempt := 1; attempt <= maxLLMAttempts; attempt++ {
@@ -117,7 +122,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				})
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
-			asst, reasoning, toolCalls, _, roundUsage, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+			asst, reasoning, toolCalls, finishReason, roundUsage, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
 			toolCalls = llm.NormalizeToolCalls(toolCalls)
 			if err == nil {
 				break
@@ -127,7 +132,13 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 			}
 			log.Printf("chat stream round %d attempt %d: %v", round, attempt, err)
 		}
-		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, "")
+		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, "", chatWS, subagentRunningFrom(ctx))
+		if strings.EqualFold(finishReason, "length") {
+			_ = ss.emitStreamLine(conn, map[string]interface{}{
+				"type":    "error",
+				"message": "模型输出已达 max_tokens 上限，回复可能被截断；可在 ~/.cata/config.json 提高 llm.max_tokens。",
+			})
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return ss.emitChatCancelled(conn, lr)
@@ -193,39 +204,11 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 			ToolCalls:        toolCalls,
 		})
 
-		fatalBrowser := false
-		for _, tc := range toolCalls {
-			if ctx.Err() != nil {
+		if err := ss.executeChatToolCalls(ctx, conn, client, history, tools, toolCalls, round, &sessPromptTok, &sessCompletionTok, chatWS); err != nil {
+			if errors.Is(err, context.Canceled) {
 				return ss.emitChatCancelled(conn, lr)
 			}
-			name := tc.Function.Name
-			ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, &sessPromptTok, &sessCompletionTok, name)
-			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name})
-			var out string
-			var terr error
-			if fatalBrowser && mcp.IsBrowserTool(name) {
-				out = "[browser error] skipped: browser crashed (see previous error)"
-			} else {
-				out, terr = ss.runTerminalTool(ctx, conn, tc)
-			}
-			if terr != nil {
-				if out != "" {
-					out = out + "\n[error] " + terr.Error()
-				} else {
-					out = "[error] " + terr.Error()
-				}
-			}
-
-			if !fatalBrowser && isFatalBrowserError(terr, out) {
-				fatalBrowser = true
-			}
-			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_result", "id": tc.ID, "name": name, "output": out})
-			*history = append(*history, llm.Message{
-				Role:       "tool",
-				ToolCallID: tc.ID,
-				Name:       name,
-				Content:    out,
-			})
+			return err
 		}
 	}
 }
@@ -274,12 +257,36 @@ func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, 
 }
 
 func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
+	key := ss.chatToolsCacheKey()
+	if key == ss.chatToolsKey && len(ss.chatToolsCache) > 0 {
+		out := make([]llm.Tool, len(ss.chatToolsCache))
+		copy(out, ss.chatToolsCache)
+		return out
+	}
 	_ = config.InitBrainPath()
 	out := ss.tools.Schemas()
 	if mgr := mcp.Global(); mgr != nil {
 		out = append(out, mgr.Tools()...)
 	}
+	ss.chatToolsKey = key
+	ss.chatToolsCache = out
 	return out
+}
+
+func (ss *SocketServer) chatToolsCacheKey() string {
+	var b strings.Builder
+	b.WriteString(mcp.ActiveCapsKey())
+	if cfg := config.Config; cfg != nil {
+		b.WriteString("|exec:")
+		b.WriteString(strconv.FormatBool(cfg.Exec.Enabled))
+		b.WriteString("|files:")
+		b.WriteString(strconv.FormatBool(cfg.WorkspaceFilesEnabled()))
+		b.WriteString("|mcp:")
+		b.WriteString(strconv.FormatBool(cfg.MCP.Enabled))
+	}
+	b.WriteString("|n:")
+	b.WriteString(strconv.Itoa(len(ss.tools.Names())))
+	return b.String()
 }
 
 func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc llm.ToolCall) (string, error) {
@@ -437,7 +444,7 @@ func firstDroppableIndex(msgs []llm.Message) int {
 	return -1
 }
 
-func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, lastTool string) {
+func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, lastTool string, chatWS *brain.Workspace, subagentRunning int) {
 	in := usage.PromptTokens
 	out := usage.CompletionTokens
 	if in == 0 && out == 0 && usage.TotalTokens > 0 {
@@ -454,6 +461,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		"type":               "stats",
 		"round":              round,
 		"model":              client.ModelName(),
+		"model_role":         "chat",
 		"prompt_tokens":      in,
 		"completion_tokens":  out,
 		"session_prompt":     *sessIn,
@@ -463,13 +471,23 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		"tools":              len(tools),
 		"last_tool":          lastTool,
 	}
-	if w := brain.Active(); w != nil {
+	w := chatWS
+	if w == nil {
+		w = brain.Active()
+	}
+	if w != nil {
 		ev["workspace_id"] = w.ID
 		ev["focus_path"] = w.RootPath
 		ev["active_mode"] = w.ActiveMode
 	}
 	if outCwd := brain.OutputCwd(); outCwd != "" {
 		ev["output_cwd"] = outCwd
+	}
+	if subagentRunning > 0 {
+		ev["subagent_running"] = subagentRunning
+		if cfg := config.Config; cfg != nil && cfg.Subagent.MaxConcurrent > 0 {
+			ev["subagent_max"] = cfg.Subagent.MaxConcurrent
+		}
 	}
 	_ = ss.emitStreamLine(conn, ev)
 }

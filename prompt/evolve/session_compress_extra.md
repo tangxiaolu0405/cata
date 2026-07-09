@@ -1,1 +1,1 @@
-本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；合并 **本 workspace** short-term 到 modes/<mode>/persona.md；细节 append 到 memory/long/*.md；可缩短 memory/short/current.md；不要 idle；不要 patch global/*。
+本轮为会话阈值压缩：action=consolidate。把 short-term **按 ## 节** merge 进项目 `modes/<active_mode>/persona.md`（已有节用 **replace_section**，新节用 **append_section**）；勿重复 append 已有 bullet。细节 **append** 到 home `memory/long/`。可缩短 `memory/short/current.md`。不要 idle；不要 patch global/*。

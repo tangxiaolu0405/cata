@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -28,7 +29,10 @@ func resolveWorkspaceFile(rel string) (string, error) {
 	return brain.ResolveChatFilePath(rel)
 }
 
-func toolReadFile(argsJSON string) (string, error) {
+func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
 	var p struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -44,11 +48,11 @@ func toolReadFile(argsJSON string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(full)
+	maxRead, _ := workspaceFileLimits()
+	data, err := readFileWithContext(ctx, full, maxRead+1)
 	if err != nil {
 		return "", err
 	}
-	maxRead, _ := workspaceFileLimits()
 	text := string(data)
 	if len(data) > maxRead {
 		text = text[:maxRead] + "\n…(truncated by max_read_bytes)"
@@ -68,7 +72,55 @@ func toolReadFile(argsJSON string) (string, error) {
 		}
 		text = strings.Join(slice, "\n")
 	}
-	return fmt.Sprintf("read %s (%d bytes shown)\n%s", p.Path, len(text), text), nil
+	return fmt.Sprintf("read %s resolved=%s (%d bytes shown)\n%s", p.Path, full, len(text), text), nil
+}
+
+func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
+	var p struct {
+		Path string `json:"path"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("list_files args: %w", err)
+	}
+	rel := strings.TrimSpace(p.Path)
+	if rel == "" {
+		rel = "."
+	}
+	full, err := resolveWorkspaceFile(rel)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("list_files %s (%d entries)\n", rel, len(entries)))
+	for i, e := range entries {
+		if i&31 == 0 {
+			if err := contextErr(ctx); err != nil {
+				return "", err
+			}
+		}
+		info, err := e.Info()
+		size := int64(0)
+		isDir := " "
+		if err == nil {
+			size = info.Size()
+			if e.IsDir() {
+				isDir = "d"
+			}
+		}
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		b.WriteString(fmt.Sprintf("  %s %10d  %s\n", isDir, size, name))
+	}
+	return b.String(), nil
 }
 
 func toolSearchReplace(argsJSON string) (string, error) {
@@ -119,7 +171,7 @@ func toolSearchReplace(argsJSON string) (string, error) {
 	if err := os.WriteFile(full, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("search_replace %s: %d replacement(s), %d -> %d bytes", p.Path, n, len(content), len(newContent)), nil
+	return fmt.Sprintf("search_replace %s resolved=%s: %d replacement(s), %d -> %d bytes", p.Path, full, n, len(content), len(newContent)), nil
 }
 
 func toolAppendFile(argsJSON string) (string, error) {
@@ -158,5 +210,5 @@ func toolAppendFile(argsJSON string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("append_file %s: appended %d bytes (was %d)", p.Path, n, prev), nil
+	return fmt.Sprintf("append_file %s resolved=%s: appended %d bytes (was %d)", p.Path, full, n, prev), nil
 }

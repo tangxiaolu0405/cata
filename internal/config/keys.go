@@ -91,6 +91,11 @@ var configFields = map[string]fieldSpec{
 	"workspace_files.enabled":        {get: wsEnabledGet, set: wsEnabledSet},
 	"workspace_files.max_read_bytes": {get: intGet(func(c *AppConfig) int { return c.WorkspaceFiles.MaxReadBytes }), set: intSet(func(c *AppConfig, v int) { c.WorkspaceFiles.MaxReadBytes = v })},
 	"workspace_files.max_write_bytes": {get: intGet(func(c *AppConfig) int { return c.WorkspaceFiles.MaxWriteBytes }), set: intSet(func(c *AppConfig, v int) { c.WorkspaceFiles.MaxWriteBytes = v })},
+	"subagent.max_concurrent":         {get: intGet(func(c *AppConfig) int { return c.Subagent.MaxConcurrent }), set: intSet(func(c *AppConfig, v int) { c.Subagent.MaxConcurrent = v })},
+	"subagent.default_max_rounds":     {get: intGet(func(c *AppConfig) int { return c.Subagent.DefaultMaxRounds }), set: intSet(func(c *AppConfig, v int) { c.Subagent.DefaultMaxRounds = v })},
+	"subagent.max_tool_result_bytes":  {get: intGet(func(c *AppConfig) int { return c.Subagent.MaxToolResultBytes }), set: intSet(func(c *AppConfig, v int) { c.Subagent.MaxToolResultBytes = v })},
+	"subagent.max_output_tokens":      {get: intGet(func(c *AppConfig) int { return c.Subagent.MaxOutputTokens }), set: intSet(func(c *AppConfig, v int) { c.Subagent.MaxOutputTokens = v })},
+	"subagent.default_tools":          {get: subagentDefaultToolsGet, set: subagentDefaultToolsSet},
 	"mcp.enabled":                    {get: boolGet(func(c *AppConfig) bool { return c.MCP.Enabled }), set: boolSet(func(c *AppConfig, v bool) { c.MCP.Enabled = v })},
 	"mcp.tool_timeout_seconds":       {get: intGet(func(c *AppConfig) int { return c.MCP.ToolTimeoutSeconds }), set: intSet(func(c *AppConfig, v int) { c.MCP.ToolTimeoutSeconds = v })},
 	"mcp.max_output_bytes":           {get: intGet(func(c *AppConfig) int { return c.MCP.MaxOutputBytes }), set: intSet(func(c *AppConfig, v int) { c.MCP.MaxOutputBytes = v })},
@@ -201,6 +206,30 @@ func mcpAllowedToolsSet(c *AppConfig, raw string) error {
 		}
 	}
 	c.MCP.AllowedTools = out
+	return nil
+}
+
+func subagentDefaultToolsGet(c *AppConfig) (interface{}, error) {
+	if len(c.Subagent.DefaultTools) == 0 {
+		return "", nil
+	}
+	return strings.Join(c.Subagent.DefaultTools, ","), nil
+}
+
+func subagentDefaultToolsSet(c *AppConfig, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "*" {
+		c.Subagent.DefaultTools = nil
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	c.Subagent.DefaultTools = out
 	return nil
 }
 

@@ -175,6 +175,6 @@ func LogBinding() string {
 	if w == nil {
 		return fmt.Sprintf("brain_home=%s output_cwd=%s%s", CataHome(), OutputCwd(), envS)
 	}
-	return fmt.Sprintf("brain_id=%s brain_dir=%s focus_path=%s output_cwd=%s%s",
-		w.ID, w.Dir(), w.RootPath, OutputCwd(), envS)
+	return fmt.Sprintf("brain_id=%s brain_home=%s project_cata=%s focus_path=%s output_cwd=%s%s",
+		w.ID, w.Dir(), w.ProjectCataRoot(), w.RootPath, OutputCwd(), envS)
 }

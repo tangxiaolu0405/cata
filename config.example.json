@@ -50,6 +50,15 @@
     "max_read_bytes": 524288,
     "max_write_bytes": 524288
   },
+  "subagent": {
+    "max_concurrent": 4,
+    "default_max_rounds": 6,
+    "max_tool_result_bytes": 8192,
+    "default_tools": null
+  },
+  "subagent_default_tools_help": {
+    "_comment": "省略或 null=worker 可用全套工具；设为逗号列表则 delegate_task 未指定 tools 时默认白名单。例：read_file,list_files,read_skill,run_command,run_skill,search_replace,append_file,create_file（不含 browser_*）"
+  },
   "mcp": {
     "enabled": true,
     "servers": [

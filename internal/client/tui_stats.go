@@ -10,6 +10,7 @@ import (
 
 	"cata/internal/brain"
 	"cata/internal/config"
+	"cata/internal/llm"
 )
 
 func bindStats(cwd string) {
@@ -59,6 +60,15 @@ func (m *model) applyStats(ev map[string]any) {
 	}
 	if s, ok := ev["active_mode"].(string); ok && s != "" {
 		m.stats.mode = s
+	}
+	if s, ok := ev["model"].(string); ok && s != "" {
+		m.stats.chatModel = s
+	}
+	if v, ok := ev["subagent_running"].(float64); ok {
+		m.stats.subagentRunning = int(v)
+	}
+	if v, ok := ev["subagent_max"].(float64); ok {
+		m.stats.subagentMax = int(v)
 	}
 	m.loadEvolve()
 }
@@ -147,105 +157,130 @@ func (m *model) sidebarText() string {
 	var lines []string
 	lines = append(lines, styleDim.Render("cata"))
 
-	lines = m.appendEnvSidebarSections(lines, innerW)
-	lines = m.appendSessionSidebarSections(lines, innerW)
+	lines = m.appendContextSidebarSections(lines, innerW)
 	lines = m.appendActivitySidebarSections(lines, innerW)
+	lines = m.appendDelegateSidebarSections(lines, innerW)
+
+	if len(lines) > 1 {
+		lines = append(lines, sidebarDivider(innerW))
+		lines = append(lines, styleDim.Render("/status 环境与工具"))
+	}
 
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) appendEnvSidebarSections(lines []string, innerW int) []string {
-	e := m.runtime
-	first := len(lines) <= 1
-
-	plat := []string{
-		"宿主平台  " + e.HostPlatform(),
-		"命令平台  " + e.CommandPlatform(),
-		"架构      " + e.Arch,
+func sidebarShortPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
 	}
-	lines = appendSidebarSection(lines, innerW, sidebarSection{"平台", plat}, !first)
-	first = false
-
-	shell := []string{"类型  " + e.Shell}
-	if e.ShellPath != "" {
-		shell = append(shell, e.ShellPath)
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimRight(p, "/")
+	parts := strings.Split(p, "/")
+	if len(parts) <= 2 {
+		return p
 	}
-	shell = append(shell, "语法  "+e.ShellSyntaxLabel())
-	lines = appendSidebarSection(lines, innerW, sidebarSection{"Shell", shell}, true)
-
-	if e.Terminal != "" {
-		lines = appendSidebarSection(lines, innerW, sidebarSection{"终端", []string{e.Terminal}}, true)
-	}
-
-	lines = appendSidebarSection(lines, innerW, sidebarSection{"PATH 工具", e.Tools.SidebarToolLines()}, true)
-	lines = appendSidebarSection(lines, innerW, sidebarSection{"Cata 工具", m.cataToolsSidebarLines()}, true)
-
-	return lines
+	return strings.Join(parts[len(parts)-2:], "/")
 }
 
-func (m *model) cataToolsSidebarLines() []string {
-	cfg := config.Config
-	if cfg == nil {
-		return []string{"（配置未加载）"}
+func sidebarShortModel(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
 	}
-	return []string{
-		"run_command  " + sidebarOnOff(cfg.Exec.Enabled),
-		"文件工具     " + sidebarOnOff(cfg.WorkspaceFilesEnabled()),
-		"browser MCP  " + sidebarOnOff(cfg.MCP.Enabled),
-		"run_skill    开",
+	if len(name) <= 22 {
+		return name
 	}
+	return name[:20] + "…"
 }
 
-func sidebarOnOff(on bool) string {
-	if on {
-		return "开"
+func sidebarModelLine(chatModel string) string {
+	byRole := llm.ModelsByRole()
+	chat := strings.TrimSpace(chatModel)
+	if chat == "" {
+		chat = byRole["chat"]
 	}
-	return "关"
+	if chat == "" {
+		return ""
+	}
+	line := sidebarShortModel(chat)
+	var alt []string
+	if evo := byRole["evolution"]; evo != "" && evo != chat {
+		alt = append(alt, "evo:"+sidebarShortModel(evo))
+	}
+	if w := byRole["worker"]; w != "" && w != chat && w != byRole["evolution"] {
+		alt = append(alt, "wrk:"+sidebarShortModel(w))
+	}
+	if len(alt) > 0 {
+		line += " · " + strings.Join(alt, " ")
+	}
+	return line
 }
 
-func (m *model) appendSessionSidebarSections(lines []string, innerW int) []string {
+func sidebarFormatTokens(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("~%dk tok", (n+500)/1000)
+	}
+	return fmt.Sprintf("~%d tok", n)
+}
+
+func (m *model) appendContextSidebarSections(lines []string, innerW int) []string {
 	var body []string
-	if m.stats.wsID != "" {
-		body = append(body, "workspace  "+m.stats.wsID)
+	path := sidebarShortPath(m.stats.focusPath)
+	if path == "" {
+		path = sidebarShortPath(m.stats.outputCwd)
 	}
-	if m.stats.focusPath != "" {
-		body = append(body, m.stats.focusPath)
+	if path != "" {
+		body = append(body, path)
 	}
-	if m.stats.outputCwd != "" {
-		body = append(body, "产出区  "+m.stats.outputCwd)
+	if out := sidebarShortPath(m.stats.outputCwd); out != "" && out != path {
+		body = append(body, "产出 "+out)
 	}
 	if m.stats.mode != "" {
-		body = append(body, "mode  "+m.stats.mode)
+		body = append(body, m.stats.mode)
 	}
-	if m.stats.evolveOn {
-		body = append(body, fmtEvolveLine(m.stats.evolveSec))
-	} else {
-		body = append(body, "evolve  关")
+	if model := sidebarModelLine(m.stats.chatModel); model != "" {
+		body = append(body, model)
 	}
 	if len(body) == 0 {
 		return lines
 	}
-	return appendSidebarSection(lines, innerW, sidebarSection{"会话", body}, true)
+	return appendSidebarSection(lines, innerW, sidebarSection{"上下文", body}, true)
 }
 
 func (m *model) appendActivitySidebarSections(lines []string, innerW int) []string {
 	var body []string
-	if m.stats.round > 0 || m.stats.turns > 0 {
-		body = append(body, fmt.Sprintf("round %d  turns %d", m.stats.round, m.stats.turns))
+	if m.stats.round > 0 || m.streaming {
+		act := fmt.Sprintf("r%d", m.stats.round)
+		state := strings.TrimSpace(m.stats.state)
+		switch {
+		case m.streaming:
+			act += " · 流式"
+		case state != "" && state != "ready":
+			act += " · " + state
+		}
+		body = append(body, act)
 	}
-	if m.stats.sessionTok > 0 {
-		body = append(body, fmt.Sprintf("tokens  ~%d", m.stats.sessionTok))
+	if m.stats.lastTool != "" && (m.streaming || m.stats.state == "tool") {
+		body = append(body, m.stats.lastTool)
 	}
-	if m.stats.lastTool != "" {
-		body = append(body, "last  "+m.stats.lastTool)
+	if m.stats.subagentRunning > 0 {
+		max := m.stats.subagentMax
+		if max <= 0 {
+			max = 4
+		}
+		body = append(body, fmt.Sprintf("worker %d/%d", m.stats.subagentRunning, max))
 	}
-	if m.stats.state != "" && m.stats.state != "ready" {
-		body = append(body, "state  "+m.stats.state)
+	if tok := sidebarFormatTokens(m.stats.sessionTok); tok != "" {
+		body = append(body, tok)
 	}
 	if len(body) == 0 {
 		return lines
 	}
-	return appendSidebarSection(lines, innerW, sidebarSection{"本轮", body}, true)
+	return appendSidebarSection(lines, innerW, sidebarSection{"活动", body}, true)
 }
 
 func (m *model) statusDump() string {
@@ -259,9 +294,31 @@ func (m *model) statusDump() string {
 		b.WriteString("focus: " + m.stats.focusPath + "\n")
 	}
 	b.WriteString("out: " + m.stats.outputCwd + "\n")
+	if m.stats.mode != "" {
+		b.WriteString("mode: " + m.stats.mode + "\n")
+	}
+	if m.stats.evolveOn {
+		b.WriteString(fmtEvolveLine(m.stats.evolveSec) + "\n")
+	} else {
+		b.WriteString("evolve: off\n")
+	}
+	if m.stats.evolveLast != "" {
+		b.WriteString("evolve last: " + m.stats.evolveLast + "\n")
+	}
 	b.WriteString(fmt.Sprintf("round %d turns %d tools %d\n", m.stats.round, m.stats.turns, m.stats.tools))
 	if cfg := config.Config; cfg != nil {
 		b.WriteString(cfg.LLM.Provider + " / " + cfg.LLM.Model + "\n")
+		if byRole := llm.ModelsByRole(); len(byRole) > 0 {
+			b.WriteString("models: ")
+			var parts []string
+			for _, role := range []string{"chat", "evolution", "worker", "summarize"} {
+				if m := byRole[role]; m != "" {
+					parts = append(parts, role+"="+m)
+				}
+			}
+			b.WriteString(strings.Join(parts, " "))
+			b.WriteString("\n")
+		}
 	}
 	e := m.runtime
 	b.WriteString("\n── environment ──\n")
@@ -274,7 +331,14 @@ func (m *model) statusDump() string {
 	b.WriteString("\n")
 	b.WriteString("shell syntax: " + e.ShellSyntaxLabel() + "\n")
 	b.WriteString("\n" + e.ToolsAvailabilityBlock())
+	if cfg := config.Config; cfg != nil {
+		b.WriteString("\n── cata tools ──\n")
+		b.WriteString("run_command: " + sidebarOnOff(cfg.Exec.Enabled) + "\n")
+		b.WriteString("files: " + sidebarOnOff(cfg.WorkspaceFilesEnabled()) + "\n")
+		b.WriteString("browser mcp: " + sidebarOnOff(cfg.MCP.Enabled) + "\n")
+	}
 	b.WriteString("\n" + brain.ServerRegisteredToolsBlock())
+	b.WriteString("\nsubagent log: " + brain.SubagentRunsCSVPathActive() + "\n")
 	return b.String()
 }
 
@@ -289,4 +353,11 @@ func fmtEvolveLine(sec int) string {
 		return fmt.Sprintf("evolve %dm", sec/60)
 	}
 	return fmt.Sprintf("evolve %ds", sec)
+}
+
+func sidebarOnOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }

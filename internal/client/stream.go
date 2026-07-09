@@ -16,22 +16,30 @@ type streamEvent struct {
 }
 
 func readStreamEvent(s *session) streamEvent {
-	line, err := s.readLine()
-	if err != nil {
-		return streamEvent{kind: "io", err: err}
+	const maxGarbageSkips = 8
+	skips := 0
+	for {
+		line, err := s.readLine()
+		if err != nil {
+			return streamEvent{kind: "io", err: err}
+		}
+		if len(line) == 0 {
+			return streamEvent{kind: "skip"}
+		}
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			skips++
+			if skips >= maxGarbageSkips {
+				return streamEvent{kind: "io", err: err}
+			}
+			continue
+		}
+		k, _ := ev["type"].(string)
+		if k == "done" {
+			return streamEvent{kind: "done", raw: ev, done: true}
+		}
+		return streamEvent{kind: k, raw: ev}
 	}
-	if len(line) == 0 {
-		return streamEvent{kind: "skip"}
-	}
-	var ev map[string]any
-	if err := json.Unmarshal(line, &ev); err != nil {
-		return streamEvent{kind: "io", err: err}
-	}
-	k, _ := ev["type"].(string)
-	if k == "done" {
-		return streamEvent{kind: "done", raw: ev, done: true}
-	}
-	return streamEvent{kind: k, raw: ev}
 }
 
 func execLine(ev map[string]any) string {

@@ -16,6 +16,7 @@ const (
 	FileEvolveCrystallize          = "evolve/crystallize.md"
 	FileEvolveDecisionScope        = "evolve/decision_scope.md"
 	FileEvolveDecisionFooter       = "evolve/decision_footer.md"
+	FileEvolvePatchModes           = "evolve/patch_modes.md"
 )
 
 // Load 读取 embed 中的提示词；修改 prompt/ 下文件后须重新 go build。
@@ -33,7 +34,15 @@ func Load(rel string) string {
 
 // EvolveSystemPrompt 常规演进 system。
 func EvolveSystemPrompt() string {
-	return Load(FileEvolveSystem)
+	base := strings.TrimSpace(Load(FileEvolveSystem))
+	modes := strings.TrimSpace(Load(FileEvolvePatchModes))
+	if base == "" {
+		return modes
+	}
+	if modes == "" {
+		return base
+	}
+	return base + "\n\n" + modes
 }
 
 // EvolveSessionCompressPrompt 会话压缩演进 system。

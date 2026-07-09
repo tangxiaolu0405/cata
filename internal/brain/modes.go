@@ -29,7 +29,7 @@ func normalizeModePathRel(rel string) string {
 
 // migrateDefaultModeAlias 合并误建的 modes/default/ 到 modes/_default/ 并删除前者。
 func (w *Workspace) migrateDefaultModeAlias() error {
-	wrong := filepath.Join(w.Dir(), DirModes, "default")
+	wrong := filepath.Join(w.ProjectCataRoot(), DirModes, "default")
 	right := w.ModeDir(ModeDefaultID)
 	st, err := os.Stat(wrong)
 	if err != nil {

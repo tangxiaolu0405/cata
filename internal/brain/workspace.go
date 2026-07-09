@@ -10,7 +10,8 @@ import (
 	"cata/internal/clock"
 )
 
-// Workspace 脑子的一格分区（~/.cata/brain/workspaces/<id>/），由 focus_path 选中，不是产出区。
+// Workspace 脑子的一格分区：home 格（~/.cata/brain/workspaces/<id>/）存 memory/meta；
+// 项目文档（persona、modes、skills）在 focus_path/.cata/。
 type Workspace struct {
 	ID         string
 	RootPath   string // focus_path：绑定键（git 根 / yaml 目录 / cwd），用于选脑子
@@ -19,25 +20,25 @@ type Workspace struct {
 	ActiveMode string
 }
 
-// Dir 返回该格脑子在 CATA_HOME 下的目录。
+// Dir 返回 home 脑子格目录（memory、meta、evolution_log）；项目文档见 ProjectCataRoot。
 func (w *Workspace) Dir() string {
 	return filepath.Join(workspacesRoot(), w.ID)
 }
 
 func (w *Workspace) metaPath() string { return filepath.Join(w.Dir(), RelMetaJSON) }
 
-// ModeDir 返回某 mode 目录。
+// ModeDir 返回项目 .cata 下某 mode 目录。
 func (w *Workspace) ModeDir(modeID string) string {
-	return filepath.Join(w.Dir(), DirModes, NormalizeModeID(modeID))
+	return filepath.Join(w.ProjectCataRoot(), DirModes, NormalizeModeID(modeID))
 }
 
 func (w *Workspace) modeID() string {
 	return NormalizeModeID(w.ActiveMode)
 }
 
-// PersonaLocalPath workspace 级项目说明。
+// PersonaLocalPath 项目级 focus 说明（focus_path/.cata/persona.local.md）。
 func (w *Workspace) PersonaLocalPath() string {
-	return filepath.Join(w.Dir(), RelPersonaLocal)
+	return filepath.Join(w.ProjectCataRoot(), RelPersonaLocal)
 }
 
 // PersonaPath 当前 mode 的 persona（≈ 原 hot.md）。
@@ -91,22 +92,28 @@ func (w *Workspace) saveMeta() error {
 	return os.WriteFile(w.metaPath(), data, 0644)
 }
 
-// EnsureScaffold 创建 workspace 目录树与 _default mode。
+// EnsureScaffold 创建 home 记忆目录与项目 .cata 文档树。
 func (w *Workspace) EnsureScaffold() error {
 	if err := os.MkdirAll(w.Dir(), 0755); err != nil {
 		return err
 	}
-	dirs := []string{
+	if err := os.MkdirAll(w.ProjectCataRoot(), 0755); err != nil {
+		return err
+	}
+	for _, d := range []string{
 		filepath.Join(w.Dir(), "memory", "short"),
 		w.LongTermDir(),
 		w.ArchiveDir(),
 		w.ModeDir(ModeDefaultID),
-		filepath.Join(w.Dir(), DirSkills),
-	}
-	for _, d := range dirs {
+		filepath.Join(w.ProjectCataRoot(), DirSkills),
+	} {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", d, err)
 		}
+	}
+
+	if err := w.migrateHomeBrainDocsToProject(); err != nil {
+		return err
 	}
 
 	if err := w.saveMeta(); err != nil {
@@ -135,9 +142,6 @@ func (w *Workspace) EnsureScaffold() error {
 	if err := ensureFile(w.MemoryIndexPath(), `{"version":1,"entries":[]}`+"\n"); err != nil {
 		return err
 	}
-	if err := w.migrateDefaultModeAlias(); err != nil {
-		return err
-	}
 	return writeProjectLink(w)
 }
 
@@ -153,7 +157,7 @@ func ensureFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-const defaultPersonaLocal = `# Focus context（在脑子里）
+const defaultPersonaLocal = `# Focus context（项目 .cata）
 
 > 对 focus_path 所指对象（常为 git 根）的说明；**不是**产出区 cwd 的全文镜像。
 

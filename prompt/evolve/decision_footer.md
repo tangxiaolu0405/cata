@@ -1,1 +1,1 @@
-Respond with one compact JSON object only (no markdown). Keep reason/learning short; limit updates to ≤3 items.
+Respond with one compact JSON object only (no markdown). Keep reason/learning short; limit updates to ≤3 items. Pick patch mode by intent: replace_section to update existing ## sections; append only for memory logs or genuinely new non-overlapping facts; overwrite for fill/compact.

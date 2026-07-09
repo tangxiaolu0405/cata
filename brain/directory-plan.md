@@ -1,51 +1,61 @@
-# 目录规划：脑子 vs 产出区
+# 目录规划：引导 vs 主要内容 vs 产出区
 
-## 两个世界
+## 三个世界
 
 ```
-┌─ 脑子 CATA_HOME（默认 ~/.cata/）──┐   ┌─ 产出区 cwd ──────────────────┐
-│ 记忆、persona、演进、config        │   │ 源码、文件、构建产物、run_command │
-│ 不进用户 git，本机私有             │   │ 进用户 git                      │
-└────────────────────────────────────┘   └────────────────────────────────┘
-              ▲
-              │ focus_path（git root / workspace.yaml / cwd）决定用哪格脑子
-              │
+┌─ CATA_HOME ~/.cata/ ─────────────┐   ┌─ 项目 focus_path/.cata/ ─────┐   ┌─ 产出区 cwd ─────────┐
+│ 引导 global/、运行时记忆、config   │   │ persona、modes、skills（主要内容）│   │ 源码、构建、命令结果   │
+│ 不进用户 git（除用户自管 global）  │   │ 可随 git 提交（按需 .gitignore）  │   │ 进用户 git           │
+└──────────────────────────────────┘   └──────────────────────────────────┘   └──────────────────────┘
+              ▲                                      ▲
+              │         focus_path 绑定 ws_id           │
+              └────────────────────────────────────────┘
 ```
 
-## ~/.cata 完整布局
+## ~/.cata 布局（CATA_HOME）
 
 ```text
-~/.cata/                            # CATA_HOME
-├── config.json                     # LLM、exec、evolution 配置
-├── cata.sock                       # Unix socket
-├── registry/
-│   └── workspaces.json             # focus_path → workspace_id 索引
-├── global/                         # 全机级（种子来自仓库 brain/）
-│   ├── constraints.md              # ← brain/constraints.md
-│   ├── behavior.md                 # ← brain/behavior.md
-│   └── boot-assembler.md           # ← brain/boot-assembler.md
-├── locks/                          # 产出区锁（同目录只允许一个 chat）
-└── brain/workspaces/<ws_id>/       # 一格脑子
-    ├── meta.json                   # focus_path、kind、active_mode
-    ├── persona.local.md            # 对当前关注对象的说明
-    ├── evolution_log.json          # 本 workspace 演进审计
-    ├── memory/
-    │   ├── index.json              # 摘要索引（常驻 context）
-    │   ├── short/current.md        # 对话流水（每轮追加）
-    │   ├── long/                   # 长期记忆（evolve 读写，参与 context index）
-    │   └── archive/                # 冷存储（summarize 移入，不参与 evolve 和 context）
-    ├── modes/
-    │   ├── _default/               # 默认 mode（新建 workspace 必有）
-    │   │   ├── persona.md          # mode persona（evolve 维护）
-    │   │   ├── behavior.md         # mode 行为覆盖
-    │   │   ├── constraints.md      # mode 约束覆盖
-    │   │   └── capabilities.yaml   # skills: [...] + mcp: [...]
-    │   └── <mode-id>/              # 由 evolve 分叉或用户创建
-    └── skills/<id>/
-        ├── SKILL.md                # 技能说明（注入 context）
-        ├── manifest.yaml           # 执行声明
-        └── script.{py,sh,...}      # 脚本（cwd=产出区执行）
+~/.cata/
+├── config.json
+├── cata.sock
+├── registry/workspaces.json
+├── global/                         # 引导型提示词（evolve 禁止 patch）
+│   ├── constraints.md
+│   ├── behavior.md
+│   └── boot-assembler.md
+├── locks/
+├── skills/                         # 全局 skill 回退目录
+└── brain/workspaces/<ws_id>/       # home 脑子格（运行时记忆）
+    ├── meta.json
+    ├── evolution_log.json
+    └── memory/
+        ├── index.json
+        ├── short/current.md
+        ├── long/
+        └── archive/
 ```
+
+## 项目 focus_path/.cata/（主要内容）
+
+```text
+<focus_path>/.cata/
+├── workspace.yaml                  # 可选：name、active_mode
+├── workspace.link                  # 可选：id → home 格
+├── persona.local.md                # 项目说明（evolve 维护）
+├── modes/
+│   ├── _default/
+│   │   ├── persona.md
+│   │   ├── behavior.md
+│   │   ├── constraints.md
+│   │   └── capabilities.yaml
+│   └── <mode-id>/
+└── skills/<id>/
+    ├── SKILL.md
+    ├── manifest.yaml
+    └── script.*
+```
+
+首次 `EnsureScaffold` 会将旧版 home 格内的 persona/modes/skills **迁移**到此目录（`workspace_migrate_project.go`）。
 
 ## focus_path 解析
 
@@ -53,55 +63,35 @@
 2. 否则找 `.cata/workspace.yaml` → `KindMarked`
 3. 否则 cwd → `KindEphemeral`
 
-`focus_path` 只决定用哪格脑子，不改变产出区位置。monorepo 子目录干活时脑子仍绑 git 根。
+`focus_path` 只决定绑定哪格脑子（`ws_id`），不改变产出区位置。
 
-## 项目内 `.cata/`
-
-```text
-<项目>/.cata/
-├── workspace.yaml    # 可选：name、active_mode
-└── workspace.link    # 可选：id: ws_xxx → 指向 ~/.cata/brain/<id>
-```
-
-- 可提交 git：`workspace.yaml`、`workspace.link`
-- 不可提交：persona、short-term 正文（始终在 `~/.cata`）
-
-## 仓库 `brain/` vs 运行时 `~/.cata/`
+## 仓库 `brain/` vs 运行时
 
 | 位置 | 角色 |
 |------|------|
-| `mybot/brain/constraints.md` | 约束模板 → `cata init` 拷到 `global/constraints.md` |
-| `mybot/brain/behavior.md` | 行为模板 → `cata init` 拷到 `global/behavior.md` |
-| `mybot/brain/boot-assembler.md` | 引导模板 → `cata init` 拷到 `global/boot-assembler.md` |
-| `~/.cata/` | 运行时脑子（live，由 server + evolve 维护） |
+| `brain/constraints.md` 等 | 模板种子 → `cata init` → `~/.cata/global/` |
+| `~/.cata/` | 引导 + 运行时记忆 + config |
+| `focus_path/.cata/` | 项目主要内容（evolve 迭代 **active_mode**） |
 | cwd | 产出区 |
 
-各文件作用与 **evolve 可 patch / 只读 / 注入** 边界见 **[brain-files.md](./brain-files.md)**（与 `internal/brain/evolve_boundary.go` 对齐）。
+各文件演进边界见 **[brain-files.md](./brain-files.md)**（`internal/brain/evolve_boundary.go`）。
 
 ## 命名约定
 
 | 避免 | 改用 |
 |------|------|
-| "工作区 = ~/.cata" | 脑子 = ~/.cata，产出区 = cwd |
-| "workspace 在 home 里" | 脑子分区 `<ws_id>` 在 `~/.cata/brain/workspaces/` |
-| "brain 在项目里" | 项目里只有 `.cata` 声明；脑子在 home |
-
-## 环境变量与配置
-
-| 项 | 作用 |
-|----|------|
-| `CATA_HOME` | 脑子根（默认 `~/.cata`） |
-| `brain.base_dir` | 产出区根（exec、文件工具） |
-| `llm.api_key` / `DEEPSEEK_API_KEY` | LLM 密钥 |
+| "脑子 = 全部在 ~/.cata" | 引导+记忆在 ~/.cata；主要内容在 `focus_path/.cata/` |
+| "workspace 在 home 里" | home 格 `<ws_id>` 在 `brain/workspaces/` |
+| "brain 在项目里" | 项目 `.cata` 是主要内容，不是 CATA_HOME |
 
 ## 数据流
 
 ```
 cata chat --dir <产出区>
     │
-    ├─ focus_path 解析 → 选中 ~/.cata/brain/workspaces/<id>/
-    ├─ LLM 注入：global + mode persona + persona.local + memory index + skills
-    ├─ run_command / 文件工具 → 产出区
-    ├─ 每轮成功 → AppendChatTurn → memory/short/current.md
-    └─ 上下文 ≥ 85% → evolve 压缩 → persona / long
+    ├─ focus_path → ws_id + 项目 .cata/
+    ├─ LLM 注入：global 引导 + 项目内容 + memory index + skills
+    ├─ 文件工具 / run_command → 产出区
+    ├─ 每轮成功 → home memory/short/current.md
+    └─ evolve → 提炼进项目 .cata；细节进 home memory/long；过大时 compact
 ```

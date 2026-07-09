@@ -33,7 +33,10 @@ func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
 		reg.Register(&runCommandTool{ss: ss})
 	}
 	reg.Register(&runSkillTool{})
+	reg.Register(&readSkillTool{})
 	reg.Register(&askUserTool{ss: ss})
+	reg.Register(&delegateTaskTool{ss: ss})
+	reg.Register(&delegateWaitTool{ss: ss})
 }
 
 // --- read_file ---
@@ -45,13 +48,13 @@ func (t *readFileTool) Name() string { return "read_file" }
 func (t *readFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "read_file",
-		Description: "Read a text file. Path: default=output cwd; brain/…=workspace brain cell; global/…=~/.cata/global/. Use before editing.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path: default=output cwd; brain/… or global/… for brain files"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
+		Description: "Read a text file. Path: default=output cwd; " + brain.ChatBrainToolPathNote + " global/…=~/.cata/global/. Response includes resolved= absolute path.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path: default=output; brain/persona.local → focus_path/.cata/; brain/memory/ → home cell; global/…"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
 	}}
 }
 
-func (t *readFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
-	return toolReadFile(argsJSON)
+func (t *readFileTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolReadFile(ctx, argsJSON)
 }
 
 // --- search_replace ---
@@ -63,7 +66,7 @@ func (t *searchReplaceTool) Name() string { return "search_replace" }
 func (t *searchReplaceTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "search_replace",
-		Description: "Replace old_string with new_string (first match unless replace_all). Path: default=output; brain/… or global/… for brain files.",
+		Description: "Replace old_string with new_string (first match unless replace_all). " + brain.ChatBrainToolPathNote + " Response includes resolved=.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}`),
 	}}
 }
@@ -81,7 +84,7 @@ func (t *appendFileTool) Name() string { return "append_file" }
 func (t *appendFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "append_file",
-		Description: "Append text to a file (creates if missing). Path: default=output; brain/… or global/… for brain files.",
+		Description: "Append text to a file (creates if missing). " + brain.ChatBrainToolPathNote + " Response includes resolved=.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`),
 	}}
 }
@@ -237,6 +240,28 @@ func (t *runSkillTool) Execute(ctx context.Context, _ net.Conn, argsJSON string)
 	return brain.RunSkill(ctx, p)
 }
 
+// --- read_skill ---
+
+type readSkillTool struct{}
+
+func (t *readSkillTool) Name() string { return "read_skill" }
+
+func (t *readSkillTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "read_skill",
+		Description: "Load full SKILL.md for a skill id from the Cata skills index (capabilities.yaml). Use before run_skill when you need complete instructions.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from the skills index"}},"required":["skill"]}`),
+	}}
+}
+
+func (t *readSkillTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p brain.ReadSkillArgs
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("read_skill args: %w", err)
+	}
+	return brain.ReadSkill(ctx, p)
+}
+
 // --- ask_user ---
 
 type askUserTool struct{ ss *SocketServer }
@@ -310,7 +335,7 @@ func (t *createFileTool) Name() string { return "create_file" }
 func (t *createFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "create_file",
-		Description: "Create a new file. Path: default=output; brain/… or global/… for brain files. Fails if exists unless overwrite.",
+		Description: "Create a new file. " + brain.ChatBrainToolPathNote + " Response includes resolved=.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path (default output; brain/… or global/…)"},"content":{"type":"string","description":"File content"},"overwrite":{"type":"boolean","description":"If true, overwrite existing file (default false)"}},"required":["path","content"]}`),
 	}}
 }
@@ -346,7 +371,7 @@ func (t *createFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string)
 	if err := os.WriteFile(full, []byte(p.Content), 0644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("create_file %s: wrote %d bytes", p.Path, len(p.Content)), nil
+	return fmt.Sprintf("create_file %s resolved=%s: wrote %d bytes", p.Path, full, len(p.Content)), nil
 }
 
 // --- list_files ---
@@ -358,47 +383,11 @@ func (t *listFilesTool) Name() string { return "list_files" }
 func (t *listFilesTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "list_files",
-		Description: "List files and directories. Path: default=output root; brain/ or global/ for brain areas.",
+		Description: "List files and directories. default=output; brain/ routes per " + brain.ChatBrainToolPathNote,
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Directory: default=output; brain/ or global/ (optional, default root)"}},"required":[]}`),
 	}}
 }
 
-func (t *listFilesTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
-	var p struct {
-		Path string `json:"path"`
-	}
-	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
-		return "", fmt.Errorf("list_files args: %w", err)
-	}
-	rel := strings.TrimSpace(p.Path)
-	if rel == "" {
-		rel = "."
-	}
-	full, err := resolveWorkspaceFile(rel)
-	if err != nil {
-		return "", err
-	}
-	entries, err := os.ReadDir(full)
-	if err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("list_files %s (%d entries)\n", rel, len(entries)))
-	for _, e := range entries {
-		info, err := e.Info()
-		size := int64(0)
-		isDir := " "
-		if err == nil {
-			size = info.Size()
-			if e.IsDir() {
-				isDir = "d"
-			}
-		}
-		name := e.Name()
-		if e.IsDir() {
-			name += "/"
-		}
-		b.WriteString(fmt.Sprintf("  %s %10d  %s\n", isDir, size, name))
-	}
-	return b.String(), nil
+func (t *listFilesTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolListFiles(ctx, argsJSON)
 }

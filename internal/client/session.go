@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
 
 	"cata/internal/brain"
 	"cata/internal/config"
@@ -29,6 +30,7 @@ type resp struct {
 type session struct {
 	conn        net.Conn
 	br          *bufio.Reader
+	mu          sync.Mutex
 	lastExecCmd string
 	lastExecCwd string
 }
@@ -45,6 +47,8 @@ func dial() (*session, error) {
 }
 
 func (s *session) write(v any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -54,11 +58,18 @@ func (s *session) write(v any) error {
 }
 
 func (s *session) readLine() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	line, err := s.br.ReadBytes('\n')
 	if err != nil {
 		return nil, err
 	}
-	return bytes.TrimSpace(line), nil
+	return sanitizeSocketLine(line), nil
+}
+
+func sanitizeSocketLine(line []byte) []byte {
+	line = bytes.ReplaceAll(line, []byte{0}, nil)
+	return bytes.TrimSpace(line)
 }
 
 func (s *session) call(r req) (resp, error) {
@@ -74,6 +85,8 @@ func (s *session) call(r req) (resp, error) {
 }
 
 func (s *session) writeChoice(choiceID string, selected []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	b, err := json.Marshal(map[string]any{
 		"command":   "user_choice",
 		"choice_id": choiceID,

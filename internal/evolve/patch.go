@@ -18,7 +18,7 @@ type DocUpdate struct {
 	Content string `json:"content"`
 }
 
-// ApplyUpdates 将补丁写入指定 workspace 格子（禁止 global/*）。
+// ApplyUpdates 将补丁写入项目 .cata 或 home 脑子格（禁止 global/*）。
 func ApplyUpdates(ws *brain.Workspace, updates []DocUpdate) ([]string, error) {
 	if ws == nil {
 		return nil, fmt.Errorf("workspace required")

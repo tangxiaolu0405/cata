@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,8 @@ func (e *Engine) runAll(ctx context.Context) {
 	if len(list) == 0 {
 		return
 	}
+	prev := brain.Active()
+	defer brain.SetActive(prev)
 	for _, ws := range list {
 		brain.SetActive(ws)
 		if err := e.runCycle(ctx, ws, false, false); err != nil {
@@ -178,6 +181,9 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		if err != nil {
 			return fmt.Errorf("apply: %w", err)
 		}
+		if extra := compactTouchedProjectContent(ws, touched); len(extra) > 0 {
+			touched = append(touched, extra...)
+		}
 	}
 	if crystallize && (action == "crystallize_skill" || len(touched) > 0) {
 		ingestCrystallizedSkills(ws, touched)
@@ -247,6 +253,12 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 	b.WriteString(ws.ID)
 	b.WriteString(" focus_path=")
 	b.WriteString(ws.RootPath)
+	b.WriteString(" active_mode=")
+	b.WriteString(brain.NormalizeModeID(ws.ActiveMode))
+	b.WriteString(" project_cata=")
+	b.WriteString(ws.ProjectCataRoot())
+	b.WriteString(" home_brain=")
+	b.WriteString(ws.Dir())
 	if ws.Name != "" {
 		b.WriteString(" name=")
 		b.WriteString(ws.Name)
@@ -287,17 +299,27 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 			b.WriteString("\n\n(short_term unchanged since last evolution; excerpt omitted)\n")
 		}
 		if hot, err := readFileCap(ws.PersonaPath(), 1200); err == nil && hot != "" {
-			b.WriteString("\n\ncurrent mode persona (this workspace — update via append_section / replace_section):\n")
+			b.WriteString("\n\ncurrent mode persona (project content — modes/")
+			b.WriteString(brain.NormalizeModeID(ws.ActiveMode))
+			b.WriteString("/persona.md):\n")
 			b.WriteString(hot)
 		}
+		modeDir := ws.ModeDir(brain.NormalizeModeID(ws.ActiveMode))
+		if beh, err := readFileCap(filepath.Join(modeDir, brain.FileBehavior), 800); err == nil && beh != "" && !brain.FileNeedsEvolveFill(filepath.Join(modeDir, brain.FileBehavior)) {
+			b.WriteString("\n\ncurrent mode behavior (project content):\n")
+			b.WriteString(beh)
+		}
 		if local, err := readFileCap(ws.PersonaLocalPath(), 1200); err == nil {
-			b.WriteString("\n\ncurrent persona.local (this focus_path project):\n")
+			b.WriteString("\n\ncurrent persona.local (project content):\n")
 			b.WriteString(local)
 		}
 	}
 	if mustFill := brainDocsNeedingFill(ws); len(mustFill) > 0 {
 		b.WriteString("\n\nMUST fill scaffold brain docs this cycle (this workspace only; from short_term): ")
 		b.WriteString(strings.Join(mustFill, ", "))
+	}
+	if hasCompactTrigger(snap) {
+		b.WriteString("\n\nMUST compact project content this cycle: remove duplicates and stale bullets; merge overlapping ## sections with replace_section or rewrite with overwrite. Do not append redundant text. Target each file under ~3500 bytes. action should be consolidate.")
 	}
 	if snap.RecentLogSummary != "" {
 		b.WriteString("\n\nrecent evolution: ")

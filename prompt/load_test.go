@@ -14,8 +14,15 @@ func TestLoad_embeddedEvolveSystem(t *testing.T) {
 
 func TestEvolveSessionCompressPrompt_composes(t *testing.T) {
 	s := EvolveSessionCompressPrompt()
-	if !strings.Contains(s, "自主演进") || !strings.Contains(s, "对话轮次阈值") {
+	if !strings.Contains(s, "自主演进") || !strings.Contains(s, "consolidate") {
 		t.Fatal("expected base + session compress extra")
+	}
+}
+
+func TestEvolveSystemPrompt_includesPatchModes(t *testing.T) {
+	s := EvolveSystemPrompt()
+	if !strings.Contains(s, "replace_section") || !strings.Contains(s, "patch 模式选用") {
+		t.Fatal("expected patch_modes.md merged into system prompt")
 	}
 }
 

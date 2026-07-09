@@ -132,16 +132,6 @@ func newHTTPClientPair(timeout time.Duration) (*http.Client, *http.Client) {
 	return regular, stream
 }
 
-// Role 表示 LLM 使用角色（不同用途可绑定不同模型）
-type Role string
-
-const (
-	RoleDefault   Role = "default"
-	RoleChat      Role = "chat"
-	RoleEvolution Role = "evolution"
-	RoleSummarize Role = "summarize" // 保留供后续扩展
-)
-
 var (
 	bootLeaderOnce   sync.Once
 	bootLeaderPrompt string
@@ -189,7 +179,7 @@ func ensureCataBrainExcerptSystem(msgs []Message) []Message {
 		}
 		c := strings.TrimSpace(m.Content)
 		if strings.HasPrefix(c, brain.TerminalPathsSystemPrefix) ||
-			strings.HasPrefix(c, brain.TerminalBundleSystemPrefix) {
+			brain.BrainExcerptInjected(c) {
 			return msgs
 		}
 	}
@@ -419,6 +409,11 @@ type ChatRequest struct {
 	NoBrainInject bool `json:"-"`
 	// DisableThinking 为 true 时强制 DeepSeek thinking=disabled，保证 JSON 落在 content。
 	DisableThinking bool `json:"-"`
+	// LogKind 写入 llm.log 的 kind 字段（默认 chat_round）。
+	LogKind string `json:"-"`
+	// SubagentID / SessionID worker 轮次审计（可选）。
+	SubagentID string `json:"-"`
+	SessionID  string `json:"-"`
 }
 
 // ChatResponse 聊天响应
@@ -872,12 +867,18 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 
 	entry := map[string]interface{}{
 		"timestamp":      clock.RFC3339(),
-		"kind":           "chat_round",
+		"kind":           llmLogKind(req),
 		"url":            c.apiURL,
 		"model":          c.model,
 		"prompt_sources": inferPromptSources(effectiveMessages),
 		"prompt":         buildPromptManifest(effectiveMessages, tools, toolChoice, req.MaxTokens, req.Temperature),
 		"response":       respLog,
+	}
+	if req.SubagentID != "" {
+		entry["subagent_id"] = req.SubagentID
+	}
+	if req.SessionID != "" {
+		entry["session_id"] = req.SessionID
 	}
 	if llmLogVerbose() {
 		entry["request_full"] = map[string]interface{}{
@@ -906,6 +907,13 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		log.Printf("Failed to write LLM log entry to %s: %v", logPath, err)
 	}
+}
+
+func llmLogKind(req ChatRequest) string {
+	if k := strings.TrimSpace(req.LogKind); k != "" {
+		return k
+	}
+	return "chat_round"
 }
 
 // IsAvailable 检查 LLM 客户端是否可用（检查 API key）

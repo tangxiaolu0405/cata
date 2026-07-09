@@ -41,6 +41,7 @@ const (
 	ProjectCataDir      = ".cata"
 	FileWorkspaceYAML   = "workspace.yaml"
 	FileWorkspaceLink   = "workspace.link"
+	DirSubagentRuns     = "subagent_runs"
 )
 
 // CataHome 状态根（~/.cata）。

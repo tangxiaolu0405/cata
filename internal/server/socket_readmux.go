@@ -70,12 +70,10 @@ func (r *connLineReader) pump() {
 	defer r.wg.Done()
 	defer close(r.inbox)
 	for {
-		select {
-		case <-r.stopCh:
+		if r.stopped() {
 			return
-		default:
 		}
-		raw, err := r.readLine(time.Now().Add(30 * time.Second))
+		raw, err := r.readLine()
 		if err != nil {
 			return
 		}
@@ -99,33 +97,41 @@ func (r *connLineReader) pump() {
 	}
 }
 
-func (r *connLineReader) readLine(deadline time.Time) (json.RawMessage, error) {
+func (r *connLineReader) stopped() bool {
+	select {
+	case <-r.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// readLine blocks until a non-empty client line, stop, or connection error.
+// Socket read timeouts are retried so long LLM/tool rounds do not kill the pump.
+func (r *connLineReader) readLine() (json.RawMessage, error) {
 	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("read timed out")
+		select {
+		case <-r.stopCh:
+			return nil, fmt.Errorf("stopped")
+		default:
 		}
 		_ = r.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		line, err := r.br.ReadBytes('\n')
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				select {
-				case <-r.stopCh:
-					return nil, fmt.Errorf("stopped")
-				default:
-					continue
-				}
+				continue
+			}
+			select {
+			case <-r.stopCh:
+				return nil, fmt.Errorf("stopped")
+			default:
 			}
 			return nil, err
 		}
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
-		}
-		select {
-		case <-r.stopCh:
-			return nil, fmt.Errorf("stopped")
-		default:
 		}
 		_ = r.conn.SetReadDeadline(time.Time{})
 		return json.RawMessage(line), nil
