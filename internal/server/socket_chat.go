@@ -78,7 +78,6 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
-	mcp.EnsureInit()
 	if len(ss.buildTerminalChatToolsForTier(ToolTierLight)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})

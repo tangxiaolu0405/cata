@@ -140,7 +140,7 @@ func EnsureShortTermFileFor(w *Workspace) error {
 	return err
 }
 
-// FinalizeShortTermAfterConsolidate 将当前 short-term 归档到 memory/long/ 并重置文件，避免演进重复喂同一段原文。
+// FinalizeShortTermAfterConsolidate 将当前 short-term 归档到 memory/archive/ 并重置文件，避免演进重复喂同一段原文。
 // keepRecentBytes 为 0 时使用 DefaultKeepRecentAfterConsolidate。
 func FinalizeShortTermAfterConsolidate(keepRecentBytes int) (archivedRel string, err error) {
 	w, err := MustActive()
@@ -164,7 +164,7 @@ func FinalizeShortTermAfterConsolidate(keepRecentBytes int) (archivedRel string,
 
 	ts := clock.RFC3339()
 	archiveName := fmt.Sprintf("consolidated-%s.md", clock.Format("2006-01-02-150405"))
-	archivedRel = filepath.Join(RelMemoryLong, archiveName)
+	archivedRel = filepath.Join(RelMemoryArchive, archiveName)
 	archiveAbs := w.Path(archivedRel)
 	if err := os.MkdirAll(filepath.Dir(archiveAbs), 0755); err != nil {
 		return "", err

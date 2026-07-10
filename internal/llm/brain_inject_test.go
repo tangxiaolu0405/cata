@@ -13,7 +13,7 @@ func TestWorkerBrainInjectMinimal(t *testing.T) {
 	if len(out) < 3 {
 		t.Fatalf("expected boot+brain+user, got %d messages", len(out))
 	}
-	if out[0].Role != "system" || !strings.Contains(out[0].Content, brain.MinimalBootPrompt[:20]) {
+	if out[0].Role != "system" || !strings.Contains(out[0].Content, brain.LoadMinimalBootPrompt()[:8]) {
 		t.Fatal("missing minimal boot")
 	}
 	if !strings.HasPrefix(out[1].Content, brain.TerminalPathsSystemPrefix) {

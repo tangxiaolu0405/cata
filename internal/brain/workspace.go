@@ -142,6 +142,9 @@ func (w *Workspace) EnsureScaffold() error {
 	if err := ensureFile(w.MemoryIndexPath(), `{"version":1,"entries":[]}`+"\n"); err != nil {
 		return err
 	}
+	if err := MigrateLearningFragmentsFor(w); err != nil {
+		return err
+	}
 	return writeProjectLink(w)
 }
 
@@ -159,21 +162,25 @@ func ensureFile(path, content string) error {
 
 const defaultPersonaLocal = `# Focus context（项目 .cata）
 
-> 对 focus_path 所指对象（常为 git 根）的说明；**不是**产出区 cwd 的全文镜像。
+> **只写仓库事实**（项目是什么、数据源、产出目录、技术栈）。身份/偏好 → modes/…/persona.md；SOP/格式 → modes/…/behavior.md。
 
-## Current focus
+## Project
+
+## Tech stack
+
+## Current snapshot
+
+> 仅保留会变的运行态（如最新交易日、当日统计）；稳定事实放 Project。整节 replace，勿复制到 persona.md。
 
 `
 
 const defaultModePersona = `# Persona
 
-> Identity and preferences for this mode (maintained by autonomous evolution from short-term memory).
+> **只写身份与偏好**（自称、语气、用户偏好与禁忌）。项目事实 → persona.local.md；流水线/格式 → behavior.md。
 
 ## Who I am
 
-## Current goals
-
-## Preferences
+## Preferences & taboos
 
 `
 

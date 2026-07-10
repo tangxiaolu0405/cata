@@ -35,6 +35,10 @@ func shouldFinalizeShortTerm(dec *Decision, touched []string, snap *Snapshot, se
 
 func archRel(touched []string) string {
 	for _, p := range touched {
+		if strings.HasPrefix(p, brain.RelMemoryArchive+"/consolidated-") {
+			return p
+		}
+		// legacy: short-term 曾归档到 memory/long/
 		if strings.HasPrefix(p, brain.RelMemoryLong+"/consolidated-") {
 			return p
 		}

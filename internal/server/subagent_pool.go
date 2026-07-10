@@ -204,7 +204,7 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 	st := &subagentTask{
 		id:            id,
 		task:          task,
-		context:       parentContext,
+		context:       brain.EnrichWorkerDelegateContext(parentContext),
 		model:         client.ModelName(),
 		maxRounds:     maxRounds,
 		tools:         tools,

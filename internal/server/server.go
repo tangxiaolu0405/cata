@@ -57,7 +57,14 @@ func (s *Server) Start() error {
 	socketSrv.Start()
 	log.Println("✓ Socket server started")
 
-	log.Println("- MCP: lazy init on first chat (if enabled)")
+	if config.Config != nil && config.Config.MCP.Enabled {
+		go func() {
+			log.Println("MCP: background warm (non-blocking)")
+			mcp.EnsureInit()
+		}()
+	} else {
+		log.Println("- MCP: disabled or lazy init on full tier")
+	}
 
 	if config.Config != nil && config.Config.Evolution.Enabled {
 		interval := time.Duration(config.Config.Evolution.CycleInterval) * time.Second

@@ -1,0 +1,30 @@
+{
+  "description": "Delegate a bounded sub-task to a **minimal-brain worker** (cheap model, parallel). Worker has NO persona/memory/skills—YOU must supply everything in task+context. Parent plans and explores; worker only executes. Do NOT paste large data in task—save to file and pass path in context. Use native/relative paths for output_cwd. Returns sub-id immediately; use delegate_wait for results.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task": {
+        "type": "string",
+        "description": "Executable brief: (1) goal (2) input paths/commands—no huge pasted data (3) output path+format+acceptance (4) scope/forbidden edits"
+      },
+      "context": {
+        "type": "string",
+        "description": "Facts parent already knows: data file paths, schema/columns, decisions, format—so worker does not re-explore. Strongly recommended."
+      },
+      "tools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Tool whitelist e.g. read_file, create_file, run_command"
+      },
+      "max_rounds": {
+        "type": "integer",
+        "description": "Max tool rounds (default config subagent.default_max_rounds, max 16)"
+      },
+      "wait": {
+        "type": "boolean",
+        "description": "If true, block until this worker finishes"
+      }
+    },
+    "required": ["task"]
+  }
+}

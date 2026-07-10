@@ -18,6 +18,16 @@ updates[].path 为**逻辑相对路径**（如 `modes/_default/persona.md`、`me
 
 **patch 模式**：见下文「patch 模式选用」；按场景选 `replace_section` / `append` / `overwrite`，勿无脑 append。
 
+**learning 字段**
+- `learning`：本轮审计摘要（≤120 字），写入 `evolution_log.json`；**同时**追加到 home `memory/long/learnings.md`（单文件 playbook）
+- **禁止**再创建 `memory/long/learnings/learning-*.md` 碎片文件
+- **可复用、会影响后续行为的 durable 事实**必须通过 `updates[]` 写入：
+  - 用户偏好/输出格式 → `modes/<active_mode>/persona.md`
+  - 项目 SOP/流程 → `modes/<active_mode>/behavior.md` 或 `memory/long/workflow_sop.md`
+  - 仓库事实/路径约定 → `persona.local.md`
+  - 子 agent/工具踩坑 → `memory/long/sub-agent-failures.md`
+- 若本轮只有 `learning` 而无 `updates[]`，视为未结晶；下一轮应优先 consolidate 进上述文档
+
 **项目主要内容 — 摘要**
 - 更新已有事实 → **replace_section**（首选）
 - 新 ## 节且尚无该节 → **append_section**
@@ -25,16 +35,17 @@ updates[].path 为**逻辑相对路径**（如 `modes/_default/persona.md`、`me
 - 仅当无法归入任何节、且与现有内容不重复 → 可 **append**（文末）
 - consolidate：按节合并 short-term，去重；细节进 `memory/long/`
 
-**写入路由**
-| 路径 | 物理位置 | 写什么 |
-|------|----------|--------|
-| modes/<active_mode>/persona.md | 项目 `.cata` | 用户偏好与习惯（从 short-term 提炼） |
-| persona.local.md | 项目 `.cata` | 仓库用途、技术栈、当前任务 |
-| modes/<active_mode>/behavior.md | 项目 `.cata` | 本项目 SOP |
+**写入路由**（互斥，详见「项目 .cata 三文件互斥路由」）
+| 路径 | 物理位置 | 写什么 | 勿写 |
+|------|----------|--------|------|
+| persona.local.md | 项目 `.cata` | 项目事实、技术栈、`## Current snapshot` 运行态 | 身份、偏好、SOP、格式 |
+| modes/<active_mode>/persona.md | 项目 `.cata` | 身份（Who I am）、偏好与禁忌 | 项目事实、流水线、表头格式 |
+| modes/<active_mode>/behavior.md | 项目 `.cata` | 流水线、输出格式、公众号排版 | 身份、选股偏好（归 persona） |
 | modes/<active_mode>/constraints.md | 项目 `.cata` | 本项目补充约束 |
 | skills/<id>/* | 项目 `.cata` | crystallize 固化 |
+| memory/long/learnings.md | home 脑子格 | 每轮 learning 滚动账本（单文件） |
 | memory/long/*.md | home 脑子格 | 细节、长事实 |
-| memory/short/current.md | home 脑子格 | 对话流水（consolidate 后可归档） |
+| memory/short/current.md | home 脑子格 | 对话流水（consolidate 后归档到 memory/archive/consolidated-*.md） |
 | memory/index.json | home 脑子格 | 记忆索引（补丁后同步） |
 
 - capabilities.yaml：禁止 append（skill 名由 server 追加）；write/overwrite 须保留 mcp:

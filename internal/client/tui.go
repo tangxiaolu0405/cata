@@ -468,7 +468,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	if m.cwd != "" {
 		outCwd = m.cwd
 	}
-	rt := brain.DetectRuntimeEnvFromProcess()
+	rt := m.runtime
 	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt}); err != nil {
 		m.streaming = false
 		m.input.Focus()

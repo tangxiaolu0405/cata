@@ -57,3 +57,11 @@ func TestBuildWorkerToolsIncludesReadSkillAndRunCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestMaybeAppendDelegateHints(t *testing.T) {
+	started := formatDelegateStarted("sub-1", "m", 4, 3, "/tmp")
+	got := maybeAppendDelegateHints(started, strings.Repeat("x", 3000), "")
+	if !strings.Contains(got, "context empty") || !strings.Contains(got, "very long") {
+		t.Fatalf("got %q", got)
+	}
+}

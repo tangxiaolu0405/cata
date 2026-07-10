@@ -24,6 +24,9 @@ func TestEvolveSystemPrompt_includesPatchModes(t *testing.T) {
 	if !strings.Contains(s, "replace_section") || !strings.Contains(s, "patch 模式选用") {
 		t.Fatal("expected patch_modes.md merged into system prompt")
 	}
+	if !strings.Contains(s, "三文件互斥路由") {
+		t.Fatal("expected project_content_routing.md merged into system prompt")
+	}
 }
 
 func min(a, b int) int {

@@ -28,17 +28,17 @@ func EvolvePathCatalog() []EvolvePathRole {
 		{
 			Rel: "modes/<mode>/persona.md", WrittenBy: "evolve",
 			EvolveObserve: true, EvolveInput: true, EvolvePatch: true, ContextInject: true,
-			Notes: "身份结晶；路径 focus_path/.cata/modes/<mode>/persona.md",
+			Notes: "身份与偏好（Who I am、Preferences）；勿写项目事实/SOP；focus_path/.cata/modes/<mode>/persona.md",
 		},
 		{
 			Rel: "persona.local.md", WrittenBy: "evolve",
 			EvolveObserve: false, EvolveInput: true, EvolvePatch: true, ContextInject: true,
-			Notes: "focus_path/.cata/persona.local.md",
+			Notes: "仓库事实与 Current snapshot；勿写身份/偏好/SOP；focus_path/.cata/persona.local.md",
 		},
 		{
 			Rel: "modes/<mode>/behavior.md", WrittenBy: "evolve",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: true, ContextInject: true,
-			Notes: "项目主要内容 SOP；focus_path/.cata/modes/<mode>/behavior.md",
+			Notes: "流水线、输出格式、公众号排版；勿写身份/偏好；focus_path/.cata/modes/<mode>/behavior.md",
 		},
 		{
 			Rel: "modes/<mode>/constraints.md", WrittenBy: "evolve",
@@ -49,6 +49,11 @@ func EvolvePathCatalog() []EvolvePathRole {
 			Rel: "modes/<mode>/capabilities.yaml", WrittenBy: "init + evolve（skill 名）",
 			EvolveObserve: false, EvolveInput: false, EvolvePatch: true, ContextInject: false,
 			Notes: "append 仍由 server 追加 skill；write/overwrite 须保留 mcp:",
+		},
+		{
+			Rel: "memory/long/learnings.md", WrittenBy: "evolve（每轮 learning 追加）",
+			EvolveObserve: true, EvolveInput: false, EvolvePatch: true, ContextInject: false,
+			Notes: "单文件 playbook；经 memory/index.json 摘要注入；碎片 learning-*.md 已废弃",
 		},
 		{
 			Rel: "memory/long/*.md", WrittenBy: "evolve",

@@ -15,9 +15,7 @@ const (
 	PromptProfileLight = PromptProfileMinimal
 )
 
-// MinimalBootPrompt minimal 档固定 boot（不读完整 boot-assembler.md）。
-const MinimalBootPrompt = `你是 Cata 终端助手。遵守：不虚构路径；产出区=当前 output_cwd；读写改文件须用工具，禁止只写代码块假装已执行；run_command 等敏感操作须用户确认；脑子在 CATA_HOME，交付物写在产出区。`
-
+	// MinimalBootPrompt 已迁至 ~/.cata/global/minimal-boot.md；代码请用 LoadMinimalBootPrompt()。
 var promptProfileMu sync.RWMutex
 var activePromptProfile PromptProfile = PromptProfileFull
 

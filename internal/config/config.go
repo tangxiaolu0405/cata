@@ -147,12 +147,12 @@ func MaxSubagentConcurrent() int {
 	return 4
 }
 
-// DefaultSubagentMaxRounds delegate_task 默认工具轮次上限（默认 6）。
+// DefaultSubagentMaxRounds delegate_task 默认工具轮次上限（默认 8）。
 func DefaultSubagentMaxRounds() int {
 	if Config != nil && Config.Subagent.DefaultMaxRounds > 0 {
 		return Config.Subagent.DefaultMaxRounds
 	}
-	return 6
+	return 8
 }
 
 // SubagentMaxOutputTokens worker 单次 completion 上限（0 = 用 LLM 客户端默认）。
@@ -288,7 +288,7 @@ func getDefaultConfig() *AppConfig {
 		},
 		Subagent: SubagentConfig{
 			MaxConcurrent:      4,
-			DefaultMaxRounds:   6,
+			DefaultMaxRounds:   8,
 			MaxToolResultBytes: 8192,
 		},
 		MCP: MCPConfig{
@@ -542,7 +542,7 @@ func normalizeSubagentConfig(s *SubagentConfig) {
 		s.MaxConcurrent = 4
 	}
 	if s.DefaultMaxRounds <= 0 {
-		s.DefaultMaxRounds = 6
+		s.DefaultMaxRounds = 8
 	}
 	if s.MaxToolResultBytes <= 0 {
 		s.MaxToolResultBytes = 8192

@@ -83,6 +83,9 @@ func (e *Engine) runAll(ctx context.Context) {
 		if err := e.runCycle(ctx, ws, false, false); err != nil {
 			log.Printf("Autonomous evolution [%s]: %v", ws.ID, err)
 		}
+		if err := brain.MaintainLongMemoryAfterEvolution(ws); err != nil {
+			log.Printf("Autonomous evolution [%s]: long memory maintain: %v", ws.ID, err)
+		}
 	}
 }
 
@@ -319,7 +322,7 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 		b.WriteString(strings.Join(mustFill, ", "))
 	}
 	if hasCompactTrigger(snap) {
-		b.WriteString("\n\nMUST compact project content this cycle: remove duplicates and stale bullets; merge overlapping ## sections with replace_section or rewrite with overwrite. Do not append redundant text. Target each file under ~3500 bytes. action should be consolidate.")
+		b.WriteString("\n\nMUST compact project content this cycle: remove duplicates and stale bullets; **dedupe across persona.local, mode persona, and behavior** (each fact in one file only); merge overlapping ## sections with replace_section or rewrite with overwrite. Do not append redundant text. Target each file under ~3500 bytes. action should be consolidate.")
 	}
 	if snap.RecentLogSummary != "" {
 		b.WriteString("\n\nrecent evolution: ")

@@ -26,9 +26,20 @@ func summarizeLongTerm(ws *brain.Workspace) ([]string, error) {
 
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			files = append(files, e.Name())
+		if e.IsDir() {
+			continue
 		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if brain.IsLongMemoryCanonicalFile(name) {
+			continue
+		}
+		if !brain.IsLongMemoryBulkFile(name) {
+			continue
+		}
+		files = append(files, name)
 	}
 	if len(files) < longTermSummarizeMinFiles {
 		return nil, nil

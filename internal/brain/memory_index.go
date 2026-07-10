@@ -89,6 +89,7 @@ func SaveMemoryIndexFor(w *Workspace, idx *MemoryIndex) error {
 	}
 	idx.Version = memoryIndexVersion
 	idx.UpdatedAt = clock.RFC3339()
+	canonicalizeIndexEntries(idx)
 	data, err := json.MarshalIndent(idx, "", "  ")
 	if err != nil {
 		return err
@@ -113,6 +114,10 @@ func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel strin
 		if rel == "" || seen[rel] || strings.HasPrefix(rel, RelMemoryArchive+"/") {
 			continue
 		}
+		if isLegacyLearningFragmentRel(rel) {
+			continue
+		}
+		rel = normalizeModePathRel(rel)
 		seen[rel] = true
 		entry, ok := indexEntryFromFile(rel, now)
 		if !ok {
@@ -121,7 +126,7 @@ func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel strin
 		idx.Upsert(entry)
 	}
 
-	if arch := strings.TrimSpace(archivedRel); arch != "" {
+	if arch := strings.TrimSpace(archivedRel); arch != "" && !strings.HasPrefix(filepath.ToSlash(arch), RelMemoryArchive+"/") {
 		entry := IndexEntry{
 			ID:              indexIDFromSource(arch),
 			Source:          arch,
@@ -142,22 +147,11 @@ func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel strin
 	}
 
 	if learn := strings.TrimSpace(learning); utf8.RuneCountInString(learn) >= 24 {
-		id := fmt.Sprintf("learning-%s", clock.Format("20060102-150405"))
-		idx.Upsert(IndexEntry{
-			ID:              id,
-			Source:          RelMemoryLong + "/learnings/" + id + ".md",
-			Summary:         truncateRunes(learn, maxIndexSummaryRunes),
-			Keywords:        extractKeywords(learn, "learning"),
-			Category:        "fact",
-			Priority:        5,
-			DisclosureLevel: "index",
-			UpdatedAt:       now,
-		})
-		// 可选：把 learning 落盘，便于按需 read
 		if w := Active(); w != nil {
-			p := w.Path(RelMemoryLong + "/learnings/" + id + ".md")
-			_ = os.MkdirAll(filepath.Dir(p), 0755)
-			_ = os.WriteFile(p, []byte("# Evolution learning\n\n"+learn+"\n"), 0644)
+			_ = appendLearningPlaybook(w, learn, now)
+			if entry, ok := indexEntryFromFile(RelMemoryLongLearnings, now); ok {
+				idx.Upsert(entry)
+			}
 		}
 	}
 
@@ -201,6 +195,11 @@ func (idx *MemoryIndex) Prune(max int) {
 
 // MemoryIndexPromptBlock 注入对话的紧凑索引（不含全文）。
 func MemoryIndexPromptBlock(maxBytes int) string {
+	return MemoryIndexPromptBlockFor(ActivePromptProfile(), maxBytes)
+}
+
+// MemoryIndexPromptBlockFor 按 profile 过滤索引：full 档跳过已在【项目内容】全文注入的 modes/persona.local。
+func MemoryIndexPromptBlockFor(p PromptProfile, maxBytes int) string {
 	if maxBytes <= 0 {
 		maxBytes = maxIndexPromptBytes
 	}
@@ -211,9 +210,15 @@ func MemoryIndexPromptBlock(maxBytes int) string {
 	var b strings.Builder
 	b.WriteString("【Cata 记忆索引】\n\n")
 	b.WriteString("> 条目为脑子内文档摘要；`read_file` 用 source 路径（如 `brain/persona.local.md` 或 `brain/memory/long/…`）；磁盘位置见【Cata 路径】块 resolved 映射。\n\n")
+	if ProfileRank(p) >= 2 {
+		b.WriteString("> full 档：modes/persona.local 已在【项目内容】全文注入，此处不重复列出。\n\n")
+	}
 	used := 0
 	count := 0
 	for _, e := range idx.entriesByPriority() {
+		if skipIndexEntryForPrompt(e, p) {
+			continue
+		}
 		line := fmt.Sprintf("- [%s] p%d %s — %s\n", e.Category, e.Priority, e.Source, e.Summary)
 		if used+len(line) > maxBytes {
 			b.WriteString("\n…(index truncated)\n")
@@ -230,6 +235,48 @@ func MemoryIndexPromptBlock(maxBytes int) string {
 		return ""
 	}
 	return b.String()
+}
+
+// isProjectContentFullInjectSource 是否由 terminalProjectContentExcerpt 全文注入（full 档）。
+func isProjectContentFullInjectSource(rel string) bool {
+	rel = normalizeModePathRel(filepath.ToSlash(strings.TrimSpace(rel)))
+	if rel == RelPersonaLocal {
+		return true
+	}
+	if !strings.HasPrefix(rel, DirModes+"/") {
+		return false
+	}
+	switch filepath.Base(rel) {
+	case FilePersona, FileBehavior, FileConstraints:
+		return true
+	default:
+		return false
+	}
+}
+
+func skipIndexEntryForPrompt(e IndexEntry, p PromptProfile) bool {
+	if ProfileRank(p) < 2 {
+		return false
+	}
+	return isProjectContentFullInjectSource(e.Source)
+}
+
+func canonicalizeIndexEntries(idx *MemoryIndex) {
+	if idx == nil || len(idx.Entries) == 0 {
+		return
+	}
+	seen := make(map[string]bool)
+	var out []IndexEntry
+	for _, e := range idx.Entries {
+		e.Source = normalizeModePathRel(filepath.ToSlash(strings.TrimSpace(e.Source)))
+		if e.Source == "" || seen[e.Source] {
+			continue
+		}
+		seen[e.Source] = true
+		e.ID = indexIDFromSource(e.Source)
+		out = append(out, e)
+	}
+	idx.Entries = out
 }
 
 func (idx *MemoryIndex) entriesByPriority() []IndexEntry {
@@ -276,6 +323,10 @@ func inferIndexCategory(rel string) (category string, priority int, disclosure s
 		return "preference", 9, "index"
 	case strings.HasSuffix(rel, "persona.local.md"):
 		return "fact", 7, "index"
+	case rel == RelMemoryLongLearnings:
+		return "procedure", 6, "index"
+	case rel == RelMemoryLongSessionNotes:
+		return "episodic", 5, "index"
 	case strings.HasPrefix(rel, RelMemoryLong+"/consolidated-"):
 		return "episodic", 4, "index"
 	case strings.HasPrefix(rel, RelMemoryLong+"/"):

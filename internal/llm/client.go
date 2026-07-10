@@ -162,11 +162,11 @@ func effectiveBootLeaderPrompt() string {
 func effectiveBootLeaderPromptFor(profile brain.PromptProfile) string {
 	switch brain.ProfileRank(profile) {
 	case 0:
-		return brain.MinimalBootPrompt
+		return brain.LoadMinimalBootPrompt()
 	case 1:
 		prompt := strings.TrimSpace(loadBootLeaderPrompt())
 		if prompt == "" {
-			return brain.MinimalBootPrompt
+			return brain.LoadMinimalBootPrompt()
 		}
 		return truncateRunes(prompt, maxBootLeaderRunesTask)
 	default:

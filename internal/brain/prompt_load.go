@@ -1,0 +1,132 @@
+package brain
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+
+	"cata/internal/config"
+)
+
+// DelegateTaskToolSpec OpenAI 工具 schema 文案（~/.cata/global/tools/delegate-task-tool.json 或嵌入模板）。
+type DelegateTaskToolSpec struct {
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+var promptCache sync.Map // cache key -> string
+
+func loadGlobalPrompt(cacheKey, globalRel, embedPath, fallback string) string {
+	if v, ok := promptCache.Load(cacheKey); ok {
+		return v.(string)
+	}
+	s := readGlobalPromptFile(globalRel, embedPath, fallback)
+	promptCache.Store(cacheKey, s)
+	return s
+}
+
+func readGlobalPromptFile(globalRel, embedPath, fallback string) string {
+	p := filepath.Join(globalDir(), globalRel)
+	if data, err := os.ReadFile(p); err == nil {
+		if s := strings.TrimSpace(CompactExcessiveNewlines(string(data))); s != "" {
+			return s
+		}
+	}
+	if data, err := embeddedGuidanceFS.ReadFile(embedPath); err == nil {
+		if s := strings.TrimSpace(CompactExcessiveNewlines(string(data))); s != "" {
+			return s
+		}
+	}
+	return fallback
+}
+
+func readGlobalJSON(globalRel, embedPath string) ([]byte, error) {
+	p := filepath.Join(globalDir(), globalRel)
+	if data, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		return data, nil
+	}
+	return embeddedGuidanceFS.ReadFile(embedPath)
+}
+
+// LoadMinimalBootPrompt worker minimal 档 boot（~/.cata/global/minimal-boot.md）。
+func LoadMinimalBootPrompt() string {
+	return loadGlobalPrompt("minimal-boot", FileGlobalMinimalBoot, "guidance/minimal-boot.md",
+		"你是 Cata 终端助手。遵守：不虚构路径；产出区=当前 output_cwd；读写改文件须用工具。")
+}
+
+// LoadDelegateGuideBlock 父 Agent 委派准则（~/.cata/global/delegate-guide.md）。
+func LoadDelegateGuideBlock() string {
+	return loadGlobalPrompt("delegate-guide", FileGlobalDelegateGuide, "guidance/delegate-guide.md",
+		"### delegate_task\n\nWorker 为 minimal 脑子；task 须含目标/输入路径/输出验收；context 传数据路径与 schema。")
+}
+
+// RenderDelegateGuideBlock 渲染委派指南占位符后注入 full 档路径块。
+func RenderDelegateGuideBlock() string {
+	max := 4
+	if cfg := config.Config; cfg != nil && cfg.Subagent.MaxConcurrent > 0 {
+		max = cfg.Subagent.MaxConcurrent
+	}
+	body := LoadDelegateGuideBlock()
+	body = strings.ReplaceAll(body, "{{max_concurrent}}", strconv.Itoa(max))
+	body = strings.ReplaceAll(body, "{{csv_path}}", SubagentRunsCSVPathActive())
+	return body
+}
+
+// SubagentDelegateGuideBlock 兼容旧调用。
+func SubagentDelegateGuideBlock() string {
+	return RenderDelegateGuideBlock()
+}
+
+// LoadWorkerContract worker 角色与 STATUS 格式（~/.cata/global/worker-contract.md）。
+func LoadWorkerContract() string {
+	return loadGlobalPrompt("worker-contract", FileGlobalWorkerContract, "guidance/worker-contract.md",
+		"You are a Cata worker. Execute the task only. Reply with STATUS/RESULT/ARTIFACTS/NOTES when done.")
+}
+
+// LoadDelegateTaskToolSpec delegate_task 工具 description + parameters。
+func LoadDelegateTaskToolSpec() (DelegateTaskToolSpec, error) {
+	fallback := DelegateTaskToolSpec{
+		Description: "Delegate bounded sub-task to minimal-brain worker.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}`),
+	}
+	data, err := readGlobalJSON(filepath.Join("tools", FileGlobalDelegateTaskTool), "guidance/delegate-task-tool.json")
+	if err != nil {
+		return fallback, nil
+	}
+	var spec DelegateTaskToolSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return fallback, fmt.Errorf("delegate-task-tool.json: %w", err)
+	}
+	if spec.Description == "" || len(spec.Parameters) == 0 {
+		return fallback, nil
+	}
+	return spec, nil
+}
+
+// EnrichWorkerDelegateContext 服务端补全 worker context（动态 cwd/平台 + 父 context）。
+func EnrichWorkerDelegateContext(parentContext string) string {
+	var b strings.Builder
+	if out := strings.TrimSpace(OutputCwd()); out != "" {
+		b.WriteString("output_cwd: `")
+		b.WriteString(out)
+		b.WriteString("`\n")
+	}
+	if env := ActiveRuntimeEnv(); env != nil {
+		b.WriteString(fmt.Sprintf("host/command: %s/%s  shell: %s\n", env.HostPlatform(), env.CommandPlatform(), env.Shell))
+		if !env.ShellSupportsUnixSyntax() {
+			b.WriteString("paths: use Windows-native or paths relative to output_cwd; avoid /mnt/d/ unless WSL.\n")
+		}
+	}
+	pc := strings.TrimSpace(parentContext)
+	if b.Len() > 0 && pc != "" {
+		b.WriteString("\n--- parent context ---\n")
+	}
+	if pc != "" {
+		b.WriteString(pc)
+	}
+	return strings.TrimSpace(b.String())
+}

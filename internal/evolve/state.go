@@ -71,9 +71,13 @@ func Observe(ws *brain.Workspace) (*Snapshot, error) {
 
 	if entries, err := os.ReadDir(ws.LongTermDir()); err == nil {
 		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-				s.LongTermFileCount++
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
 			}
+			if brain.IsLongMemoryCanonicalFile(e.Name()) {
+				continue
+			}
+			s.LongTermFileCount++
 		}
 	}
 

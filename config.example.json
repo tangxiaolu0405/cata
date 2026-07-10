@@ -53,7 +53,7 @@
   },
   "subagent": {
     "max_concurrent": 4,
-    "default_max_rounds": 6,
+    "default_max_rounds": 8,
     "max_tool_result_bytes": 8192,
     "default_tools": null
   },

@@ -101,23 +101,17 @@ type delegateTaskTool struct {
 func (t *delegateTaskTool) Name() string { return "delegate_task" }
 
 func (t *delegateTaskTool) Schema() llm.Tool {
+	spec, err := brain.LoadDelegateTaskToolSpec()
+	if err != nil {
+		spec = brain.DelegateTaskToolSpec{
+			Description: "Delegate bounded sub-task to minimal-brain worker.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}`),
+		}
+	}
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name: "delegate_task",
-		Description: "Delegate a **bounded, deterministic** sub-task to a cheap worker model (parallel up to subagent.max_concurrent). " +
-			"Use when the parent already planned the work and the worker only needs to execute: include goal, concrete inputs/paths, done criteria; " +
-			"optional context (facts parent already knows) and tools whitelist reduce cost. " +
-			"Not for open-ended exploration or user choices. Returns immediately; use delegate_wait for summaries.",
-		Parameters: json.RawMessage(`{
-			"type":"object",
-			"properties":{
-				"task":{"type":"string","description":"Bounded executable task: goal, inputs/paths, and done criteria"},
-				"context":{"type":"string","description":"Optional facts from parent (paths, decisions) so worker does not re-discover"},
-				"tools":{"type":"array","items":{"type":"string"},"description":"Optional tool name whitelist (e.g. read_file, run_command)"},
-				"max_rounds":{"type":"integer","description":"Max tool rounds (default from config subagent.default_max_rounds, max 16)"},
-				"wait":{"type":"boolean","description":"If true, block until this sub-agent finishes (disables parallel benefit for this call)"}
-			},
-			"required":["task"]
-		}`),
+		Name:        "delegate_task",
+		Description: spec.Description,
+		Parameters:  spec.Parameters,
 	}}
 }
 
@@ -146,6 +140,7 @@ func (t *delegateTaskTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	if err != nil {
 		return "", err
 	}
+	started = maybeAppendDelegateHints(started, task, p.Context)
 	if !p.Wait {
 		return started, nil
 	}
@@ -165,6 +160,26 @@ func clampDelegateRounds(n int) int {
 		return delegateMaxRoundsCap
 	}
 	return n
+}
+
+// maybeAppendDelegateHints 父 Agent 委派后附简短提示（minimal worker 依赖 task/context）。
+func maybeAppendDelegateHints(started, task, parentContext string) string {
+	var hints []string
+	if strings.TrimSpace(parentContext) == "" {
+		hints = append(hints, "hint: context empty—minimal worker needs file paths, schema, and decisions in context")
+	}
+	if len(task) > 2500 {
+		hints = append(hints, "hint: task is very long—save data to files and reference paths in context")
+	}
+	if strings.Contains(task, "/mnt/") {
+		if env := brain.ActiveRuntimeEnv(); env != nil && !env.ShellSupportsUnixSyntax() {
+			hints = append(hints, "hint: task uses /mnt/ paths on non-WSL shell—use output_cwd-relative or native Windows paths")
+		}
+	}
+	if len(hints) == 0 {
+		return started
+	}
+	return started + "\n" + strings.Join(hints, "\n")
 }
 
 type delegateWaitTool struct {

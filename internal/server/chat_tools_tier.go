@@ -144,7 +144,9 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ToolTier) []llm.Tool 
 		copy(out, ss.chatToolsCache)
 		return out
 	}
-	mcp.EnsureInit()
+	if tier == ToolTierFull {
+		mcp.EnsureInit()
+	}
 	allow := make(map[string]struct{}, len(tierToolNames(tier)))
 	for _, n := range tierToolNames(tier) {
 		allow[n] = struct{}{}

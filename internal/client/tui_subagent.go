@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -10,7 +11,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// subagentRecord 父 Agent 委派的一条子任务（TUI 侧栏与详情 overlay）。
+var styleSubagent = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+// subagentRecord 父 Agent 委派的一条子任务（侧栏 + 详情 overlay；主区仅 2～3 行摘要）。
 type subagentRecord struct {
 	ID       string
 	Task     string
@@ -20,7 +23,25 @@ type subagentRecord struct {
 	Round    int
 	LastTool string
 	Summary  string
-	Log      string
+	Log      string // 仅 overlay 详情，不写入主对话区
+}
+
+const subagentTaskLineMax = 56
+
+func subagentTaskOneLine(task string) string {
+	task = strings.TrimSpace(task)
+	if task == "" {
+		return "(无任务描述)"
+	}
+	line := task
+	if idx := strings.IndexAny(line, "\r\n"); idx >= 0 {
+		line = strings.TrimSpace(line[:idx])
+	}
+	if utf8.RuneCountInString(line) > subagentTaskLineMax {
+		r := []rune(line)
+		line = string(r[:subagentTaskLineMax]) + "…"
+	}
+	return line
 }
 
 func sidebarProfileLabel(p string) string {
@@ -74,6 +95,23 @@ func (sa *subagentRecord) sidebarState() string {
 	return "运行"
 }
 
+func (sa *subagentRecord) compactActivityLine() string {
+	switch sa.Status {
+	case "queued":
+		return "排队"
+	}
+	if t := strings.TrimSpace(sa.LastTool); t != "" {
+		if sa.Round > 0 {
+			return fmt.Sprintf("%s · r%d", t, sa.Round)
+		}
+		return t
+	}
+	if sa.Round > 0 {
+		return fmt.Sprintf("r%d", sa.Round)
+	}
+	return "运行中"
+}
+
 func (m *model) appendAgentsSidebarSection(lines []string, innerW int) []string {
 	show := m.streaming || m.stats.round > 0 || len(m.subagents) > 0 || m.stats.promptProfile != ""
 	if !show {
@@ -104,7 +142,7 @@ func (m *model) findSubagent(id string) *subagentRecord {
 	return nil
 }
 
-func (m *model) upsertSubagent(id, task, model, profile, status string) {
+func (m *model) upsertSubagent(id, task, model, profile, status string) bool {
 	if rec := m.findSubagent(id); rec != nil {
 		if task != "" {
 			rec.Task = task
@@ -118,7 +156,7 @@ func (m *model) upsertSubagent(id, task, model, profile, status string) {
 		if status != "" {
 			rec.Status = status
 		}
-		return
+		return false
 	}
 	if profile == "" {
 		profile = "minimal"
@@ -129,16 +167,12 @@ func (m *model) upsertSubagent(id, task, model, profile, status string) {
 	m.subagents = append(m.subagents, subagentRecord{
 		ID: id, Task: task, Model: model, Profile: profile, Status: status,
 	})
+	return true
 }
 
-func (m *model) upsertSubagentStart(id, task, model, profile string) {
-	m.upsertSubagent(id, task, model, profile, "running")
-	short := task
-	if len(short) > 72 {
-		short = short[:72] + "…"
-	}
-	m.appendLog(styleTool.Render(fmt.Sprintf("\n▸ [子任务 %s] 父 Agent 委派: %s", id, short))+"\n", true)
-	m.appendLog(styleDim.Render("  （侧栏 Agent 区可点击查看；或按 d）\n"), true)
+func (m *model) logSubagentStart(id, task string) {
+	line := subagentTaskOneLine(task)
+	m.appendLog(styleSubagent.Render(fmt.Sprintf("▸ %s  %s\n", id, line)), true)
 }
 
 func (m *model) removeSubagent(id string) {
@@ -150,7 +184,7 @@ func (m *model) removeSubagent(id string) {
 	}
 }
 
-func (m *model) appendSubagentLog(id, line string) {
+func (m *model) recordSubagentDetail(id, line string) {
 	rec := m.findSubagent(id)
 	if rec == nil {
 		return
@@ -175,15 +209,15 @@ func (m *model) finishSubagent(id string, success bool, summary string) {
 	if rec == nil {
 		return
 	}
-	st := "完成"
-	if !success {
-		st = "失败"
-	}
 	short := strings.TrimSpace(summary)
-	if len(short) > 80 {
-		short = short[:80] + "…"
+	if len(short) > 72 {
+		short = short[:72] + "…"
 	}
-	m.appendLog(styleDim.Render(fmt.Sprintf("  [%s] 子 Agent %s: %s\n", id, st, short)), true)
+	mark := "✓"
+	if !success {
+		mark = "✗"
+	}
+	m.appendLog(styleSubagent.Render(fmt.Sprintf("  %s %s  %s\n", mark, id, short)), true)
 	m.removeSubagent(id)
 	m.syncSidebarViewport()
 }
@@ -193,15 +227,15 @@ func (m *model) handleSubagentStream(kind string, raw map[string]any) {
 	profile := str(raw["prompt_profile"])
 	switch kind {
 	case "subagent_start":
-		m.upsertSubagentStart(id, str(raw["task"]), str(raw["model"]), profile)
+		if m.upsertSubagent(id, str(raw["task"]), str(raw["model"]), profile, "running") {
+			m.logSubagentStart(id, str(raw["task"]))
+		}
 		m.syncSidebarViewport()
 	case "subagent_queued":
-		m.upsertSubagent(id, str(raw["task"]), "", profile, "queued")
-		short := str(raw["task"])
-		if len(short) > 48 {
-			short = short[:48] + "…"
+		if m.upsertSubagent(id, str(raw["task"]), "", profile, "queued") {
+			m.logSubagentStart(id, str(raw["task"]))
+			m.appendLog(styleDim.Render(fmt.Sprintf("  %s  排队\n", id)), false)
 		}
-		m.appendLog(styleDim.Render(fmt.Sprintf("  ⏳ [%s] 排队等待 worker 槽位: %s\n", id, short)), true)
 		m.syncSidebarViewport()
 	case "subagent_progress":
 		if rec := m.findSubagent(id); rec != nil {
@@ -215,7 +249,7 @@ func (m *model) handleSubagentStream(kind string, raw map[string]any) {
 				rec.Status = "running"
 			}
 		}
-		m.appendSubagentLog(id, "• "+str(raw["message"]))
+		m.recordSubagentDetail(id, "• "+str(raw["message"]))
 		m.syncSidebarViewport()
 	case "subagent_tool":
 		phase := str(raw["phase"])
@@ -225,11 +259,11 @@ func (m *model) handleSubagentStream(kind string, raw map[string]any) {
 			m.syncSidebarViewport()
 		}
 		if phase == "start" {
-			m.appendSubagentLog(id, "  ▸ "+name)
+			m.recordSubagentDetail(id, "  ▸ "+name)
 		} else {
 			out := str(raw["output"])
 			if out != "" {
-				m.appendSubagentLog(id, "    "+strings.TrimSpace(out))
+				m.recordSubagentDetail(id, "    "+strings.TrimSpace(out))
 			}
 		}
 	case "subagent_done":
@@ -251,10 +285,7 @@ func (m *model) openSubagentPicker() (tea.Model, tea.Cmd) {
 	var items []list.Item
 	for _, sa := range running {
 		title := sa.ID + "  " + sa.sidebarState()
-		desc := sa.Task
-		if len(desc) > 60 {
-			desc = desc[:60] + "…"
-		}
+		desc := subagentTaskOneLine(sa.Task)
 		items = append(items, pickItem{id: sa.ID, title: title, desc: desc})
 	}
 	l := list.New(items, list.NewDefaultDelegate(), 56, min(10, len(items)+3))

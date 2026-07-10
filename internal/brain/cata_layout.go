@@ -7,15 +7,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-//go:embed guidance/constraints.md guidance/behavior.md guidance/boot-assembler.md
+//go:embed guidance/constraints.md guidance/behavior.md guidance/boot-assembler.md guidance/minimal-boot.md guidance/delegate-guide.md guidance/worker-contract.md guidance/delegate-task-tool.json
 var embeddedGuidanceFS embed.FS
 
-// guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从仓库 brain/ 覆盖 ~/.cata/global 引导三文件。
-const guidanceTemplateVersion = 2
+// guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从嵌入模板覆盖 ~/.cata/global 引导文件。
+const guidanceTemplateVersion = 3
 
 const fileGuidanceVersion = ".guidance_version"
+
+var globalMemoryMigrateOnce sync.Once
 
 // ChatBrainToolPathNote 文件工具 schema 中 brain/ 前缀说明。
 const ChatBrainToolPathNote = "brain/persona.local+modes+skills → focus_path/.cata/; brain/memory/ → ~/.cata/brain/workspaces/<id>/"
@@ -40,14 +43,24 @@ func EnsureCataLayout() error {
 	if err := MigrateWorkspaceNaming(); err != nil {
 		return fmt.Errorf("migrate workspace naming: %w", err)
 	}
-	return MigrateLegacyBrain()
+	if err := MigrateLegacyBrain(); err != nil {
+		return err
+	}
+	globalMemoryMigrateOnce.Do(func() {
+		MigrateAllLearningFragments()
+		MigrateAllLongMemoryCompact()
+	})
+	return nil
 }
 
 func seedGlobalFromRepo() error {
 	mapping := map[string]string{
-		FileGlobalConstraints: "guidance/constraints.md",
-		FileGlobalBehavior:    "guidance/behavior.md",
-		FileGlobalBoot:        "guidance/boot-assembler.md",
+		FileGlobalConstraints:    "guidance/constraints.md",
+		FileGlobalBehavior:       "guidance/behavior.md",
+		FileGlobalBoot:           "guidance/boot-assembler.md",
+		FileGlobalMinimalBoot:    "guidance/minimal-boot.md",
+		FileGlobalDelegateGuide:  "guidance/delegate-guide.md",
+		FileGlobalWorkerContract: "guidance/worker-contract.md",
 	}
 	force := shouldForceSyncGlobalGuidance()
 	for dstName, srcPath := range mapping {
@@ -68,7 +81,28 @@ func seedGlobalFromRepo() error {
 			return err
 		}
 	}
+	if err := seedDelegateTaskToolJSON(force); err != nil {
+		return err
+	}
 	return seedGlobalDefaults()
+}
+
+func seedDelegateTaskToolJSON(force bool) error {
+	toolsDir := filepath.Join(globalDir(), "tools")
+	if err := os.MkdirAll(toolsDir, 0755); err != nil {
+		return err
+	}
+	dst := filepath.Join(toolsDir, FileGlobalDelegateTaskTool)
+	if !force {
+		if _, err := os.Stat(dst); err == nil {
+			return nil
+		}
+	}
+	data, err := embeddedGuidanceFS.ReadFile("guidance/delegate-task-tool.json")
+	if err != nil {
+		return nil
+	}
+	return os.WriteFile(dst, data, 0644)
 }
 
 func shouldForceSyncGlobalGuidance() bool {

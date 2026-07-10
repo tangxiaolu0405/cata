@@ -89,7 +89,7 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 				return b.String()
 			}
 		}
-		if idx := MemoryIndexPromptBlock(maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+		if idx := MemoryIndexPromptBlockFor(p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
 			if !appendBlock(idx) {
 				return b.String()
 			}
@@ -103,7 +103,7 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 			return b.String()
 		}
 	}
-	if idx := MemoryIndexPromptBlock(maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+	if idx := MemoryIndexPromptBlockFor(p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
 		if !appendBlock(idx) {
 			return b.String()
 		}

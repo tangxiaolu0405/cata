@@ -36,6 +36,13 @@ func TestFinishSubagentRemovesFromSidebar(t *testing.T) {
 	}
 }
 
+func TestSubagentTaskOneLine(t *testing.T) {
+	got := subagentTaskOneLine("Parse CSV\nSave to file")
+	if got != "Parse CSV" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestSubagentIDFromSidebarLine(t *testing.T) {
 	id := subagentIDFromSidebarLine("\t子agent  minimal  r2  sub-3")
 	if id != "sub-3" {
