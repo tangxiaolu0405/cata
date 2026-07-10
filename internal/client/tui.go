@@ -70,6 +70,7 @@ type paneStats struct {
 	evolveSec             int
 	evolveLast            string
 	chatModel             string
+	promptProfile         string
 	subagentRunning       int
 	subagentMax           int
 }
@@ -424,6 +425,8 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.stats.turns, m.stats.round, m.stats.tools = 0, 0, 0
 			m.stats.sessionTok = 0
 			m.stats.state = "ready"
+			m.stats.promptProfile = ""
+			m.subagents = nil
 			m.log = styleDim.Render("— session cleared") + "\n"
 			m.setChatContent(true)
 			m.lastIn = ""
@@ -518,6 +521,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	case "tool_start":
 		if n := str(ev.raw["name"]); n != "" {
 			m.stats.lastTool = n
+			m.stats.state = n
 			m.appendLog(styleTool.Render("\n▸ "+n)+"\n", true)
 		}
 	case "tool_result":

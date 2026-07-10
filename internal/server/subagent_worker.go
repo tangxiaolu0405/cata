@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"cata/internal/brain"
 	"cata/internal/config"
 	"cata/internal/llm"
 )
@@ -31,11 +30,6 @@ func buildWorkerSystemPrompt(task, parentContext string) string {
 		b.WriteString("## Parent context (use as facts; do not re-discover)\n\n")
 		b.WriteString(ctx)
 		b.WriteString("\n\n")
-	}
-	if out := strings.TrimSpace(brain.OutputCwd()); out != "" {
-		b.WriteString("## Output cwd\n\n`")
-		b.WriteString(out)
-		b.WriteString("`\n\n")
 	}
 	b.WriteString("## Task\n\n")
 	b.WriteString(strings.TrimSpace(task))

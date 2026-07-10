@@ -40,8 +40,13 @@ func CompactExcessiveNewlines(s string) string {
 	return b.String()
 }
 
-// TerminalBrainSystemExtension 组装出站 system 节选：路径/技能/记忆（运行时）+ 引导（~/.cata）+ 项目内容（focus_path/.cata）。
+// TerminalBrainSystemExtension 组装出站 system 节选（使用当前 ActivePromptProfile）。
 func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
+	return TerminalBrainSystemExtensionFor(ActivePromptProfile(), maxPerFile, maxTotal)
+}
+
+// TerminalBrainSystemExtensionFor 按指定 profile 组装节选（供 worker minimal 注入，避免全局 profile 竞态）。
+func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) string {
 	if maxPerFile <= 0 {
 		maxPerFile = 6500
 	}
@@ -69,8 +74,26 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 		return true
 	}
 
-	paths := TerminalPathsSystemBlock()
+	paths := TerminalPathsSystemBlockFor(p)
 	if !appendBlock(paths) {
+		return b.String()
+	}
+
+	switch ProfileRank(p) {
+	case 0:
+		return b.String()
+	case 1:
+		if w := Active(); w != nil {
+			caps := LoadActiveCapabilitiesCached()
+			if skills := SkillsIndexBlockCached(caps.Skills); !appendBlock(skills) {
+				return b.String()
+			}
+		}
+		if idx := MemoryIndexPromptBlock(maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+			if !appendBlock(idx) {
+				return b.String()
+			}
+		}
 		return b.String()
 	}
 

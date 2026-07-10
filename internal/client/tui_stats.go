@@ -64,6 +64,9 @@ func (m *model) applyStats(ev map[string]any) {
 	if s, ok := ev["model"].(string); ok && s != "" {
 		m.stats.chatModel = s
 	}
+	if s, ok := ev["prompt_profile"].(string); ok && s != "" {
+		m.stats.promptProfile = s
+	}
 	if v, ok := ev["subagent_running"].(float64); ok {
 		m.stats.subagentRunning = int(v)
 	}
@@ -158,8 +161,8 @@ func (m *model) sidebarText() string {
 	lines = append(lines, styleDim.Render("cata"))
 
 	lines = m.appendContextSidebarSections(lines, innerW)
+	lines = m.appendAgentsSidebarSection(lines, innerW)
 	lines = m.appendActivitySidebarSections(lines, innerW)
-	lines = m.appendDelegateSidebarSections(lines, innerW)
 
 	if len(lines) > 1 {
 		lines = append(lines, sidebarDivider(innerW))
@@ -266,13 +269,6 @@ func (m *model) appendActivitySidebarSections(lines []string, innerW int) []stri
 	}
 	if m.stats.lastTool != "" && (m.streaming || m.stats.state == "tool") {
 		body = append(body, m.stats.lastTool)
-	}
-	if m.stats.subagentRunning > 0 {
-		max := m.stats.subagentMax
-		if max <= 0 {
-			max = 4
-		}
-		body = append(body, fmt.Sprintf("worker %d/%d", m.stats.subagentRunning, max))
 	}
 	if tok := sidebarFormatTokens(m.stats.sessionTok); tok != "" {
 		body = append(body, tok)

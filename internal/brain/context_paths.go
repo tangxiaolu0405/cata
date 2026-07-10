@@ -32,6 +32,97 @@ func OutputCwd() string {
 
 // TerminalPathsSystemBlock 每轮对话注入的动态路径说明（脑子 vs 产出区）。
 func TerminalPathsSystemBlock() string {
+	return TerminalPathsSystemBlockFor(ActivePromptProfile())
+}
+
+// TerminalPathsSystemBlockFor 按指定 profile 生成路径块（worker 等并发场景勿依赖全局 Active）。
+func TerminalPathsSystemBlockFor(p PromptProfile) string {
+
+	switch ProfileRank(p) {
+	case 0:
+		return terminalPathsSystemBlockMinimal()
+	case 1:
+		return terminalPathsSystemBlockTask()
+	default:
+		return terminalPathsSystemBlockFull()
+	}
+}
+
+func terminalPathsSystemBlockMinimal() string {
+	out := OutputCwd()
+	var b strings.Builder
+	b.WriteString(TerminalPathsSystemPrefix)
+	b.WriteString("（简）\n\n")
+	if w := Active(); w != nil {
+		b.WriteString("- focus_path：`")
+		b.WriteString(w.RootPath)
+		b.WriteString("`\n")
+	}
+	if out != "" {
+		b.WriteString("- 产出区 output_cwd：`")
+		b.WriteString(out)
+		b.WriteString("`\n")
+	}
+	env := ActiveRuntimeEnv()
+	if env != nil {
+		b.WriteString(fmt.Sprintf("- 平台 host/command：`%s`/`%s`  shell：`%s`\n",
+			env.HostPlatform(), env.CommandPlatform(), env.Shell))
+	}
+	b.WriteString("- 可用工具与参数见本轮 API **tools[]**（勿依赖正文枚举）。\n")
+	return b.String()
+}
+
+func terminalPathsSystemBlockTask() string {
+	home := CataHome()
+	out := OutputCwd()
+	var b strings.Builder
+	b.WriteString(TerminalPathsSystemPrefix)
+	b.WriteString("（task）\n\n")
+	b.WriteString("## 路径约定\n\n")
+	b.WriteString("- **产出区**：默认相对路径、`run_command`、交付物在 output_cwd。\n")
+	b.WriteString("- **文件工具**：默认=产出区；`brain/…`=项目 `.cata` 或 home 记忆；`global/…`=`")
+	b.WriteString(home)
+	b.WriteString("/global/`。\n\n")
+	b.WriteString("## 当前绑定\n\n")
+	if w := Active(); w != nil {
+		b.WriteString("- focus_path：`")
+		b.WriteString(w.RootPath)
+		b.WriteString("`\n")
+		b.WriteString("- 项目脑子：`")
+		b.WriteString(w.ProjectCataRoot())
+		b.WriteString("`\n")
+		b.WriteString("- `brain/persona.local.md` → `")
+		b.WriteString(w.PersonaLocalPath())
+		b.WriteString("`\n")
+	}
+	if out != "" {
+		b.WriteString("- 产出区 output_cwd：`")
+		b.WriteString(out)
+		b.WriteString("`\n")
+	}
+	env := ActiveRuntimeEnv()
+	if env != nil && env.Tools == (HostTools{}) {
+		env.ProbeTools()
+	}
+	if env != nil {
+		b.WriteString(fmt.Sprintf("\n## 本机环境\n\n- host/command：`%s`/`%s`  shell：`%s`\n",
+			env.HostPlatform(), env.CommandPlatform(), env.Shell))
+		if env.ShellSupportsUnixSyntax() {
+			b.WriteString("- shell 语法：Unix/bash\n")
+		} else if env.Shell == "powershell" {
+			b.WriteString("- shell 语法：PowerShell\n")
+		} else if env.Shell == "cmd" {
+			b.WriteString("- shell 语法：Windows cmd\n")
+		}
+		b.WriteString(env.ToolsAvailabilityBlock())
+		b.WriteString("\n")
+		b.WriteString(env.runCommandHints())
+	}
+	b.WriteString("\n- 工具见 API **tools[]**。改文件：**read_file** → **search_replace** / **append_file**；命令：**run_command**。\n")
+	return b.String()
+}
+
+func terminalPathsSystemBlockFull() string {
 	home := CataHome()
 	out := OutputCwd()
 	var b strings.Builder
@@ -104,8 +195,7 @@ func TerminalPathsSystemBlock() string {
 		b.WriteString(fmt.Sprintf("- 产出区 WSL 路径：`%s`\n", WSLPathForOutput(out)))
 	}
 	b.WriteString("\n")
-	b.WriteString(ServerRegisteredToolsBlock())
-	b.WriteString("\n")
+	b.WriteString("- 可用工具与参数见本轮 API **tools[]**（名称/schema 以 tools 为准，正文不重复列举）。\n\n")
 	b.WriteString(SubagentDelegateGuideBlock())
 	b.WriteString("\n")
 	b.WriteString(env.ToolsAvailabilityBlock())

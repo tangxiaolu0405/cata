@@ -41,7 +41,8 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
 // chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
-func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace) (err error) {
+// promptPeak 为本连接会话内已达最高 prompt 档位（sticky，chat_reset 清零）。
+func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	var lr *connLineReader
@@ -78,8 +79,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
 	mcp.EnsureInit()
-	tools := ss.buildTerminalChatTools()
-	if len(tools) == 0 {
+	if len(ss.buildTerminalChatToolsForTier(ToolTierLight)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
@@ -96,8 +96,18 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 	for round := 1; ; round++ {
 		if ctx.Err() != nil {
+			brain.ClearPromptProfile()
 			return ss.emitChatCancelled(conn, lr)
 		}
+		tier := InferToolTier(round, *history, text)
+		roundProfile := PromptProfileForTier(tier)
+		if promptPeak != nil {
+			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)
+			brain.SetPromptProfile(*promptPeak)
+		} else {
+			brain.SetPromptProfile(roundProfile)
+		}
+		tools := ss.buildTerminalChatToolsForTier(tier)
 		ss.maybeContextCompress(conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
 
@@ -141,12 +151,14 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
+				brain.ClearPromptProfile()
 				return ss.emitChatCancelled(conn, lr)
 			}
 			msg := err.Error() + "\n\n本连接对话上下文已保留（含已执行的工具结果）。直接输入「继续」即可接着做，无需从头重述任务。"
 			lr.Stop()
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+			brain.ClearPromptProfile()
 			return err
 		}
 
@@ -194,6 +206,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				log.Printf("short-term memory: %v", err)
 			}
 			ss.maybeContextCompress(conn, client, history, tools)
+			brain.ClearPromptProfile()
 			return ss.emitChatDone(conn, lr, true, false)
 		}
 
@@ -206,10 +219,13 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 		if err := ss.executeChatToolCalls(ctx, conn, client, history, tools, toolCalls, round, &sessPromptTok, &sessCompletionTok, chatWS); err != nil {
 			if errors.Is(err, context.Canceled) {
+				brain.ClearPromptProfile()
 				return ss.emitChatCancelled(conn, lr)
 			}
+			brain.ClearPromptProfile()
 			return err
 		}
+		brain.ClearPromptProfile()
 	}
 }
 
@@ -470,6 +486,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		"context_window":     client.ContextWindowTokens(),
 		"tools":              len(tools),
 		"last_tool":          lastTool,
+		"prompt_profile":     string(brain.ActivePromptProfile()),
 	}
 	w := chatWS
 	if w == nil {

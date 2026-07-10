@@ -34,7 +34,8 @@ const (
 	maxBrainExcerptBytesPerFile = 6500
 	maxBrainExcerptBytesTotal  = 20000
 	// boot-leader 正文码点上限（单文件过大时截断）
-	maxBootLeaderRunes = 10000
+	maxBootLeaderRunes     = 10000
+	maxBootLeaderRunesTask = 5000
 
 )
 
@@ -154,27 +155,52 @@ func loadBootLeaderPrompt() string {
 	return bootLeaderPrompt
 }
 
+func effectiveBootLeaderPrompt() string {
+	return effectiveBootLeaderPromptFor(brain.ActivePromptProfile())
+}
+
+func effectiveBootLeaderPromptFor(profile brain.PromptProfile) string {
+	switch brain.ProfileRank(profile) {
+	case 0:
+		return brain.MinimalBootPrompt
+	case 1:
+		prompt := strings.TrimSpace(loadBootLeaderPrompt())
+		if prompt == "" {
+			return brain.MinimalBootPrompt
+		}
+		return truncateRunes(prompt, maxBootLeaderRunesTask)
+	default:
+		return strings.TrimSpace(loadBootLeaderPrompt())
+	}
+}
+
 // withBootLeaderSystemMessage 确保每次请求的消息列表前面都有 boot-leader.md 作为系统提示词。
-// 如果调用方已经自己把 boot-leader 内容放在第一个 system 中，则不会重复注入。
 func withBootLeaderSystemMessage(messages []Message) []Message {
-	prompt := strings.TrimSpace(loadBootLeaderPrompt())
+	return withBootLeaderSystemMessageFor(messages, brain.ActivePromptProfile())
+}
+
+func withBootLeaderSystemMessageFor(messages []Message, profile brain.PromptProfile) []Message {
+	prompt := effectiveBootLeaderPromptFor(profile)
 	if prompt == "" {
-		return ensureCataBrainExcerptSystem(messages)
+		return ensureCataBrainExcerptSystemFor(messages, profile)
 	}
 
 	if len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt {
-		return ensureCataBrainExcerptSystem(messages)
+		return ensureCataBrainExcerptSystemFor(messages, profile)
 	}
 
 	out := make([]Message, 0, len(messages)+1)
 	out = append(out, Message{Role: "system", Content: prompt})
 	out = append(out, messages...)
-	return ensureCataBrainExcerptSystem(out)
+	return ensureCataBrainExcerptSystemFor(out, profile)
 }
 
 // ensureCataBrainExcerptSystem 在 boot-leader 之后插入路径块 + 脑子节选（若尚未存在）。
-// 在 withBootLeaderSystemMessage 末尾调用，使所有 LLM 请求（终端、演进、摘要等）与 llm.log 一致。
 func ensureCataBrainExcerptSystem(msgs []Message) []Message {
+	return ensureCataBrainExcerptSystemFor(msgs, brain.ActivePromptProfile())
+}
+
+func ensureCataBrainExcerptSystemFor(msgs []Message, profile brain.PromptProfile) []Message {
 	for _, m := range msgs {
 		if m.Role != "system" {
 			continue
@@ -185,7 +211,8 @@ func ensureCataBrainExcerptSystem(msgs []Message) []Message {
 			return msgs
 		}
 	}
-	ext := brain.TerminalBrainSystemExtension(maxBrainExcerptBytesPerFile, maxBrainExcerptBytesTotal)
+	perFile, total := brainExcerptLimitsFor(profile)
+	ext := brain.TerminalBrainSystemExtensionFor(profile, perFile, total)
 	if strings.TrimSpace(ext) == "" {
 		return msgs
 	}
@@ -198,6 +225,21 @@ func ensureCataBrainExcerptSystem(msgs []Message) []Message {
 		return out
 	}
 	return append([]Message{{Role: "system", Content: pack}}, msgs...)
+}
+
+func brainExcerptLimits() (perFile, total int) {
+	return brainExcerptLimitsFor(brain.ActivePromptProfile())
+}
+
+func brainExcerptLimitsFor(profile brain.PromptProfile) (perFile, total int) {
+	switch brain.ProfileRank(profile) {
+	case 0:
+		return 800, 2000
+	case 1:
+		return 3000, 8000
+	default:
+		return maxBrainExcerptBytesPerFile, maxBrainExcerptBytesTotal
+	}
 }
 
 // resolveModelForRole 根据全局配置与角色解析应使用的模型名称。
@@ -411,6 +453,8 @@ type ChatRequest struct {
 	Stream     bool        `json:"stream,omitempty"`
 	// NoBrainInject 为 true 时不注入 boot-leader / brain 节选（演进决策等）。
 	NoBrainInject bool `json:"-"`
+	// BrainProfile 显式注入档位（worker minimal）；空则使用 brain.ActivePromptProfile()。
+	BrainProfile brain.PromptProfile `json:"-"`
 	// DisableThinking 为 true 时强制 DeepSeek thinking=disabled，保证 JSON 落在 content。
 	DisableThinking bool `json:"-"`
 	// LogKind 写入 llm.log 的 kind 字段（默认 chat_round）。
@@ -695,7 +739,11 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	}
 	msgs := req.Messages
 	if !req.NoBrainInject {
-		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages)))
+		profile := req.BrainProfile
+		if profile == "" {
+			profile = brain.ActivePromptProfile()
+		}
+		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessageFor(req.Messages, profile)))
 	} else {
 		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}

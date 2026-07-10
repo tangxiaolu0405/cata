@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"cata/internal/brain"
 )
 
 // ReadOpenAIChatStream 读取 OpenAI 兼容的 text/event-stream（data: JSON 行），
@@ -205,6 +207,7 @@ func finalizeStreamToolCalls(aggs map[int]*streamToolAgg) []ToolCall {
 // streamRoundFlags 可选流式轮次行为（worker 等）。
 type streamRoundFlags struct {
 	noBrainInject   bool
+	brainProfile    brain.PromptProfile
 	disableThinking bool
 	logKind         string
 	subagentID      string
@@ -216,10 +219,10 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{}, onDelta)
 }
 
-// ChatWorkerStreamRound 子 Agent 流式轮次：不注入 brain、低温度、禁用 thinking。
+// ChatWorkerStreamRound 子 Agent 流式轮次：minimal 脑子注入、低温度、禁用 thinking。
 func (c *Client) ChatWorkerStreamRound(ctx context.Context, messages []Message, tools []Tool, maxTokens int, meta WorkerRoundMeta, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	return c.chatStreamRound(ctx, messages, tools, "auto", maxTokens, 0.2, streamRoundFlags{
-		noBrainInject:   true,
+		brainProfile:    brain.PromptProfileMinimal,
 		disableThinking: true,
 		logKind:         "worker_round",
 		subagentID:      meta.SubagentID,
@@ -240,6 +243,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		MaxTokens:       maxTokens,
 		Temperature:     temperature,
 		NoBrainInject:   flags.noBrainInject,
+		BrainProfile:    flags.brainProfile,
 		DisableThinking: flags.disableThinking,
 		LogKind:         flags.logKind,
 		SubagentID:      flags.subagentID,

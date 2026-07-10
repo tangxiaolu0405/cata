@@ -223,10 +223,11 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 	p.mu.Unlock()
 
 	_ = p.ss.emitStreamLine(p.conn, map[string]interface{}{
-		"type":  "subagent_start",
-		"id":    id,
-		"task":  task,
-		"model": client.ModelName(),
+		"type":            "subagent_start",
+		"id":              id,
+		"task":            task,
+		"model":           client.ModelName(),
+		"prompt_profile":  "minimal",
 	})
 
 	slotHeld = false
@@ -337,6 +338,7 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 		}
 		_ = ss.emitStreamLine(conn, map[string]interface{}{
 			"type": "subagent_progress", "id": st.id, "message": fmt.Sprintf("round %d", round),
+			"prompt_profile": "minimal",
 		})
 
 		asst, _, toolCalls, _, _, err := client.ChatWorkerStreamRound(st.ctx, messages, tools, maxOut, llm.WorkerRoundMeta{

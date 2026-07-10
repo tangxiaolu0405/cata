@@ -153,6 +153,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 	}()
 
 	var chatHistory []llm.Message
+	var chatPromptPeak brain.PromptProfile
 
 	br := bufio.NewReaderSize(conn, 64*1024)
 
@@ -199,13 +200,14 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if err != nil {
 				log.Printf("resolve brain: %v", err)
 			}
-			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text, ws); err != nil {
+			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text, ws, &chatPromptPeak); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			continue
 		case "chat_reset":
 			ss.markChatSession(&chatSession)
 			chatHistory = nil
+			chatPromptPeak = ""
 			if err := brain.AppendSessionBoundary(); err != nil {
 				log.Printf("short-term session boundary: %v", err)
 			}
