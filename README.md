@@ -2,17 +2,69 @@
 
 Go 编写的终端个人 AI 助手。单二进制，Unix socket 架构，后台自主演进记忆。
 
+## 安装
+
+从 [GitHub Releases](https://github.com/tangxiaolu0405/cata/releases) 下载对应平台包，或使用根目录安装脚本（自动下载、解压、配置 PATH；首次安装会执行 `cata init`）。
+
+**Linux（x86_64）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_cata_linux.sh | bash
+```
+
+**macOS（Apple Silicon / Intel）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_cata_macos.sh | bash
+```
+
+**Windows（PowerShell）**
+
+```powershell
+irm https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_cata_windows.ps1 | iex
+```
+
+安装脚本默认安装到：
+
+| 平台 | 默认路径 |
+|------|----------|
+| Linux / macOS | `~/.local/bin/cata` |
+| Windows | `%LOCALAPPDATA%\cata\bin\cata.exe` |
+
+可选环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `CATA_VERSION` | 指定版本，如 `v0.1.9`；默认 latest |
+| `CATA_INSTALL_DIR` | 自定义安装目录 |
+| `CATA_REPO` | 自定义仓库，默认 `tangxiaolu0405/cata` |
+
+示例：安装指定版本
+
+```bash
+CATA_VERSION=v0.1.9 ./install_cata_linux.sh
+```
+
+```powershell
+$env:CATA_VERSION = "v0.1.9"; .\install_cata_windows.ps1
+```
+
+安装完成后**新开终端**，确认 `cata` 在 PATH 中，再配置 `~/.cata/config.json` 中的 LLM API Key。
+
 ## 快速开始
 
 ```bash
-# 构建
+# 已安装二进制时
+cata init    # 若安装脚本未自动执行
+cata chat    # Bubble Tea TUI（默认命令）
+```
+
+从源码构建：
+
+```bash
 go build -o cata ./cmd/cata
-
-# 初始化 CATA_HOME（~/.cata）
 ./cata init
-
-# 开始对话（Bubble Tea TUI）
-./cata
+./cata chat
 ```
 
 ## 架构
