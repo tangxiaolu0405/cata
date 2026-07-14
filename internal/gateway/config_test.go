@@ -2,6 +2,21 @@ package gateway
 
 import "testing"
 
+func TestConfig_ResolvedUIListen(t *testing.T) {
+	if (Config{}).ResolvedUIListen() != DefaultUIListen {
+		t.Fatal("empty should default")
+	}
+	if (Config{UIListen: "off"}).ResolvedUIListen() != "" {
+		t.Fatal("off should disable")
+	}
+	if (Config{UIListen: "127.0.0.1:9000"}).ResolvedUIListen() != "127.0.0.1:9000" {
+		t.Fatal("custom listen")
+	}
+	if !(Config{}).UIEnabled() || (Config{UIListen: "0"}).UIEnabled() {
+		t.Fatal("UIEnabled mismatch")
+	}
+}
+
 func TestConfig_editionBase(t *testing.T) {
 	cfg := Config{Edition: EditionBase}
 	cfg.normalize()

@@ -15,5 +15,7 @@
   "qq_sandbox": false,
   "worker_root": "",
   "socket_path": "",
-  "cata_url": ""
+  "cata_url": "",
+  "ui_listen": "127.0.0.1:8787",
+  "projects": []
 }

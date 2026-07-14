@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cata/internal/gateway"
+	"cata/internal/gateway/ui"
 )
 
 // Bot QQ WebSocket ↔ cata gateway。
@@ -66,12 +67,13 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 
 	text := strings.TrimSpace(msg.Content)
 	log.Printf("qq: kind=%s user=%s text=%q", msg.Kind, trunc(msg.UserOpenID, 16), trunc(text, 120))
+	key := sessionKey(msg)
+	ui.DefaultHub.Publish("qq", string(key), SessionIDFor(msg), msg.UserOpenID, "in", text)
 
 	if b.tryTextConfirm(text) {
 		return
 	}
 
-	key := sessionKey(msg)
 	switch {
 	case text == "/start", text == "/help":
 		_ = b.reply(ctx, msg, helpText())
@@ -120,6 +122,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	if err := b.reply(ctx, msg, reply); err != nil {
 		log.Printf("qq: send failed: %v", err)
 	}
+	ui.DefaultHub.Publish("qq", string(key), SessionIDFor(msg), msg.UserOpenID, "out", reply)
 	log.Printf("qq: cata chat done key=%s chars=%d", key, len(reply))
 }
 

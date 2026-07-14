@@ -5,16 +5,41 @@
 ## 角色边界
 
 ```
-[终端 TUI] ──┐
-[Telegram] ──┼──▶ cata-gateway（渠道适配）──▶ cata worker（server）
-[未来渠道] ──┘                                      │
-                                                    ├── LLM
-                                                    ├── 工具 / MCP
-                                                    └── brain / evolve
+[本地 Web UI] ──┐
+[终端 TUI]    ──┼──▶ cata-gateway ──▶ cata worker（server）
+[Telegram]    ──┤                         │
+[QQ 试验]     ──┘                         ├── LLM / 工具 / MCP
+                                          └── brain / evolve
 ```
 
 - **gateway**：渠道消息格式、会话路由、`cwd` 映射、确认按钮 UX；**不**调用 LLM、**不**写脑子。
+- **本地 Web UI**（默认 `http://127.0.0.1:8787`）：多项目真实目录对话 + 渠道只读消息面板。
 - **cata worker**：现有 `cata run` + Unix socket chat 循环；与 TUI 共用同一协议。
+
+## 本地 Web UI（多项目）
+
+启动 `cata-gateway` 后浏览器打开控制台（无需 Telegram/QQ 凭证亦可 **UI-only**）：
+
+| 区域 | 能力 |
+|------|------|
+| **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_worker` 渠道沙箱）；会话 `web:<id>`，`cwd` = meta/registry 的 `root_path` |
+| **Channels** | Telegram/QQ 近期消息只读；**不能**从页面发消息、确认命令或 reset 渠道会话 |
+
+配置：
+
+```json
+{
+  "ui_listen": "127.0.0.1:8787"
+}
+```
+
+左侧工作区来自本机已有脑子格（`~/.cata/brain/workspaces` + `registry/workspaces.json`），无需再在 `projects[]` 里手动登记。可在 UI 内点「刷新工作区」。
+
+- `ui_listen`：空/缺省 → 默认本机 `127.0.0.1:8787`；`off` / `0` / `false` 关闭
+- 环境变量 `CATA_GATEWAY_UI`：同 `ui_listen`（设为 `0` 可关 UI）
+- 绑定仅 loopback；与 TUI 共用产出区锁（同一 `root_path` 不可第二路 web）
+
+配置页入口：[`docs/gateway-config.html`](gateway-config.html)（静态编辑；**运行态控制台仍由 gateway 进程提供**）。
 
 ## 产出区（worker 目录）
 
@@ -121,9 +146,11 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 |------|--------|-----------|
 | `edition` | `base` \| `channel` | 同左 |
 | `cata_server` | base 版自动拉起 | channel 或 remote |
+| `ui_listen` / `CATA_GATEWAY_UI` | 本地控制台（默认本机 8787） | 通常关闭 |
+| `projects` | （可选遗留；UI 列表改读 brain/workspaces） | — |
 | `socket_path` / `CATA_SOCKET` | ✓ | 同机时 ✓ |
 | `cata_url` / `CATA_URL` | 忽略 | worker HTTP 基址 |
-| `worker_root` / `CATA_WORKER_ROOT` | ✓ | ✓（worker 侧路径） |
+| `worker_root` / `CATA_WORKER_ROOT` | ✓（渠道沙箱） | ✓（worker 侧路径） |
 
 见 `gateway.example.json`、`gateway.example.channel.json`、`README.md` Gateway 节。
 

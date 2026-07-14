@@ -68,11 +68,11 @@ go build -o cata-gateway ./cmd/cata-gateway
 ./cata chat
 ```
 
-## Gateway（Telegram）
+## Gateway（本地 UI + Telegram / QQ）
 
 > 部署模式详见 **`docs/gateway.md`**。**当前仅实现模式一（同机）**；模式二（云端 gateway + 内网 worker）、模式三（全云端）保留设计，待模式一完成后再扩展。
 
-`cata-gateway` 是渠道适配器：把外部聊天平台接到本机 **cata worker**（Unix socket），**不**重复实现 LLM/工具/脑子逻辑。
+`cata-gateway` 内置本机控制台（默认 `http://127.0.0.1:8787`：多项目真实目录对话 + 渠道只读面板），并把 Telegram / QQ 接到本机 **cata worker**（Unix socket），**不**重复实现 LLM/工具/脑子逻辑。无渠道凭证时可 **UI-only**；`CATA_GATEWAY_UI=0` 或 `ui_listen: "off"` 关闭页面。
 
 ### 产出区（worker 目录）
 
@@ -99,9 +99,10 @@ go build -o cata-gateway ./cmd/cata-gateway
 go build -o cata-gateway ./cmd/cata-gateway
 cata-gateway init              # 默认 edition=base
 # 或 channel 版: cata-gateway init --edition channel
-# 编辑 ~/.cata/gateway.json：telegram_bot_token 和/或 qq_app_id+qq_app_secret
+# 编辑 ~/.cata/gateway.json：ui_listen / projects / 渠道凭证
 # 也可用 docs/gateway-config.html 生成配置
 cata-gateway
+# 浏览器打开 http://127.0.0.1:8787 添加项目并对话
 ```
 
 可同时启用 Telegram + QQ（凭证都有则并发跑）。QQ 为 **WebSocket 试验**；连不上则仅该渠道失败，不影响 TG。调试：`cata-gateway qq`。

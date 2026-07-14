@@ -225,6 +225,9 @@ func (c *CataConn) Chat(ctx context.Context, text string, h StreamHandler) (Chat
 		case "token":
 			if s, ok := ev["content"].(string); ok {
 				out.WriteString(s)
+				if th, ok := any(h).(interface{ OnToken(string) }); ok && th != nil {
+					th.OnToken(s)
+				}
 			}
 		case "progress":
 			if h != nil {

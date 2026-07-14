@@ -5,10 +5,10 @@
 !/.github/
 !/.github/**
 
-# Build artifacts
-cata.exe
-cata
-cata-linux
-cata-windows
-cata-gateway
-cata-gateway.exe
+# Build artifacts (repo root only — do not ignore internal/cata/)
+/cata.exe
+/cata
+/cata-linux
+/cata-windows
+/cata-gateway
+/cata-gateway.exe

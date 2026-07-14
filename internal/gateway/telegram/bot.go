@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"cata/internal/gateway"
+	"cata/internal/gateway/ui"
 )
 
 // Bot Telegram ↔ cata gateway。
@@ -101,12 +102,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 
 	text := strings.TrimSpace(msg.Text)
 	log.Printf("telegram: chat_id=%d user_id=%d text=%q", msg.Chat.ID, userID, truncLog(text, 120))
+	key := sessionKey(msg.Chat.ID)
+	ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "in", text)
 	switch {
 	case text == "/start":
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, welcomeText(gateway.WorkerRoot(b.cfg.WorkerRoot)), nil)
 		return
 	case text == "/clear", text == "/reset":
-		key := sessionKey(msg.Chat.ID)
 		unlock := b.locks.Lock(key)
 		defer unlock()
 		if err := b.sessions.Reset(key); err != nil {
@@ -114,13 +116,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 			return
 		}
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, "会话已清空。", nil)
+		ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", "会话已清空。")
 		return
 	case text == "/help":
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, helpText(), nil)
 		return
 	}
 
-	key := sessionKey(msg.Chat.ID)
 	unlock := b.locks.Lock(key)
 	defer unlock()
 
@@ -160,6 +162,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 			return
 		}
 	}
+	ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", reply)
 	log.Printf("telegram: cata chat done chat_id=%d success=%v chars=%d", msg.Chat.ID, result.Success && result.ErrMsg == "", len(reply))
 }
 

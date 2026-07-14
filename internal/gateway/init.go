@@ -55,6 +55,8 @@ func defaultConfigForEdition(edition string) Config {
 			TelegramBotToken: "YOUR_BOT_TOKEN",
 			QQAppID:          "",
 			QQAppSecret:      "",
+			UIListen:         DefaultUIListen,
+			Projects:         []Project{},
 		}
 	default:
 		return Config{
@@ -68,6 +70,8 @@ func defaultConfigForEdition(edition string) Config {
 			TelegramBotToken: "YOUR_BOT_TOKEN",
 			QQAppID:          "",
 			QQAppSecret:      "",
+			UIListen:         DefaultUIListen,
+			Projects:         []Project{},
 		}
 	}
 }

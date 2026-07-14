@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cata Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0f1c1a;
+      --paper: #f4faf7;
+      --accent: #d97706;
+      --accent-deep: #b45309;
+      --ok: #0f766e;
+      --line: rgba(15, 28, 26, 0.12);
+      --muted: rgba(15, 28, 26, 0.55);
+      --panel: rgba(244, 250, 247, 0.9);
+      --font-d: "Fraunces", Georgia, serif;
+      --font-b: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: var(--font-b);
+      color: var(--ink);
+      background:
+        radial-gradient(1000px 500px at 0% -10%, rgba(217,119,6,.16), transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(15,118,110,.12), transparent 50%),
+        linear-gradient(160deg, #f7fbf9, #eef6f2);
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      height: 100vh;
+      gap: 0;
+    }
+    @media (max-width: 960px) {
+      .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; height: auto; min-height: 100vh; }
+    }
+    aside, main {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(8px);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    aside.channels { border-right: none; border-left: 1px solid var(--line); }
+    .side-head, .main-head {
+      padding: 1rem 1.1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand {
+      font-family: var(--font-d);
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin: 0;
+    }
+    .brand span { color: var(--accent-deep); }
+    .sub { margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--muted); }
+    .badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.12rem 0.4rem;
+      border-radius: 999px;
+      background: rgba(15,118,110,.12);
+      color: var(--ok);
+      margin-left: 0.35rem;
+      vertical-align: middle;
+    }
+    .badge.ro { background: rgba(217,119,6,.15); color: var(--accent-deep); }
+    .list { overflow: auto; flex: 1; padding: 0.6rem; }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.7rem 0.8rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      background: rgba(255,255,255,.65);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .item:hover, .item.active {
+      border-color: rgba(217,119,6,.45);
+      box-shadow: 0 6px 18px rgba(180,83,9,.08);
+    }
+    .item strong { display: block; font-size: 0.95rem; }
+    .item small { color: var(--muted); font-size: 0.75rem; word-break: break-all; }
+    .side-foot { padding: 0.75rem; border-top: 1px solid var(--line); }
+    input, button, textarea {
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 0.55rem 0.7rem;
+    }
+    input, textarea { width: 100%; background: #fff; }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+      color: #fff;
+      border: none;
+    }
+    button.ghost {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .row { display: flex; gap: 0.4rem; margin-top: 0.45rem; }
+    .row input { flex: 1; }
+    .chat {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem 1.2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .bubble {
+      max-width: 85%;
+      padding: 0.7rem 0.9rem;
+      border-radius: 14px;
+      white-space: pre-wrap;
+      line-height: 1.45;
+      font-size: 0.92rem;
+    }
+    .bubble.user { align-self: flex-end; background: rgba(217,119,6,.15); }
+    .bubble.bot { align-self: flex-start; background: rgba(255,255,255,.85); border: 1px solid var(--line); }
+    .bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 0.8rem; }
+    .trace {
+      align-self: stretch;
+      max-width: 92%;
+      margin: 0.1rem 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.55);
+      overflow: hidden;
+    }
+    .trace > summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      user-select: none;
+    }
+    .trace > summary::-webkit-details-marker { display: none; }
+    .trace > summary::before {
+      content: "▸";
+      font-size: 0.7rem;
+      transition: transform .15s;
+      color: var(--accent-deep);
+    }
+    .trace[open] > summary::before { transform: rotate(90deg); }
+    .trace-body {
+      padding: 0 0.75rem 0.55rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      border-top: 1px solid var(--line);
+    }
+    .trace-line {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.4;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+    .trace-line.tool { color: var(--ok); }
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 0.75rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .composer textarea { flex: 1; min-height: 52px; resize: vertical; }
+    .empty {
+      margin: auto;
+      text-align: center;
+      color: var(--muted);
+      padding: 2rem;
+    }
+    .overlay {
+      position: fixed; inset: 0; background: rgba(15,28,26,.35);
+      display: none; align-items: center; justify-content: center; z-index: 10;
+    }
+    .overlay.show { display: flex; }
+    .dialog {
+      background: #fff; border-radius: 16px; padding: 1.2rem; width: min(420px, 92vw);
+      box-shadow: 0 20px 50px rgba(0,0,0,.15);
+    }
+    .dialog h3 { font-family: var(--font-d); margin: 0 0 0.75rem; }
+    .dialog pre {
+      background: #f4f4f4; padding: 0.6rem; border-radius: 8px;
+      white-space: pre-wrap; font-size: 0.82rem; max-height: 160px; overflow: auto;
+    }
+    .msg-log .item { cursor: default; }
+    .msg-log .dir { font-size: 0.7rem; font-weight: 600; color: var(--ok); }
+    .msg-log .dir.out { color: var(--accent-deep); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="projects">
+      <div class="side-head">
+        <h1 class="brand">Cata <span>Gateway</span></h1>
+        <p class="sub">~/.cata/brain/workspaces</p>
+      </div>
+      <div class="list" id="projectList"></div>
+      <div class="side-foot">
+        <button type="button" class="ghost" id="btnRefresh" style="width:100%">刷新工作区</button>
+      </div>
+    </aside>
+
+    <main>
+      <div class="main-head">
+        <strong id="chatTitle">选择一个工作区开始对话</strong>
+        <p class="sub" id="chatPath"></p>
+        <div class="row" style="margin-top:0.5rem">
+          <button type="button" class="ghost" id="btnReset" disabled>清空会话</button>
+        </div>
+      </div>
+      <div class="chat" id="chat"></div>
+      <div class="composer">
+        <textarea id="input" placeholder="对当前工作区说点什么…" disabled></textarea>
+        <button type="button" id="btnSend" disabled>发送</button>
+      </div>
+    </main>
+
+    <aside class="channels">
+      <div class="side-head">
+        <strong>渠道会话 <span class="badge ro">只读</span></strong>
+        <p class="sub">Telegram / QQ 消息预览，不可发送或干涉</p>
+      </div>
+      <div class="list" id="channelList"></div>
+      <div class="list msg-log" id="channelMsgs" style="border-top:1px solid var(--line); max-height:45%"></div>
+    </aside>
+  </div>
+
+  <div class="overlay" id="confirmDlg">
+    <div class="dialog">
+      <h3>确认执行命令？</h3>
+      <pre id="confirmCmd"></pre>
+      <div class="row">
+        <button type="button" id="confirmYes">Run</button>
+        <button type="button" class="ghost" id="confirmNo">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div class="overlay" id="choiceDlg">
+    <div class="dialog">
+      <h3 id="choicePrompt">请选择</h3>
+      <div id="choiceOpts"></div>
+    </div>
+  </div>
+
+  <script>
+    let projects = [];
+    let activeId = null;
+    let busy = false;
+    let activeChannel = null;
+    /** 各工作区聊天区缓存（同页切换保留；清空会话时删除）。 */
+    const transcripts = Object.create(null);
+    const transcriptKey = (id) => "cata.gw.transcript." + id;
+
+    const $ = (id) => document.getElementById(id);
+
+    async function api(path, opts) {
+      const r = await fetch(path, opts);
+      if (!r.ok) throw new Error(await r.text());
+      if (r.status === 204) return null;
+      const ct = r.headers.get("content-type") || "";
+      if (ct.includes("json")) return r.json();
+      return r;
+    }
+
+    function renderProjects() {
+      const el = $("projectList");
+      el.innerHTML = "";
+      if (!projects.length) {
+        el.innerHTML = '<div class="empty">暂无可用工作区<br/>用 <code>cata chat</code> 打开项目后会在 ~/.cata/brain/workspaces 出现</div>';
+        return;
+      }
+      for (const p of projects) {
+        const d = document.createElement("div");
+        d.className = "item" + (p.id === activeId ? " active" : "");
+        d.innerHTML = `<strong>${esc(p.name || p.id)}</strong><small>${esc(p.path)}</small>`;
+        d.onclick = () => selectProject(p.id);
+        el.appendChild(d);
+      }
+    }
+
+    function saveActiveTranscript() {
+      if (!activeId) return;
+      const html = $("chat").innerHTML;
+      transcripts[activeId] = html;
+      try {
+        sessionStorage.setItem(transcriptKey(activeId), html);
+      } catch (_) {}
+    }
+
+    function loadStoredTranscript(id) {
+      if (Object.prototype.hasOwnProperty.call(transcripts, id)) {
+        return transcripts[id];
+      }
+      try {
+        const html = sessionStorage.getItem(transcriptKey(id));
+        if (html != null) {
+          transcripts[id] = html;
+          return html;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    function clearStoredTranscript(id) {
+      if (!id) return;
+      delete transcripts[id];
+      try {
+        sessionStorage.removeItem(transcriptKey(id));
+      } catch (_) {}
+    }
+
+    function restoreTranscript(id) {
+      const html = loadStoredTranscript(id);
+      if (html != null && html !== "") {
+        $("chat").innerHTML = html;
+        $("chat").scrollTop = $("chat").scrollHeight;
+        return true;
+      }
+      return false;
+    }
+
+    function selectProject(id) {
+      if (id === activeId) return;
+      if (busy) {
+        alert("当前会话仍在回复中，请稍后再切换");
+        return;
+      }
+      // 先保存当前工作区屏幕上的消息，再切走
+      saveActiveTranscript();
+      activeId = id || null;
+      const p = id ? projects.find((x) => x.id === id) : null;
+      $("chatTitle").textContent = p ? (p.name || p.id) : "选择一个工作区开始对话";
+      $("chatPath").textContent = p ? p.path : "";
+      $("input").disabled = !p;
+      $("btnSend").disabled = !p || busy;
+      $("btnReset").disabled = !p;
+      if (!id) {
+        $("chat").innerHTML = "";
+      } else if (!restoreTranscript(id)) {
+        $("chat").innerHTML = "";
+        addBubble("sys", "已进入工作区会话（cwd = root_path）");
+        saveActiveTranscript();
+      }
+      renderProjects();
+    }
+
+    function addBubble(role, text) {
+      if (!text && role === "sys") return;
+      const d = document.createElement("div");
+      d.className = "bubble " + role;
+      d.textContent = text;
+      $("chat").appendChild(d);
+      $("chat").scrollTop = $("chat").scrollHeight;
+      saveActiveTranscript();
+      return d;
+    }
+
+    /** 插在 user 与 bot 之间的可折叠中间轨迹。 */
+    function createTrace() {
+      const details = document.createElement("details");
+      details.className = "trace";
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = "进行中…";
+      const body = document.createElement("div");
+      body.className = "trace-body";
+      details.appendChild(summary);
+      details.appendChild(body);
+      $("chat").appendChild(details);
+      const lines = [];
+      return {
+        el: details,
+        add(kind, text) {
+          const line = document.createElement("div");
+          line.className = "trace-line" + (kind === "tool" ? " tool" : "");
+          line.textContent = text;
+          body.appendChild(line);
+          lines.push({ kind, text });
+          const tools = lines.filter((x) => x.kind === "tool").map((x) => x.text.replace(/^🔧\s*/, ""));
+          const n = lines.length;
+          summary.textContent = tools.length
+            ? `${n} 步 · ${tools.slice(-3).join(", ")}`
+            : `${n} 步进行中`;
+          $("chat").scrollTop = $("chat").scrollHeight;
+        },
+        finish() {
+          if (!lines.length) {
+            details.remove();
+            return;
+          }
+          const tools = lines.filter((x) => x.kind === "tool").map((x) => x.text.replace(/^🔧\s*/, ""));
+          summary.textContent = tools.length
+            ? `${lines.length} 步 · ${tools.join(", ")}`
+            : `${lines.length} 步`;
+          details.open = false;
+        },
+      };
+    }
+
+    function esc(s) {
+      return String(s || "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[c]);
+    }
+
+    async function loadProjects() {
+      projects = await api("/api/projects");
+      if (activeId && !projects.find((x) => x.id === activeId)) {
+        saveActiveTranscript();
+        activeId = null;
+        $("chatTitle").textContent = "选择一个工作区开始对话";
+        $("chatPath").textContent = "";
+        $("input").disabled = true;
+        $("btnSend").disabled = true;
+        $("btnReset").disabled = true;
+        $("chat").innerHTML = "";
+      }
+      renderProjects();
+    }
+
+    $("btnRefresh").onclick = () => loadProjects().catch((e) => alert(e.message || e));
+
+    $("btnReset").onclick = async () => {
+      if (!activeId || busy) return;
+      await api("/api/projects/" + encodeURIComponent(activeId) + "/reset", { method: "POST" });
+      clearStoredTranscript(activeId);
+      $("chat").innerHTML = "";
+      addBubble("sys", "会话已清空");
+    };
+
+    $("btnSend").onclick = send;
+    $("input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+
+    async function send() {
+      if (!activeId || busy) return;
+      const text = $("input").value.trim();
+      if (!text) return;
+      $("input").value = "";
+      addBubble("user", text);
+      const trace = createTrace();
+      const bot = addBubble("bot", "");
+      busy = true;
+      $("btnSend").disabled = true;
+      try {
+        const resp = await fetch("/api/projects/" + encodeURIComponent(activeId) + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line) continue;
+            const ev = JSON.parse(line);
+            await handleStream(ev, bot, trace);
+          }
+        }
+      } catch (e) {
+        bot.textContent += "\n⚠️ " + (e.message || e);
+      } finally {
+        trace.finish();
+        busy = false;
+        $("btnSend").disabled = !activeId;
+        saveActiveTranscript();
+      }
+    }
+
+    async function handleStream(ev, bot, trace) {
+      switch (ev.type) {
+        case "token":
+          bot.textContent += ev.content || "";
+          $("chat").scrollTop = $("chat").scrollHeight;
+          break;
+        case "progress":
+          trace.add("progress", "⏳ " + (ev.message || ""));
+          break;
+        case "tool_start":
+          trace.add("tool", "🔧 " + (ev.name || ""));
+          break;
+        case "error":
+          bot.textContent += "\n⚠️ " + (ev.message || "");
+          break;
+        case "exec_confirm_required":
+          await askConfirm(ev);
+          break;
+        case "user_choice":
+          await askChoice(ev);
+          break;
+        case "done":
+          if (ev.error) bot.textContent += "\n⚠️ " + ev.error;
+          if (!bot.textContent.trim()) bot.textContent = ev.cancelled ? "已取消" : "(无文本)";
+          break;
+      }
+    }
+
+    function askConfirm(ev) {
+      return new Promise((resolve) => {
+        $("confirmCmd").textContent = (ev.command_line || "") + "\\n\\ncwd: " + (ev.cwd || "");
+        $("confirmDlg").classList.add("show");
+        const done = async (approved) => {
+          $("confirmDlg").classList.remove("show");
+          await api("/api/projects/" + encodeURIComponent(activeId) + "/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm_id: ev.confirm_id, approved }),
+          });
+          resolve();
+        };
+        $("confirmYes").onclick = () => done(true);
+        $("confirmNo").onclick = () => done(false);
+      });
+    }
+
+    function askChoice(ev) {
+      return new Promise((resolve) => {
+        $("choicePrompt").textContent = ev.prompt || "请选择";
+        const box = $("choiceOpts");
+        box.innerHTML = "";
+        (ev.options || []).forEach((o) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "ghost";
+          b.style.display = "block";
+          b.style.width = "100%";
+          b.style.marginBottom = "0.4rem";
+          b.textContent = o.label || o.id;
+          b.onclick = async () => {
+            $("choiceDlg").classList.remove("show");
+            await api("/api/projects/" + encodeURIComponent(activeId) + "/choice", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ choice_id: ev.id, selected: [o.id] }),
+            });
+            resolve();
+          };
+          box.appendChild(b);
+        });
+        $("choiceDlg").classList.add("show");
+      });
+    }
+
+    async function refreshChannels() {
+      const rows = await api("/api/channels");
+      const el = $("channelList");
+      el.innerHTML = "";
+      if (!rows.length) {
+        el.innerHTML = '<div class="empty">尚无渠道消息</div>';
+        return;
+      }
+      for (const r of rows) {
+        const d = document.createElement("div");
+        d.className = "item" + (r.session === activeChannel ? " active" : "");
+        const last = r.last ? (r.last.text || "").slice(0, 80) : "";
+        d.innerHTML = `<strong>${esc(r.session)}</strong><small>${esc(last)}</small>`;
+        d.onclick = () => loadChannelMsgs(r.session);
+        el.appendChild(d);
+      }
+    }
+
+    async function loadChannelMsgs(session) {
+      activeChannel = session;
+      const msgs = await api("/api/channels/" + encodeURIComponent(session));
+      const el = $("channelMsgs");
+      el.innerHTML = "";
+      for (const m of msgs) {
+        const d = document.createElement("div");
+        d.className = "item";
+        d.innerHTML = `<span class="dir ${m.direction}">${esc(m.direction)}</span>
+          <small>${esc(m.at)}</small>
+          <div style="margin-top:0.25rem;font-size:0.85rem;white-space:pre-wrap">${esc(m.text)}</div>`;
+        el.appendChild(d);
+      }
+      refreshChannels();
+    }
+
+    function connectSSE() {
+      try {
+        const es = new EventSource("/api/events");
+        es.onmessage = (e) => {
+          try {
+            const ev = JSON.parse(e.data);
+            if (activeChannel && ev.session === activeChannel) {
+              loadChannelMsgs(activeChannel);
+            } else {
+              refreshChannels();
+            }
+          } catch (_) {}
+        };
+      } catch (_) {}
+    }
+
+    loadProjects();
+    refreshChannels();
+    connectSSE();
+    setInterval(refreshChannels, 15000);
+  </script>
+</body>
+</html>

@@ -28,14 +28,23 @@ func NewSessionManager(socketPath, workerRoot string) *SessionManager {
 
 // Get 获取或创建会话连接（按会话键分配独立 worker 目录）。
 func (m *SessionManager) Get(key SessionKey) (*CataConn, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if c, ok := m.sessions[key]; ok {
-		return c, nil
-	}
 	cwd, err := WorkerCwdForSession(m.workerRoot, key)
 	if err != nil {
 		return nil, err
+	}
+	return m.GetWithCwd(key, cwd)
+}
+
+// GetWithCwd 获取或创建会话连接，使用显式 cwd（如 web 项目真实路径）。
+func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.sessions[key]; ok {
+		if c.cwd == cwd {
+			return c, nil
+		}
+		_ = c.Close()
+		delete(m.sessions, key)
 	}
 	c := NewCataConn(m.socketPath, cwd)
 	m.sessions[key] = c

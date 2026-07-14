@@ -40,6 +40,13 @@ type CataServerConfig struct {
 	StopOnExit bool `json:"stop_on_exit,omitempty"`
 }
 
+// Project 本地 UI 管理的真实项目目录（多项目并行主工作场）。
+type Project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // Config gateway 运行配置（环境变量优先，其次 ~/.cata/gateway.json）。
 type Config struct {
 	Edition            string           `json:"edition,omitempty"` // base | channel
@@ -53,7 +60,12 @@ type Config struct {
 	WorkerRoot         string           `json:"worker_root,omitempty"`
 	SocketPath         string           `json:"socket_path,omitempty"`
 	CataURL            string           `json:"cata_url,omitempty"` // 模式二/三预留
+	UIListen           string           `json:"ui_listen,omitempty"` // 本地控制台，默认 127.0.0.1:8787；off 关闭
+	Projects           []Project        `json:"projects,omitempty"`
 }
+
+// DefaultUIListen 本地控制台默认监听地址。
+const DefaultUIListen = "127.0.0.1:8787"
 
 // LoadConfig 读取 gateway 配置。
 func LoadConfig() (Config, error) {
@@ -108,6 +120,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := strings.TrimSpace(os.Getenv("QQ_SANDBOX")); v != "" {
 		cfg.QQSandbox = envBool(v)
+	}
+	if v, ok := os.LookupEnv("CATA_GATEWAY_UI"); ok {
+		cfg.UIListen = strings.TrimSpace(v)
 	}
 }
 
@@ -222,4 +237,65 @@ func (c Config) QQOpenIDAllowed(openid string) bool {
 		}
 	}
 	return false
+}
+
+// ResolvedUIListen 返回实际监听地址；空表示关闭 UI。
+func (c Config) ResolvedUIListen() string {
+	v := strings.TrimSpace(c.UIListen)
+	switch strings.ToLower(v) {
+	case "0", "false", "off", "disabled", "no":
+		return ""
+	case "":
+		return DefaultUIListen
+	default:
+		return v
+	}
+}
+
+// UIEnabled 是否启动本地控制台。
+func (c Config) UIEnabled() bool {
+	return c.ResolvedUIListen() != ""
+}
+
+// FindProject 按 id 查找项目。
+func (c Config) FindProject(id string) (Project, bool) {
+	id = strings.TrimSpace(id)
+	for _, p := range c.Projects {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Project{}, false
+}
+
+// ConfigPath 返回 ~/.cata/gateway.json。
+func ConfigPath() string {
+	return filepath.Join(brain.CataHome(), "gateway.json")
+}
+
+// SaveConfig 整文件写回 gateway.json（保留当前内存配置）。
+func SaveConfig(cfg Config) error {
+	if err := brain.EnsureCataLayout(); err != nil {
+		return err
+	}
+	path := ConfigPath()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0644)
+}
+
+// SaveProjects 仅更新 projects 字段后写回（先读盘再合并，避免丢密钥）。
+func SaveProjects(projects []Project) (Config, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Projects = projects
+	if err := SaveConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }

@@ -421,6 +421,15 @@
           <span>cata_url（remote 预留，可空）</span>
           <input type="text" id="cataUrl" placeholder="https://…" autocomplete="off" />
         </label>
+        <label class="field">
+          <span>ui_listen（本地控制台）</span>
+          <input type="text" id="uiListen" placeholder="127.0.0.1:8787；off 关闭" autocomplete="off" />
+          <p class="hint">运行态多项目控制台由 <code>cata-gateway</code> 进程提供（默认本机 8787）。本页只编辑配置；设为 <code>off</code> / <code>0</code> 关闭 UI。环境变量 <code>CATA_GATEWAY_UI</code> 可覆盖。</p>
+        </label>
+        <label class="field">
+          <span>projects（JSON 数组，可空；也可用运行态 UI 增删）</span>
+          <textarea id="projectsJson" spellcheck="false" rows="4" placeholder='[{"id":"app","name":"App","path":"D:/code/app"}]'></textarea>
+        </label>
       </div>
     </section>
 
@@ -560,7 +569,21 @@
         worker_root: $("workerRoot").value.trim(),
         socket_path: $("socketPath").value.trim(),
         cata_url: $("cataUrl").value.trim(),
+        ui_listen: $("uiListen").value.trim() || "127.0.0.1:8787",
+        projects: [],
       };
+
+      try {
+        const raw = $("projectsJson").value.trim();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error("projects must be array");
+          cfg.projects = parsed;
+        }
+      } catch (err) {
+        cfg.projects = [];
+        cfg._projectsError = String(err.message || err);
+      }
 
       if (qqOn) {
         cfg.qq_app_id = $("qqAppId").value.trim();
@@ -584,6 +607,10 @@
       $("workerRoot").value = cfg.worker_root || "";
       $("socketPath").value = cfg.socket_path || "";
       $("cataUrl").value = cfg.cata_url || "";
+      $("uiListen").value = cfg.ui_listen || "127.0.0.1:8787";
+      $("projectsJson").value = Array.isArray(cfg.projects)
+        ? JSON.stringify(cfg.projects, null, 2)
+        : "[]";
 
       const tgToken = cfg.telegram_bot_token || "";
       $("tgEnabled").checked = !!tgToken || cfg._forceTelegram === true;
@@ -614,6 +641,7 @@
 
     function refreshPreview() {
       const cfg = gather();
+      delete cfg._projectsError;
       $("preview").value = JSON.stringify(cfg, null, 2) + "\n";
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
@@ -643,6 +671,8 @@
         worker_root: "",
         socket_path: "",
         cata_url: "",
+        ui_listen: "127.0.0.1:8787",
+        projects: [],
         _forceTelegram: true,
       };
     }
@@ -662,7 +692,7 @@
     // bindings
     [
       "edition", "serverMode", "autoStart", "managed", "stopOnExit",
-      "workerRoot", "socketPath", "cataBinary", "cataUrl",
+      "workerRoot", "socketPath", "cataBinary", "cataUrl", "uiListen", "projectsJson",
       "tgEnabled", "tgToken", "tgAllowed",
       "qqEnabled", "qqAppId", "qqAppSecret", "qqSandbox", "qqAllowed",
     ].forEach((id) => {
