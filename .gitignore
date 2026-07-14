@@ -7,3 +7,8 @@
 
 # Build artifacts
 cata.exe
+cata
+cata-linux
+cata-windows
+cata-gateway
+cata-gateway.exe
