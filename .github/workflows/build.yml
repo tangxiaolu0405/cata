@@ -66,16 +66,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          if [[ "${BIN_NAME}" == *.exe ]]; then
+            GATEWAY_BIN="cata-gateway.exe"
+          else
+            GATEWAY_BIN="cata-gateway"
+          fi
           go build -ldflags="-s -w" -o "dist/${BIN_NAME}" ./cmd/cata
+          go build -ldflags="-s -w" -o "dist/${GATEWAY_BIN}" ./cmd/cata-gateway
 
           ARCHIVE="${ARTIFACT}.${ARCHIVE_EXT}"
           if [ "${ARCHIVE_EXT}" = "zip" ]; then
-            (cd dist && zip -r "../${ARCHIVE}" "${BIN_NAME}")
+            (cd dist && zip -r "../${ARCHIVE}" "${BIN_NAME}" "${GATEWAY_BIN}")
           else
-            chmod +x "dist/${BIN_NAME}"
-            tar -czf "${ARCHIVE}" -C dist "${BIN_NAME}"
+            chmod +x "dist/${BIN_NAME}" "dist/${GATEWAY_BIN}"
+            tar -czf "${ARCHIVE}" -C dist "${BIN_NAME}" "${GATEWAY_BIN}"
           fi
-          ls -la "${ARCHIVE}"
+          ls -la "${ARCHIVE}" dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -144,11 +150,11 @@ jobs:
             echo
             echo "## Downloads"
             echo
-            echo "- Linux / macOS: \`cata\` in \`.tar.gz\`"
-            echo "- Windows: \`cata.exe\` in \`.zip\`"
+            echo "- Linux / macOS: \`cata\` + \`cata-gateway\` in \`.tar.gz\`"
+            echo "- Windows: \`cata.exe\` + \`cata-gateway.exe\` in \`.zip\`"
             echo
             echo '```bash'
-            echo "tar -xzf cata-linux-amd64.tar.gz && ./cata"
+            echo "tar -xzf cata-linux-amd64.tar.gz && ./cata && ./cata-gateway --help"
             echo "tar -xzf cata-darwin-arm64.tar.gz && ./cata"
             echo "unzip cata-windows-amd64.zip && cata.exe chat"
             echo '```'

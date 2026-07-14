@@ -15,6 +15,7 @@ $Repo = if ($env:CATA_REPO) { $env:CATA_REPO } else { "tangxiaolu0405/cata" }
 $InstallDir = if ($env:CATA_INSTALL_DIR) { $env:CATA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "cata\bin" }
 $Version = $env:CATA_VERSION
 $BinName = "cata.exe"
+$GatewayBin = "cata-gateway.exe"
 
 function Log([string]$Message) { Write-Host "==> $Message" }
 
@@ -51,11 +52,16 @@ function Install-Cata {
 
         $src = Join-Path $tmp $BinName
         if (-not (Test-Path $src)) { throw "archive missing $BinName" }
+        $srcGw = Join-Path $tmp $GatewayBin
+        if (-not (Test-Path $srcGw)) { throw "archive missing $GatewayBin" }
 
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         $dst = Join-Path $InstallDir $BinName
         Copy-Item -Path $src -Destination $dst -Force
         Log "installed: $dst"
+        $dstGw = Join-Path $InstallDir $GatewayBin
+        Copy-Item -Path $srcGw -Destination $dstGw -Force
+        Log "installed: $dstGw"
     }
     finally {
         Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -91,4 +97,4 @@ Resolve-Version
 Install-Cata
 Ensure-Path
 Maybe-Init
-Log "done — try: cata chat"
+Log "done — try: cata chat   (gateway: cata-gateway)"

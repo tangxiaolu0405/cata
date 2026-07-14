@@ -4,7 +4,7 @@ Go 编写的终端个人 AI 助手。单二进制，Unix socket 架构，后台�
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/tangxiaolu0405/cata/releases) 下载对应平台包，或使用根目录安装脚本（自动下载、解压、配置 PATH；首次安装会执行 `cata init`）。
+从 [GitHub Releases](https://github.com/tangxiaolu0405/cata/releases) 下载对应平台包，或使用根目录安装脚本（自动下载、解压、配置 PATH；首次安装会执行 `cata init`）。每个平台包同时包含 `cata` 与 `cata-gateway`。
 
 **Linux（x86_64）**
 

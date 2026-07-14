@@ -16,6 +16,7 @@ REPO="${CATA_REPO:-tangxiaolu0405/cata}"
 INSTALL_DIR="${CATA_INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${CATA_VERSION:-}"
 BIN_NAME="cata"
+GATEWAY_BIN="cata-gateway"
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -61,10 +62,13 @@ download() {
   curl -fL --retry 3 --retry-delay 2 -o "${tmp}/${ARCHIVE}" "$url"
   tar -xzf "${tmp}/${ARCHIVE}" -C "$tmp"
   [ -f "${tmp}/${BIN_NAME}" ] || die "archive missing ${BIN_NAME}"
+  [ -f "${tmp}/${GATEWAY_BIN}" ] || die "archive missing ${GATEWAY_BIN}"
 
   mkdir -p "$INSTALL_DIR"
   install -m 0755 "${tmp}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+  install -m 0755 "${tmp}/${GATEWAY_BIN}" "${INSTALL_DIR}/${GATEWAY_BIN}"
   log "installed: ${INSTALL_DIR}/${BIN_NAME}"
+  log "installed: ${INSTALL_DIR}/${GATEWAY_BIN}"
 }
 
 ensure_path() {
@@ -116,7 +120,7 @@ main() {
   download
   ensure_path
   maybe_init
-  log "done — try: cata chat"
+  log "done — try: cata chat   (gateway: cata-gateway)"
 }
 
 main "$@"
