@@ -1,6 +1,6 @@
 package llm
 
-import "cata/internal/config"
+import "cata/internal/cata/config"
 
 // Role 表示 LLM 用途（不同 role 可绑定不同模型；均回退到 llm.model）。
 type Role string

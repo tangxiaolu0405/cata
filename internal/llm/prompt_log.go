@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"cata/internal/brain"
+	"cata/internal/cata/brain"
 )
 
 // 发往 LLM 的提示词由下列部分在 HTTP 出站前组装（见 withBootLeaderSystemMessage / buildHTTPChatRequest）。

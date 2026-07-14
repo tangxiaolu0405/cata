@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cata Gateway · 渠道配置</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0f1c1a;
+      --ink-soft: #1a2e2a;
+      --fog: #e7f0ec;
+      --mist: #c5d8d0;
+      --paper: #f4faf7;
+      --accent: #d97706;
+      --accent-deep: #b45309;
+      --line: rgba(15, 28, 26, 0.12);
+      --ok: #0f766e;
+      --danger: #b91c1c;
+      --shadow: 0 18px 50px rgba(15, 28, 26, 0.08);
+      --radius: 18px;
+      --font-display: "Fraunces", Georgia, serif;
+      --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: var(--font-body);
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(217, 119, 6, 0.18), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(15, 118, 110, 0.14), transparent 50%),
+        linear-gradient(160deg, #f7fbf9 0%, #eef6f2 45%, #e8f1ec 100%);
+      background-attachment: fixed;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+      z-index: 0;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      width: min(920px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 3.5rem 0 4rem;
+    }
+
+    header.hero {
+      margin-bottom: 2.25rem;
+      animation: rise 0.7s ease both;
+    }
+    .brand {
+      font-family: var(--font-display);
+      font-size: clamp(2.4rem, 6vw, 3.6rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      margin: 0 0 0.75rem;
+    }
+    .brand span {
+      color: var(--accent-deep);
+    }
+    .lede {
+      max-width: 36rem;
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.55;
+      color: var(--ink-soft);
+      opacity: 0.88;
+    }
+
+    section.block {
+      margin-top: 1.5rem;
+      animation: rise 0.7s ease both;
+    }
+    section.block:nth-of-type(2) { animation-delay: 0.05s; }
+    section.block:nth-of-type(3) { animation-delay: 0.1s; }
+    section.block:nth-of-type(4) { animation-delay: 0.15s; }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.85rem;
+    }
+    .section-head h2 {
+      font-family: var(--font-display);
+      font-size: 1.35rem;
+      margin: 0;
+      font-weight: 600;
+    }
+    .section-head p {
+      margin: 0.25rem 0 0;
+      font-size: 0.92rem;
+      color: rgba(15, 28, 26, 0.65);
+    }
+
+    .panel {
+      background: rgba(244, 250, 247, 0.78);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.25rem 1.35rem;
+    }
+
+    .channel-grid {
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 720px) {
+      .channel-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    .channel {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 1rem 1.05rem 1.1rem;
+      background: linear-gradient(180deg, rgba(255,255,255,0.75), rgba(255,255,255,0.45));
+      transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .channel.on {
+      border-color: rgba(217, 119, 6, 0.45);
+      box-shadow: 0 10px 28px rgba(180, 83, 9, 0.08);
+    }
+    .channel.off .fields { opacity: 0.4; pointer-events: none; }
+
+    .channel-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+    }
+    .channel-title {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+    .channel-title strong {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    .channel-title small {
+      color: rgba(15, 28, 26, 0.55);
+      font-size: 0.82rem;
+    }
+    .badge {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: rgba(15, 118, 110, 0.12);
+      color: var(--ok);
+      vertical-align: middle;
+    }
+    .badge.warn {
+      background: rgba(217, 119, 6, 0.15);
+      color: var(--accent-deep);
+    }
+
+    .switch {
+      position: relative;
+      width: 48px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .switch span {
+      position: absolute;
+      inset: 0;
+      cursor: pointer;
+      background: #c9d6d1;
+      border-radius: 999px;
+      transition: 0.2s;
+    }
+    .switch span::before {
+      content: "";
+      position: absolute;
+      height: 22px;
+      width: 22px;
+      left: 3px;
+      top: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.2s;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+    .switch input:checked + span { background: var(--accent); }
+    .switch input:checked + span::before { transform: translateX(20px); }
+
+    label.field {
+      display: block;
+      margin-top: 0.75rem;
+    }
+    label.field > span {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: rgba(15, 28, 26, 0.55);
+      margin-bottom: 0.35rem;
+    }
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+      font: inherit;
+      font-size: 0.95rem;
+      background: rgba(255,255,255,0.85);
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(217, 119, 6, 0.55);
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.12);
+    }
+    textarea {
+      min-height: 220px;
+      font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace;
+      font-size: 0.85rem;
+      line-height: 1.45;
+      resize: vertical;
+    }
+    .hint {
+      margin: 0.35rem 0 0;
+      font-size: 0.8rem;
+      color: rgba(15, 28, 26, 0.5);
+      line-height: 1.4;
+    }
+
+    .row-2 {
+      display: grid;
+      gap: 0.75rem;
+    }
+    @media (min-width: 560px) {
+      .row-2 { grid-template-columns: 1fr 1fr; }
+    }
+
+    .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      margin-top: 0.9rem;
+    }
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.92rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .check input { width: 1rem; height: 1rem; accent-color: var(--accent-deep); }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 1rem;
+    }
+    button, .btn {
+      appearance: none;
+      border: none;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+      font-size: 0.92rem;
+      border-radius: 999px;
+      padding: 0.7rem 1.15rem;
+      transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    }
+    button:active { transform: translateY(1px); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+      color: white;
+      box-shadow: 0 8px 20px rgba(180, 83, 9, 0.22);
+    }
+    .btn-primary:hover { filter: brightness(1.05); }
+    .btn-ghost {
+      background: rgba(255,255,255,0.7);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .btn-ghost:hover { background: white; }
+    .btn-file {
+      position: relative;
+      overflow: hidden;
+    }
+    .btn-file input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 1.5rem;
+      transform: translateX(-50%) translateY(120%);
+      background: var(--ink);
+      color: var(--paper);
+      padding: 0.75rem 1.2rem;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+      transition: transform 0.25s ease;
+      z-index: 20;
+      max-width: min(90vw, 420px);
+      text-align: center;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    footer.note {
+      margin-top: 2rem;
+      font-size: 0.85rem;
+      color: rgba(15, 28, 26, 0.55);
+      line-height: 1.5;
+      animation: rise 0.7s ease both;
+      animation-delay: 0.2s;
+    }
+    footer.note code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.82em;
+      background: rgba(15, 28, 26, 0.06);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <h1 class="brand">Cata <span>Gateway</span></h1>
+      <p class="lede">配置接入渠道，生成 <code>gateway.json</code>。页面可本地打开，无需服务器；导出后放入 <code>~/.cata/</code>。</p>
+    </header>
+
+    <section class="block">
+      <div class="section-head">
+        <div>
+          <h2>发行与工作区</h2>
+          <p>base 版可自动拉起本机 cata；channel 版只做渠道适配。</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="row-2">
+          <label class="field">
+            <span>Edition</span>
+            <select id="edition">
+              <option value="base">base — Gateway + 本地 cata server</option>
+              <option value="channel">channel — 仅渠道，需另开 cata run</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>cata_server.mode</span>
+            <select id="serverMode">
+              <option value="socket">socket — 本机 Unix socket</option>
+              <option value="external">external — 连接已有 server</option>
+              <option value="remote">remote — HTTP（预留）</option>
+            </select>
+          </label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="autoStart" checked /> auto_start</label>
+          <label class="check"><input type="checkbox" id="managed" /> managed（cata run --managed）</label>
+          <label class="check"><input type="checkbox" id="stopOnExit" /> stop_on_exit</label>
+        </div>
+        <div class="row-2" style="margin-top:0.5rem">
+          <label class="field">
+            <span>worker_root（可空）</span>
+            <input type="text" id="workerRoot" placeholder="默认 ~/.cata_worker" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>socket_path（可空）</span>
+            <input type="text" id="socketPath" placeholder="默认 ~/.cata/cata.sock" autocomplete="off" />
+          </label>
+        </div>
+        <label class="field">
+          <span>cata_server.binary（可空）</span>
+          <input type="text" id="cataBinary" placeholder="PATH 上的 cata，或绝对路径" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>cata_url（remote 预留，可空）</span>
+          <input type="text" id="cataUrl" placeholder="https://…" autocomplete="off" />
+        </label>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="section-head">
+        <div>
+          <h2>渠道</h2>
+          <p>可同时启用多个渠道；关闭的渠道不会写入密钥字段（或写为空）。</p>
+        </div>
+      </div>
+      <div class="channel-grid">
+        <div class="channel on" id="chTelegram">
+          <div class="channel-top">
+            <div class="channel-title">
+              <strong>Telegram <span class="badge">已支持</span></strong>
+              <small>长轮询 · 无需公网回调</small>
+            </div>
+            <label class="switch" title="启用 Telegram">
+              <input type="checkbox" id="tgEnabled" checked />
+              <span></span>
+            </label>
+          </div>
+          <div class="fields">
+            <label class="field">
+              <span>Bot Token</span>
+              <input type="password" id="tgToken" placeholder="123456:ABC…" autocomplete="off" />
+              <p class="hint">来自 @BotFather。也可用环境变量 TELEGRAM_BOT_TOKEN。</p>
+            </label>
+            <label class="field">
+              <span>允许用户 ID（逗号分隔，可空=不限制）</span>
+              <input type="text" id="tgAllowed" placeholder="123456789,987654321" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+
+        <div class="channel" id="chQQ">
+          <div class="channel-top">
+            <div class="channel-title">
+              <strong>QQ 开放平台 <span class="badge warn">WebSocket 试验</span></strong>
+              <small>无需公网回调；官方可能已停 WS</small>
+            </div>
+            <label class="switch" title="启用 QQ（配置预留）">
+              <input type="checkbox" id="qqEnabled" />
+              <span></span>
+            </label>
+          </div>
+          <div class="fields">
+            <label class="field">
+              <span>App ID</span>
+              <input type="text" id="qqAppId" placeholder="开放平台 AppID" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>App Secret</span>
+              <input type="password" id="qqAppSecret" placeholder="AppSecret" autocomplete="off" />
+            </label>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="qqSandbox" /> 沙箱环境 api</label>
+            </div>
+            <label class="field">
+              <span>允许 OpenID（逗号分隔，可空）</span>
+              <input type="text" id="qqAllowed" placeholder="openid1,openid2" autocomplete="off" />
+            </label>
+            <p class="hint">试验：本机 WebSocket 长连接（与 Telegram 类似，无需公网）。若官方已对账号关闭 WS，则无法接入 QQ。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="section-head">
+        <div>
+          <h2>预览与导出</h2>
+          <p>下载到本机后，复制为 <code>~/.cata/gateway.json</code>。</p>
+        </div>
+      </div>
+      <div class="panel">
+        <label class="field" style="margin-top:0">
+          <span>gateway.json</span>
+          <textarea id="preview" spellcheck="false" readonly></textarea>
+        </label>
+        <div class="actions">
+          <button type="button" class="btn-primary" id="btnDownload">下载 gateway.json</button>
+          <button type="button" class="btn-ghost" id="btnCopy">复制 JSON</button>
+          <label class="btn btn-ghost btn-file">导入 JSON
+            <input type="file" id="fileImport" accept=".json,application/json" />
+          </label>
+          <button type="button" class="btn-ghost" id="btnReset">重置默认</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="note">
+      修改会自动保存在浏览器 localStorage。密钥只存在本机浏览器，不会上传。<br />
+      使用：<code>cata-gateway init</code> 或本页导出 → 填入密钥 → <code>cata-gateway</code>。详见 <code>docs/gateway.md</code>。
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const STORAGE_KEY = "cata.gateway.config.v1";
+
+    const $ = (id) => document.getElementById(id);
+
+    function parseIDList(s) {
+      return String(s || "")
+        .split(/[,，\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n));
+    }
+
+    function parseStringList(s) {
+      return String(s || "")
+        .split(/[,，\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+    }
+
+    function gather() {
+      const edition = $("edition").value;
+      const tgOn = $("tgEnabled").checked;
+      const qqOn = $("qqEnabled").checked;
+
+      const cfg = {
+        edition,
+        cata_server: {
+          mode: $("serverMode").value,
+          binary: $("cataBinary").value.trim(),
+          auto_start: $("autoStart").checked,
+          managed: $("managed").checked,
+          stop_on_exit: $("stopOnExit").checked,
+        },
+        telegram_bot_token: tgOn ? $("tgToken").value.trim() : "",
+        telegram_allowed_user_ids: tgOn ? parseIDList($("tgAllowed").value) : [],
+        worker_root: $("workerRoot").value.trim(),
+        socket_path: $("socketPath").value.trim(),
+        cata_url: $("cataUrl").value.trim(),
+      };
+
+      if (qqOn) {
+        cfg.qq_app_id = $("qqAppId").value.trim();
+        cfg.qq_app_secret = $("qqAppSecret").value.trim();
+        cfg.qq_sandbox = $("qqSandbox").checked;
+        cfg.qq_allowed_openids = parseStringList($("qqAllowed").value);
+      }
+
+      return cfg;
+    }
+
+    function applyForm(cfg) {
+      if (!cfg || typeof cfg !== "object") return;
+      if (cfg.edition) $("edition").value = cfg.edition;
+      const cs = cfg.cata_server || {};
+      if (cs.mode) $("serverMode").value = cs.mode;
+      $("cataBinary").value = cs.binary || "";
+      $("autoStart").checked = !!cs.auto_start;
+      $("managed").checked = !!cs.managed;
+      $("stopOnExit").checked = !!cs.stop_on_exit;
+      $("workerRoot").value = cfg.worker_root || "";
+      $("socketPath").value = cfg.socket_path || "";
+      $("cataUrl").value = cfg.cata_url || "";
+
+      const tgToken = cfg.telegram_bot_token || "";
+      $("tgEnabled").checked = !!tgToken || cfg._forceTelegram === true;
+      $("tgToken").value = tgToken === "YOUR_BOT_TOKEN" ? "" : tgToken;
+      $("tgAllowed").value = Array.isArray(cfg.telegram_allowed_user_ids)
+        ? cfg.telegram_allowed_user_ids.join(", ")
+        : "";
+
+      const qqOn = !!(cfg.qq_app_id || cfg.qq_app_secret);
+      $("qqEnabled").checked = qqOn;
+      $("qqAppId").value = cfg.qq_app_id || "";
+      $("qqAppSecret").value = cfg.qq_app_secret || "";
+      $("qqSandbox").checked = !!cfg.qq_sandbox;
+      $("qqAllowed").value = Array.isArray(cfg.qq_allowed_openids)
+        ? cfg.qq_allowed_openids.join(", ")
+        : "";
+
+      syncChannelUI();
+      refreshPreview();
+    }
+
+    function syncChannelUI() {
+      $("chTelegram").classList.toggle("on", $("tgEnabled").checked);
+      $("chTelegram").classList.toggle("off", !$("tgEnabled").checked);
+      $("chQQ").classList.toggle("on", $("qqEnabled").checked);
+      $("chQQ").classList.toggle("off", !$("qqEnabled").checked);
+    }
+
+    function refreshPreview() {
+      const cfg = gather();
+      $("preview").value = JSON.stringify(cfg, null, 2) + "\n";
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+      } catch (_) {}
+    }
+
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove("show"), 2200);
+    }
+
+    function defaults() {
+      return {
+        edition: "base",
+        cata_server: {
+          mode: "socket",
+          binary: "",
+          auto_start: true,
+          managed: false,
+          stop_on_exit: false,
+        },
+        telegram_bot_token: "",
+        telegram_allowed_user_ids: [],
+        worker_root: "",
+        socket_path: "",
+        cata_url: "",
+        _forceTelegram: true,
+      };
+    }
+
+    function onEditionChange() {
+      const ed = $("edition").value;
+      if (ed === "base") {
+        $("serverMode").value = "socket";
+        $("autoStart").checked = true;
+      } else {
+        $("serverMode").value = "external";
+        $("autoStart").checked = false;
+      }
+      refreshPreview();
+    }
+
+    // bindings
+    [
+      "edition", "serverMode", "autoStart", "managed", "stopOnExit",
+      "workerRoot", "socketPath", "cataBinary", "cataUrl",
+      "tgEnabled", "tgToken", "tgAllowed",
+      "qqEnabled", "qqAppId", "qqAppSecret", "qqSandbox", "qqAllowed",
+    ].forEach((id) => {
+      const el = $(id);
+      el.addEventListener("input", () => {
+        if (id === "tgEnabled" || id === "qqEnabled") syncChannelUI();
+        if (id === "edition") onEditionChange();
+        else refreshPreview();
+      });
+      el.addEventListener("change", () => {
+        if (id === "tgEnabled" || id === "qqEnabled") syncChannelUI();
+        if (id === "edition") onEditionChange();
+        else refreshPreview();
+      });
+    });
+
+    $("btnDownload").addEventListener("click", () => {
+      const blob = new Blob([$("preview").value], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "gateway.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("已下载 gateway.json");
+    });
+
+    $("btnCopy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText($("preview").value);
+        toast("已复制到剪贴板");
+      } catch {
+        $("preview").select();
+        document.execCommand("copy");
+        toast("已复制（兼容模式）");
+      }
+    });
+
+    $("fileImport").addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const cfg = JSON.parse(reader.result);
+          applyForm(cfg);
+          toast("已导入 " + file.name);
+        } catch (err) {
+          toast("JSON 解析失败");
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    });
+
+    $("btnReset").addEventListener("click", () => {
+      applyForm(defaults());
+      toast("已重置为 base 默认");
+    });
+
+    // boot
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        applyForm(JSON.parse(saved));
+      } else {
+        applyForm(defaults());
+      }
+    } catch {
+      applyForm(defaults());
+    }
+  </script>
+</body>
+</html>

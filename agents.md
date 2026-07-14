@@ -13,7 +13,7 @@
 
 ## 目录边界（重要）
 
-见 **`brain/directory-plan.md`**（布局）与 **`brain/brain-files.md`**（各文件作用与 evolve 边界，代码：`internal/brain/evolve_boundary.go`）。
+见 **`brain/directory-plan.md`**（布局）与 **`brain/brain-files.md`**（各文件作用与 evolve 边界，代码：`internal/cata/brain/evolve_boundary.go`）。
 
 | 位置 | 角色 |
 |------|------|
@@ -33,19 +33,29 @@
 
 ---
 
+## 代码布局（internal）
+
+| 包 | 角色 |
+|----|------|
+| **`internal/cata/`** | 核心 agent：`server`、`client`（TUI）、`brain`、`evolve`、`config`、`clock`、`execcmd` |
+| **`internal/gateway/`** | 渠道适配子模块（Telegram / QQ）→ 同一 Unix socket worker |
+| **`internal/llm/`** | OpenAI 兼容 Chat；出站前注入 boot-assembler + brain 节选 |
+| **`internal/mcp/`** | MCP 客户端（browser 等） |
+
 ## 当前实现
 
 | 区域 | 作用 |
 |------|------|
 | **`cmd/cata`** | `init`（初始化 ~/.cata）、`config`、`run`（socket + 后台演进） |
 | **`cmd/cata`（`chat`）** | 默认 Bubble Tea TUI；协议：`chat`（`stream:true`）、`chat_reset`、`ping` |
-| **`internal/server`** | Unix socket、终端 chat 工具循环 |
+| **`cmd/cata-gateway`** | 渠道入口；凭证驱动并发启渠道 |
+| **`internal/cata/server`** | Unix socket、终端 chat 工具循环 |
 | **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
-| **`internal/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
-| **`internal/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
-| **`internal/config`** | `~/.cata/config.json`：LLM（`deepseek` / `qwen` 等 OpenAI 兼容）、exec、`evolution.enabled` / `cycle_interval` |
+| **`internal/cata/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
+| **`internal/cata/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
+| **`internal/cata/config`** | `~/.cata/config.json`：LLM（`deepseek` / `qwen` 等 OpenAI 兼容）、exec、`evolution.enabled` / `cycle_interval` |
 
-**已移除（方案 B）**：`internal/memory`、`internal/evolution`（旧任务引擎）、`internal/scheduler`、`internal/git`、`skills/` 服务端加载。
+**已移除**：`internal/memory`、`internal/evolution`（旧任务引擎）、`internal/scheduler`、`internal/git`、`skills/` 服务端加载。
 
 ---
 
@@ -55,14 +65,14 @@
 |----|----------|--------|
 | Socket 会话历史 | server 内存 | 每轮对话（`chat_reset` 清空） |
 | `memory/short/current.md` | home 脑子格 | **每轮 cata chat 成功后 server 规则追加**（`session_memory.go`） |
-| `modes/<active_mode>/persona.md` 等 | 项目 `.cata/` | **仅** `internal/evolve` 从 short-term 提炼 |
+| `modes/<active_mode>/persona.md` 等 | 项目 `.cata/` | **仅** `internal/cata/evolve` 从 short-term 提炼 |
 | `long-term/`、`archive/` | home 脑子格 | evolve |
 
 详见 **`brain/constraints.md` §记忆分层**。
 
 ## 自主演进（摘要）
 
-- **触发**：short-term 有新内容等门控（见 `internal/evolve`）；默认周期 600s。
+- **触发**：short-term 有新内容等门控（见 `internal/cata/evolve`）；默认周期 600s。
 - **patch 路由**：主要内容 → `focus_path/.cata/`（**active_mode**）；记忆/审计 → home 格；**禁止** `global/*`
 - **防膨胀**：按场景选 patch 模式（`replace_section` / `append` / `overwrite`，见 `prompt/evolve/patch_modes.md`）；超 3.5KB 触发 `compact:*`；补丁后自动去重。
 - **无** 手动 `cata evolve` 命令。
@@ -126,10 +136,10 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 |------|------------------|--------------|
 | ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点 |
 | ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`（单条 system，内部分段） |
-| ③+ | `user` / `assistant` / `tool` | `internal/server/socket_chat.go` 内存 history |
+| ③+ | `user` / `assistant` / `tool` | `internal/cata/server/socket_chat.go` 内存 history |
 | 并行 | `tools[]` | 内置工具 + MCP（不经 messages 拼接正文） |
 
-**② brain 节选**（`internal/brain/terminal_context.go`）自上而下：
+**② brain 节选**（`internal/cata/brain/terminal_context.go`）自上而下：
 
 1. **路径块** — `TerminalPathsSystemBlock()`：CATA_HOME vs 项目 `.cata` vs 产出区、`focus_path`、`output_cwd`、平台/shell、工具注册
 2. **Skills** — `SkillsPromptBlock()`：读项目 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（项目 → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
@@ -137,7 +147,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 4. **【Cata 引导 · ~/.cata/global】** — `constraints.md`、`behavior.md`（引导型，evolve 不写）
 5. **【Cata 项目内容 · focus_path/.cata】** — `modes/<active_mode>/persona|behavior|constraints`、`persona.local.md`
 
-**演进 LLM**（`internal/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**。
+**演进 LLM**（`internal/cata/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**。
 
 **其它 LLM 调用**：`Summarize` / 查询预处理等在 `client.go` 内联 `system` + `user`，走 `chat()` 时也会带上 ①②。
 
@@ -147,11 +157,11 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ## 交互层：Bubble Tea TUI
 
-`cata chat` 使用 **Bubble Tea** 全屏 TUI（`internal/client/tui.go`）：主区滚动对话、底栏 `›` 输入、宽屏 **右侧状态栏**（`tui_stats.go`，≥96 列；`CATA_NO_SIDEBAR=1` 关闭）。**不再**使用 stdout/stderr 分流，故不支持 `cata chat "…" > file` 管道模式。
+`cata chat` 使用 **Bubble Tea** 全屏 TUI（`internal/cata/client/tui.go`）：主区滚动对话、底栏 `›` 输入、宽屏 **右侧状态栏**（`tui_stats.go`，≥96 列；`CATA_NO_SIDEBAR=1` 关闭）。**不再**使用 stdout/stderr 分流，故不支持 `cata chat "…" > file` 管道模式。
 
 ### Server → Client（NDJSON）
 
-`internal/server/socket_chat.go` → `emitStreamLine`；TUI 在 `stream.go` 消费。
+`internal/cata/server/socket_chat.go` → `emitStreamLine`；TUI 在 `stream.go` 消费。
 
 | `type` | TUI |
 |--------|-----|
@@ -182,8 +192,8 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ## 给 AI 的约束
 
-1. 改功能先看 **`internal/server`**、**`cmd/cata`**、**`internal/client`**、**`internal/evolve`**。
-2. 路径以 **`internal/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
+1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**。
+2. 路径以 **`internal/cata/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
 3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
 4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
 
@@ -194,7 +204,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 1. 本文件  
 2. **`design.md`**（架构、Context 组装、NDJSON 协议）  
 3. `~/.cata/global/constraints.md`（或仓库模板 `brain/constraints.md`）  
-4. 提示词代码：`internal/llm/client.go`、`internal/brain/terminal_context.go`、`internal/llm/prompt_log.go`  
-5. 对话循环：`internal/server/socket_chat.go`、`internal/client/tui.go`  
-6. 演进：`internal/evolve/engine.go`  
+4. 提示词代码：`internal/llm/client.go`、`internal/cata/brain/terminal_context.go`、`internal/llm/prompt_log.go`  
+5. 对话循环：`internal/cata/server/socket_chat.go`、`internal/cata/client/tui.go`  
+6. 演进：`internal/cata/evolve/engine.go`  
 

@@ -1,7 +1,7 @@
 # 脑子文件说明与演进边界
 
 > **双根**：home 格 `~/.cata/brain/workspaces/<ws_id>/`（运行时记忆）+ 项目 `focus_path/.cata/`（主要内容）。  
-> 代码单一事实来源：`internal/brain/evolve_boundary.go`、`project_paths.go`、`chat_paths.go`。  
+> 代码单一事实来源：`internal/cata/brain/evolve_boundary.go`、`project_paths.go`、`chat_paths.go`。  
 > 布局总览见 [directory-plan.md](./directory-plan.md)。
 
 ## 图例

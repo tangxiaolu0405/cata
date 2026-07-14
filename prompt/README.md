@@ -12,7 +12,7 @@ HTTP 出站前组装的 **LLM 专用提示词**（与 `brain/` 下注入 chat �
 | `evolve/decision_scope.md` | 决策 user prompt 中的 workspace 隔离提醒 |
 | `evolve/decision_footer.md` | 决策 user prompt 结尾 |
 
-`buildDecisionPrompt` 的动态部分（triggers、state JSON、short-term 节选等）仍在 `internal/evolve/engine.go` 组装。
+`buildDecisionPrompt` 的动态部分（triggers、state JSON、short-term 节选等）仍在 `internal/cata/evolve/engine.go` 组装。
 
 ## 修改方式
 
@@ -38,4 +38,4 @@ prompt.Load("evolve/system.md")
 |------|------|
 | boot-leader | `~/.cata/global/boot-assembler.md` 或 `brain/boot-assembler.md` |
 | global 约束/行为（chat 注入） | `~/.cata/global/constraints.md`、`behavior.md` |
-| brain 节选 | workspace 格子内 markdown，由 `internal/brain/terminal_context.go` 读取 |
+| brain 节选 | workspace 格子内 markdown，由 `internal/cata/brain/terminal_context.go` 读取 |

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"cata/internal/config"
+	"cata/internal/cata/config"
 )
 
 // OpenAICompatAdapter OpenAI Chat Completions 兼容协议（DeepSeek / 千问 / MiMo 等均走此路径）。

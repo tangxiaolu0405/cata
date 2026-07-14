@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"cata/internal/brain"
+	"cata/internal/cata/brain"
 )
 
 func main() {

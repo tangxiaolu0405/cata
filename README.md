@@ -63,14 +63,74 @@ cata chat    # Bubble Tea TUI（默认命令）
 
 ```bash
 go build -o cata ./cmd/cata
+go build -o cata-gateway ./cmd/cata-gateway
 ./cata init
 ./cata chat
 ```
+
+## Gateway（Telegram）
+
+> 部署模式详见 **`docs/gateway.md`**。**当前仅实现模式一（同机）**；模式二（云端 gateway + 内网 worker）、模式三（全云端）保留设计，待模式一完成后再扩展。
+
+`cata-gateway` 是渠道适配器：把外部聊天平台接到本机 **cata worker**（Unix socket），**不**重复实现 LLM/工具/脑子逻辑。
+
+### 产出区（worker 目录）
+
+每个渠道会话独立目录，gateway 发给 cata 的 `cwd` 为：
+
+```
+~/.cata_worker/<channel>/<chat_id>/
+```
+
+例如 Telegram chat `12345` → `~/.cata_worker/telegram/12345/`。脑子绑定、工具、evolve 规则与终端 chat 相同，仅产出区按会话隔离。
+
+### 发行档位（edition）
+
+`~/.cata/gateway.json` 中 `edition` 决定 gateway 是否自带本机 cata server（同一二进制）：
+
+- **base**（基础版）：`cata_server.auto_start: true`，`cata-gateway` 启动时自动 `cata run`
+- **channel**（渠道版，默认）：不拉起 server；需另开 `cata run`
+
+### 运行（模式一）
+
+**base 版（单进程）** — 初始化配置并填入 token：
+
+```bash
+go build -o cata-gateway ./cmd/cata-gateway
+cata-gateway init              # 默认 edition=base
+# 或 channel 版: cata-gateway init --edition channel
+# 编辑 ~/.cata/gateway.json：telegram_bot_token 和/或 qq_app_id+qq_app_secret
+# 也可用 docs/gateway-config.html 生成配置
+cata-gateway
+```
+
+可同时启用 Telegram + QQ（凭证都有则并发跑）。QQ 为 **WebSocket 试验**；连不上则仅该渠道失败，不影响 TG。调试：`cata-gateway qq`。
+
+**channel 版** — 两进程：
+
+```bash
+go build -o cata-gateway ./cmd/cata-gateway
+
+export TELEGRAM_BOT_TOKEN="your-bot-token"
+# 可选 QQ
+# export QQ_APP_ID=... QQ_APP_SECRET=...
+export CATA_WORKER_ROOT="$HOME/.cata_worker"
+export CATA_SOCKET="$HOME/.cata/cata.sock"
+export TELEGRAM_ALLOWED_USERS="123456789"
+
+cata run          # 终端 1
+cata-gateway      # 终端 2
+```
+
+或设置 `CATA_GATEWAY_EDITION=channel` / `edition: channel`（见 `gateway.example.channel.json`）。
+
+Telegram：`/start` `/help` `/clear`（危险命令按钮确认）。QQ：`/help` `/clear`（确认回复 yes/no）。
 
 ## 架构
 
 ```
 cata chat [--dir <产出区>] ──Unix Socket──▶ cata run (server) ──HTTP──▶ LLM
+Telegram 等 ──▶ cata-gateway ──────────────┘
                                 │
                                 ├── ~/.cata/global/          引导型提示词
                                 ├── ~/.cata/brain/ws/<id>/   运行时记忆
@@ -109,15 +169,22 @@ cata chat [--dir <产出区>] ──Unix Socket──▶ cata run (server) ─�
 
 ## 目录
 
+```
+internal/
+  cata/       # 核心 agent + TUI（server / client / brain / evolve / config / …）
+  gateway/    # 渠道适配（Telegram / QQ）→ 连同一 cata worker
+  llm/        # OpenAI 兼容 LLM
+  mcp/        # MCP 客户端（如 browser）
+```
+
 | 位置 | 用途 |
 |------|------|
 | `cmd/cata/` | CLI 入口 (`chat`, `init`, `run`, `config`) |
-| `internal/server/` | Unix socket 服务端，聊天循环，工具执行 |
-| `internal/client/` | Bubble Tea TUI，NDJSON 事件流 |
+| `cmd/cata-gateway/` | Gateway 入口 |
+| `internal/cata/` | 核心：server、client（TUI）、brain、evolve、config、clock、execcmd |
+| `internal/gateway/` | 渠道适配（Telegram / QQ WebSocket） |
 | `internal/llm/` | OpenAI 兼容 LLM；出站前注入 boot + brain 节选 |
-| `internal/brain/` | 双根路径、工作区解析、上下文组装 |
-| `internal/evolve/` | 后台自主演进（项目内容 + home 记忆） |
-| `internal/config/` | 配置加载与校验 |
+| `internal/mcp/` | MCP 工具对接 |
 | `brain/` | 模板种子（`cata init` → `~/.cata/global/`） |
 
 ## 设计文档

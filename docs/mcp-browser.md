@@ -92,6 +92,6 @@ cata config set mcp.tool_timeout_seconds 300
 
 ## 相关代码
 
-- 默认与迁移：`internal/config/config.go` → `normalizeMCPConfig`
+- 默认与迁移：`internal/cata/config/config.go` → `normalizeMCPConfig`
 - MCP 生命周期：`internal/mcp/manager.go`（`reconnectServer` 会 Kill 子进程）
 - 示例：`config.example.json`

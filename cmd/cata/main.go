@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"cata/internal/brain"
-	"cata/internal/client"
-	"cata/internal/clock"
-	"cata/internal/config"
-	"cata/internal/server"
+	"cata/internal/cata/brain"
+	"cata/internal/cata/client"
+	"cata/internal/cata/clock"
+	"cata/internal/cata/config"
+	"cata/internal/cata/server"
 )
 
 func main() {

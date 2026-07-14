@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"cata/internal/brain"
+	"cata/internal/cata/brain"
 )
 
 func TestWorkerBrainInjectMinimal(t *testing.T) {

@@ -74,7 +74,7 @@
 | `focus_path/.cata/` | 项目主要内容（evolve 迭代 **active_mode**） |
 | cwd | 产出区 |
 
-各文件演进边界见 **[brain-files.md](./brain-files.md)**（`internal/brain/evolve_boundary.go`）。
+各文件演进边界见 **[brain-files.md](./brain-files.md)**（`internal/cata/brain/evolve_boundary.go`）。
 
 ## 命名约定
 

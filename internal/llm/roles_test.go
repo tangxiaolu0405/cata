@@ -3,7 +3,7 @@ package llm
 import (
 	"testing"
 
-	"cata/internal/config"
+	"cata/internal/cata/config"
 )
 
 func TestResolveModelForRole_fallbackSingleModel(t *testing.T) {

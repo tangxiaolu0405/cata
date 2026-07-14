@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"cata/internal/brain"
+	"cata/internal/cata/brain"
 )
 
 // ReadOpenAIChatStream 读取 OpenAI 兼容的 text/event-stream（data: JSON 行），

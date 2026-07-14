@@ -3,7 +3,7 @@ package llm
 import (
 	"strings"
 
-	"cata/internal/config"
+	"cata/internal/cata/config"
 )
 
 const (

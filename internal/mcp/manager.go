@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"cata/internal/brain"
-	"cata/internal/config"
+	"cata/internal/cata/brain"
+	"cata/internal/cata/config"
 	"cata/internal/llm"
 )
 

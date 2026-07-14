@@ -94,11 +94,11 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ### 交互层设计：对话交付
 
-**终端**：`cata chat` 使用 Bubble Tea 全屏 TUI（`internal/client/tui.go`），主区对话 + 底栏输入 + 宽屏右侧状态；**不**再依赖 stdout/stderr 分流（不可 `> file` 管道正文）。
+**终端**：`cata chat` 使用 Bubble Tea 全屏 TUI（`internal/cata/client/tui.go`），主区对话 + 底栏输入 + 宽屏右侧状态；**不**再依赖 stdout/stderr 分流（不可 `> file` 管道正文）。
 
 #### 事件类型（当前实现）
 
-Server（`internal/server/socket_chat.go`）→ Client（`tui.go` / `stream.go`）单行 JSON：
+Server（`internal/cata/server/socket_chat.go`）→ Client（`tui.go` / `stream.go`）单行 JSON：
 
 | `type` | TUI | 字段 |
 |--------|-----|------|
@@ -202,7 +202,7 @@ ok  internal/auth  0.234s                     ← stderr, 完整命令输出
     └── script.*
 ```
 
-**路径路由**（`internal/brain/ResolveBrainDocAbs`、`chat_paths.go`）：
+**路径路由**（`internal/cata/brain/ResolveBrainDocAbs`、`chat_paths.go`）：
 - `memory/*`、`meta.json`、`evolution_log.json` → home 格
 - `persona.local`、`modes/*`、`skills/*` → 项目 `.cata/`
 - `global/*` → `~/.cata/global/`
@@ -240,12 +240,12 @@ socket_chat history (user/assistant/tool only)
 | 职责 | 包 / 符号 |
 |------|-----------|
 | 注入入口 | `internal/llm/client.go` — `withBootLeaderSystemMessage`, `ensureCataBrainExcerptSystem`, `buildHTTPChatRequest` |
-| boot 文件路径 | `internal/brain/paths.go` — `BootLeaderPath()` → `~/.cata/global/boot-assembler.md`（优先）或 `brain/boot-assembler.md` |
-| brain 节选正文 | `internal/brain/terminal_context.go` — `TerminalBrainSystemExtension` |
-| 路径 / 运行时 | `internal/brain/context_paths.go` — `TerminalPathsSystemBlock`, `SetOutputCwd` |
-| Skills 块 | `internal/brain/skills_prompt.go` — `SkillsPromptBlock` |
-| 记忆索引块 | `internal/brain/memory_index.go` — `MemoryIndexPromptBlock` |
-| 会话 history | `internal/server/socket_chat.go` — 不存 system |
+| boot 文件路径 | `internal/cata/brain/paths.go` — `BootLeaderPath()` → `~/.cata/global/boot-assembler.md`（优先）或 `brain/boot-assembler.md` |
+| brain 节选正文 | `internal/cata/brain/terminal_context.go` — `TerminalBrainSystemExtension` |
+| 路径 / 运行时 | `internal/cata/brain/context_paths.go` — `TerminalPathsSystemBlock`, `SetOutputCwd` |
+| Skills 块 | `internal/cata/brain/skills_prompt.go` — `SkillsPromptBlock` |
+| 记忆索引块 | `internal/cata/brain/memory_index.go` — `MemoryIndexPromptBlock` |
+| 会话 history | `internal/cata/server/socket_chat.go` — 不存 system |
 | 日志拆解 | `internal/llm/prompt_log.go` — `buildPromptManifest`（`LLM_LOG_FILE`） |
 
 **发往 API 的 `messages` 顺序**（终端，有 boot 文件时）：
@@ -261,7 +261,7 @@ socket_chat history (user/assistant/tool only)
 [2…] user / assistant / tool   ← socket 内存 history
 ```
 
-**文件工具 `brain/…` 路由**（`internal/brain/chat_paths.go`）：
+**文件工具 `brain/…` 路由**（`internal/cata/brain/chat_paths.go`）：
 - `brain/memory/…`、`brain/meta.json` → home 格
 - `brain/modes/…`、`brain/persona.local.md`、`brain/skills/…` → 项目 `.cata/`
 - `global/…` → `~/.cata/global/`
@@ -298,7 +298,7 @@ socket_chat history (user/assistant/tool only)
     禁止 → global/*（引导层）
 
 触发条件:
-    short-term 有新内容（见 internal/evolve/gate.go）
+    short-term 有新内容（见 internal/cata/evolve/gate.go）
     或 fill:*（项目 .cata 空壳文档须本轮填充）
 
 周期:
@@ -488,7 +488,7 @@ type MediaRef struct {
 | `attachment_rejected` | `reason`, `path` | 超限 / MIME / 路径非法 |
 | `model_switch` | `from`, `to`, `reason` | 本 round 因附图切换 `chat_vision` |
 
-**TUI（`internal/client`）**：
+**TUI（`internal/cata/client`）**：
 
 | 操作 | 行为 |
 |------|------|
@@ -543,7 +543,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 | **M3** | 粘贴图、压缩策略、token 估算调优 | 长会话不爆窗 |
 | **M4** | 文档页（PDF→图或 text extract）、音频 | 按所选模型 capabilities 启用 |
 
-**建议改动的包**（实现时）：`internal/config`、`internal/llm`（Message、wire、tokens）、`internal/server`（ingest、history）、`internal/client`（TUI、session req）、新建 `internal/attachment`（可选）。
+**建议改动的包**（实现时）：`internal/cata/config`、`internal/llm`（Message、wire、tokens）、`internal/cata/server`（ingest、history）、`internal/cata/client`（TUI、session req）、新建 `internal/attachment`（可选）。
 
 **刻意不做（与多模态相关）**：不把图片写入 `memory/short/current.md` 全文；不让 evolve 自动选 vision 模型；不在 v1 支持「管道 `cata chat < img.png`」。
 
