@@ -144,13 +144,41 @@ type streamDelta struct {
 }
 
 type streamToolPart struct {
-	Index    int `json:"index"`
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
+	Index    int        `json:"index"`
+	ID       string     `json:"id"`
+	Type     string     `json:"type"`
+	Function streamFunc `json:"function"`
+}
+
+type streamFunc struct {
+	Name      string
+	Arguments string
+}
+
+// UnmarshalJSON 兼容 arguments 为 string 或 JSON object/array（部分兼容端在 SSE 里发 object）。
+func (f *streamFunc) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	f.Name = raw.Name
+	if len(raw.Arguments) == 0 || string(raw.Arguments) == "null" {
+		f.Arguments = ""
+		return nil
+	}
+	if raw.Arguments[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw.Arguments, &s); err != nil {
+			return err
+		}
+		f.Arguments = s
+		return nil
+	}
+	f.Arguments = string(raw.Arguments)
+	return nil
 }
 
 type streamToolAgg struct {
@@ -290,6 +318,17 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, ct, resp.Body, onDelta)
 	if err != nil {
 		return "", "", nil, "", usage, err
+	}
+
+	// 正文里嵌入的 [tool_call …] / <tool_call> 也可补救（部分端 finish_reason=tool_calls 但 delta 为空）
+	if len(toolCalls) == 0 && len(tools) > 0 {
+		if embedded, stripped := ParseEmbeddedToolCalls(assistant); len(embedded) > 0 {
+			toolCalls = embedded
+			assistant = stripped
+			if finishReason == "" {
+				finishReason = "tool_calls"
+			}
+		}
 	}
 
 	// 若干 OpenAI 兼容端在 SSE 下 finish_reason=tool_calls 但 delta 未携带可合并的 tool_calls；

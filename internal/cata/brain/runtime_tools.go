@@ -148,7 +148,7 @@ func (e *RuntimeEnv) ToolsAvailabilityBlock() string {
 	if t.Pwsh != "" {
 		b.WriteString(fmt.Sprintf("powershell: yes (`%s`)\n", t.Pwsh))
 	}
-	b.WriteString("\n未列出的工具同样可能不在 PATH；需要时先用 `run_command` 探测（如 `which node` / `where python`）。\n")
+	b.WriteString("\n未列出的工具同样可能不在 PATH；需要时先用 `run_command` 探测（如 `command -v <tool>` / `which <tool>`），**勿假设**某语言或包管理器可用。\n")
 	return b.String()
 }
 

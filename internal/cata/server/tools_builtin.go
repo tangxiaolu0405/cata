@@ -172,13 +172,36 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 	xctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 
-	cmd := exec.CommandContext(xctx, p.Argv[0], p.Argv[1:]...)
+	// 不用 CommandContext：Windows 上仅 Kill wsl.exe 时 Linux 侧子进程常残留，Wait 会挂死整轮 chat。
+	cmd := exec.Command(p.Argv[0], p.Argv[1:]...)
 	cmd.Dir = wd
+	cmd.Stdin = nil
 
 	var stdOut, stdErr bytes.Buffer
 	cmd.Stdout = &stdOut
 	cmd.Stderr = &stdErr
-	runErr := cmd.Run()
+
+	runErr := cmd.Start()
+	timedOut := false
+	if runErr == nil {
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case runErr = <-done:
+		case <-xctx.Done():
+			killCmdTree(cmd)
+			select {
+			case runErr = <-done:
+			case <-time.After(5 * time.Second):
+				runErr = xctx.Err()
+			}
+			if errors.Is(xctx.Err(), context.DeadlineExceeded) {
+				timedOut = true
+			} else if ctx.Err() != nil {
+				runErr = ctx.Err()
+			}
+		}
+	}
 
 	maxB := ec.MaxOutputBytes
 	if maxB <= 0 {
@@ -186,14 +209,15 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 	}
 
 	exitCode := 0
-	timedOut := false
 	var exitErr *exec.ExitError
 	if runErr != nil {
-		if errors.Is(xctx.Err(), context.DeadlineExceeded) {
+		if timedOut || errors.Is(runErr, context.DeadlineExceeded) {
 			timedOut = true
 			exitCode = -1
 		} else if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitCode()
+		} else if errors.Is(runErr, context.Canceled) {
+			exitCode = -1
 		} else {
 			exitCode = -1
 		}

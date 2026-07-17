@@ -72,6 +72,7 @@ func (e *RuntimeEnv) runCommandHints() string {
 		b.WriteString("- 使用 `mkdir -p`、`ls`、`cat`、heredoc 等 bash 语法；")
 		if e.HostOS == "windows" {
 			b.WriteString("`run_command` argv 示例：`[\"wsl.exe\",\"-e\",\"bash\",\"-lc\",\"mkdir -p foo\"]`。\n")
+			b.WriteString("- **禁止**在 `bash -lc` 里塞多行脚本或长段内联代码（如 `… -c \"…\"` / `-e \"…\"`，Windows/WSL 易挂死）；先 `create_file` 写脚本文件，再一行命令执行；**只使用下方 PATH 探测已存在的运行时**，勿假设某语言可用。\n")
 		} else {
 			b.WriteString("`run_command` argv 示例：`[\"bash\",\"-lc\",\"mkdir -p foo\"]`。\n")
 		}
