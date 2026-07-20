@@ -18,11 +18,11 @@ func TestParseSkillIDFromRel(t *testing.T) {
 func TestLoadSkillManifest(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileSkillManifest)
-	if err := os.WriteFile(path, []byte("runner: python\nentry: hello.py\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("runner: node\nentry: hello.js\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	m, err := LoadSkillManifest(dir)
-	if err != nil || m.Entry != "hello.py" {
+	if err != nil || m.Entry != "hello.js" || m.Runner != "node" {
 		t.Fatalf("m=%v err=%v", m, err)
 	}
 }

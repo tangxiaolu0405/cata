@@ -33,7 +33,7 @@ func (t ToolTier) String() string {
 
 // 各档位内置工具（MCP 仅 full 档追加）。
 var (
-	toolTierLightNames = []string{"read_file", "list_files", "read_skill"}
+	toolTierLightNames = []string{"read_file", "list_files", "read_skill", "declare_task"}
 	toolTierStdExtra   = []string{"search_replace", "append_file", "create_file", "run_command", "run_skill", "ask_user"}
 	toolTierFullExtra  = []string{"delegate_task", "delegate_wait"}
 )

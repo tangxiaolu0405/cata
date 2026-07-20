@@ -91,12 +91,34 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 	pool := newSubagentPool(ctx, ss, conn)
 	ctx = withChatSubagentPool(ctx, pool)
 
+	var task *brain.TaskState
+	if chatWS != nil {
+		var resumed bool
+		var terr error
+		task, resumed, terr = brain.BeginOrResumeTask(chatWS, text, brain.OutputCwd())
+		if terr != nil {
+			log.Printf("task state: %v", terr)
+		} else if msg := brain.TaskResumeProgressMessage(task, resumed); msg != "" {
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": msg})
+		}
+	}
+	guard := newChatLoopGuard(task)
+
 	var sessPromptTok, sessCompletionTok int
 
 	for round := 1; ; round++ {
 		if ctx.Err() != nil {
 			brain.ClearPromptProfile()
 			return ss.emitChatCancelled(conn, lr)
+		}
+		if chatWS != nil {
+			if latest, _ := brain.LoadCurrentTask(chatWS); latest != nil {
+				task = latest
+				guard.applyTask(task)
+			}
+		}
+		if brk := guard.checkBudget(round); brk != nil {
+			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
 		tier := InferToolTier(round, *history, text)
 		roundProfile := PromptProfileForTier(tier)
@@ -200,13 +222,33 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		}
 
 		if len(toolCalls) == 0 {
+			// finish_reason 表明要调工具，但 arguments 损坏被丢弃时，禁止当成成功收工（否则 TUI 直接回等待输入）。
+			if strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use") {
+				hint := "模型请求了工具，但 tool arguments 无法解析（常见于多行 python3 -c / 裸换行 JSON）。请改用 create_file 写脚本再跑一行命令，或输入「继续」。"
+				log.Printf("chat: finish_reason=%s but 0 usable tool_calls after normalize; refusing success-done", finishReason)
+				*history = append(*history, llm.Message{Role: "assistant", Content: strings.TrimSpace(asst + "\n\n[system] " + hint)})
+				if chatWS != nil && task != nil {
+					_ = brain.MarkTaskFailed(chatWS, task, "tool_args_unparsed", hint, round, 0, 0, "", "")
+				}
+				brain.ClearPromptProfile()
+				if lr != nil {
+					lr.Stop()
+				}
+				_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "code": "tool_args_unparsed", "message": hint})
+				return ss.emitChatDone(conn, lr, false, false, "tool_args_unparsed", hint)
+			}
 			*history = append(*history, llm.Message{Role: "assistant", Content: asst})
 			if err := brain.AppendChatTurn(text, asst); err != nil {
 				log.Printf("short-term memory: %v", err)
 			}
+			if chatWS != nil && task != nil {
+				if err := brain.MarkTaskDone(chatWS, task, round); err != nil {
+					log.Printf("task done: %v", err)
+				}
+			}
 			ss.maybeContextCompress(conn, client, history, tools)
 			brain.ClearPromptProfile()
-			return ss.emitChatDone(conn, lr, true, false)
+			return ss.emitChatDone(conn, lr, true, false, "", "")
 		}
 
 		*history = append(*history, llm.Message{
@@ -216,7 +258,8 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 			ToolCalls:        toolCalls,
 		})
 
-		if err := ss.executeChatToolCalls(ctx, conn, client, history, tools, toolCalls, round, &sessPromptTok, &sessCompletionTok, chatWS); err != nil {
+		results, err := ss.executeChatToolCalls(ctx, conn, client, history, tools, toolCalls, round, &sessPromptTok, &sessCompletionTok, chatWS)
+		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				brain.ClearPromptProfile()
 				return ss.emitChatCancelled(conn, lr)
@@ -224,17 +267,61 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 			brain.ClearPromptProfile()
 			return err
 		}
+		if brk := guard.observe(results); brk != nil {
+			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
+		}
+		if chatWS != nil && task != nil {
+			lastTool := ""
+			if len(results) > 0 {
+				lastTool = results[len(results)-1].name
+			}
+			_ = brain.SyncTaskGuardCounters(chatWS, task, round, guard.consecutiveFailures, guard.staleRounds, lastTool, guard.lastFingerprint)
+		}
 		brain.ClearPromptProfile()
 	}
 }
 
-func (ss *SocketServer) emitChatDone(conn net.Conn, lr *connLineReader, success, cancelled bool) error {
+func (ss *SocketServer) emitChatLoopFailure(conn net.Conn, lr *connLineReader, chatWS *brain.Workspace, task *brain.TaskState, guard *chatLoopGuard, round int, brk *chatLoopBreak) error {
+	lastTool := ""
+	fp := ""
+	consec, stale := 0, 0
+	if guard != nil {
+		consec = guard.consecutiveFailures
+		stale = guard.staleRounds
+		fp = guard.lastFingerprint
+	}
+	if chatWS != nil && task != nil {
+		if err := brain.MarkTaskFailed(chatWS, task, brk.Code, brk.Reason, round, consec, stale, lastTool, fp); err != nil {
+			log.Printf("task failed persist: %v", err)
+		}
+	}
+	brain.ClearPromptProfile()
+	msg := brk.Reason
+	if task != nil && task.Goal != "" {
+		msg = fmt.Sprintf("%s\n\n任务已标记失败（code=%s）。目标：%s\n输入「继续」可恢复同一任务。", brk.Reason, brk.Code, task.Goal)
+	}
+	if lr != nil {
+		lr.Stop()
+	}
+	_ = ss.emitStreamLine(conn, map[string]interface{}{
+		"type": "error", "code": brk.Code, "message": msg,
+	})
+	return ss.emitChatDone(conn, lr, false, false, brk.Code, brk.Reason)
+}
+
+func (ss *SocketServer) emitChatDone(conn net.Conn, lr *connLineReader, success, cancelled bool, code, reason string) error {
 	if lr != nil {
 		lr.Stop()
 	}
 	ev := map[string]interface{}{"type": "done", "success": success}
 	if cancelled {
 		ev["cancelled"] = true
+	}
+	if code != "" {
+		ev["code"] = code
+	}
+	if reason != "" {
+		ev["reason"] = reason
 	}
 	return ss.emitStreamLine(conn, ev)
 }
@@ -244,7 +331,7 @@ func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *connLineReader) err
 		lr.Stop()
 	}
 	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": "已停止"})
-	return ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false, "cancelled": true})
+	return ss.emitChatDone(conn, lr, false, true, "", "")
 }
 
 // maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。

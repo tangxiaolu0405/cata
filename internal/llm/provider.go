@@ -31,6 +31,32 @@ type ToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
+// UnmarshalJSON 兼容 arguments 为 JSON string 或 object/array（非流式 DeepSeek 等）。
+func (f *ToolCallFunction) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	f.Name = raw.Name
+	if len(raw.Arguments) == 0 || string(raw.Arguments) == "null" {
+		f.Arguments = ""
+		return nil
+	}
+	if raw.Arguments[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw.Arguments, &s); err != nil {
+			return err
+		}
+		f.Arguments = s
+		return nil
+	}
+	f.Arguments = string(raw.Arguments)
+	return nil
+}
+
 // APIAdapter HTTP 协议适配器（由 llm.api_format 选择，与 provider 标签无关）。
 type APIAdapter interface {
 	Format() string

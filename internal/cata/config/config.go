@@ -34,7 +34,23 @@ type AppConfig struct {
 	Exec           ExecToolConfig       `json:"exec"`
 	WorkspaceFiles WorkspaceFilesConfig `json:"workspace_files"`
 	Subagent       SubagentConfig       `json:"subagent"`
+	Chat           ChatLoopConfig       `json:"chat"`
 	MCP            MCPConfig            `json:"mcp"`
+}
+
+// ChatLoopConfig 主 chat 防失控天花板（业务终止条件由 declare_task 按任务声明）。
+type ChatLoopConfig struct {
+	// HardMaxToolRounds 绝对轮次天花板，防止未声明限额时无限转。默认 200。
+	// 任务 max_tool_rounds 若更大也会被裁到此值。
+	HardMaxToolRounds int `json:"hard_max_tool_rounds,omitempty"`
+}
+
+// ChatHardMaxToolRounds 防失控轮次天花板（默认 200）。不是任务默认终止策略。
+func ChatHardMaxToolRounds() int {
+	if Config != nil && Config.Chat.HardMaxToolRounds > 0 {
+		return Config.Chat.HardMaxToolRounds
+	}
+	return 200
 }
 
 // DefaultPlaywrightMCPVersion 默认 pin 的 @playwright/mcp 版本（避免 @latest 行为漂移）。
@@ -291,6 +307,9 @@ func getDefaultConfig() *AppConfig {
 			DefaultMaxRounds:   8,
 			MaxToolResultBytes: 8192,
 		},
+		Chat: ChatLoopConfig{
+			HardMaxToolRounds: 200,
+		},
 		MCP: MCPConfig{
 			Enabled: true,
 			Servers: []MCPServerEntry{{
@@ -433,6 +452,7 @@ func validateAndSetDefaults(config *AppConfig) error {
 	normalizeExecConfig(&config.Exec)
 	normalizeWorkspaceFiles(&config.WorkspaceFiles)
 	normalizeSubagentConfig(&config.Subagent)
+	normalizeChatLoopConfig(&config.Chat)
 	normalizeMCPConfig(&config.MCP)
 
 	if config.LLM.Enabled && !config.Exec.Enabled {
@@ -546,6 +566,16 @@ func normalizeSubagentConfig(s *SubagentConfig) {
 	}
 	if s.MaxToolResultBytes <= 0 {
 		s.MaxToolResultBytes = 8192
+	}
+}
+
+func normalizeChatLoopConfig(c *ChatLoopConfig) {
+	if c == nil {
+		return
+	}
+	if c.HardMaxToolRounds <= 0 {
+		// 兼容旧配置字段（若仍存在于磁盘 JSON 但结构已删字段，Unmarshal 会忽略）
+		c.HardMaxToolRounds = 200
 	}
 }
 

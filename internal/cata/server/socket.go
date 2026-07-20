@@ -211,6 +211,11 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if err := brain.AppendSessionBoundary(); err != nil {
 				log.Printf("short-term session boundary: %v", err)
 			}
+			if w := brain.Active(); w != nil {
+				if err := brain.ClearCurrentTask(w); err != nil {
+					log.Printf("clear task state: %v", err)
+				}
+			}
 			ss.sendResponse(conn, Response{Success: true, Message: "Conversation cleared."})
 			continue
 		case "chat_cancel":

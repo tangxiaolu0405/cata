@@ -18,6 +18,8 @@ type SkillManifest struct {
 	Runner      string
 	Entry       string
 	Description string
+	// VerifyEntry 可选：固化后自动验证脚本（相对 skill 目录）。
+	VerifyEntry string
 }
 
 // RunSkillArgs run_skill 工具参数。
@@ -46,12 +48,13 @@ func ResolveSkillDir(skillID string) (dir string, err error) {
 }
 
 // LoadSkillManifest 解析 manifest.yaml（简易 key: value）。
+// runner / entry 必须显式写出；不默认任何语言（尤其不默认 python）。
 func LoadSkillManifest(dir string) (*SkillManifest, error) {
 	data, err := os.ReadFile(filepath.Join(dir, FileSkillManifest))
 	if err != nil {
 		return nil, err
 	}
-	m := &SkillManifest{Runner: "python", Entry: "script.py"}
+	m := &SkillManifest{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -70,7 +73,12 @@ func LoadSkillManifest(dir string) (*SkillManifest, error) {
 			m.Entry = v
 		case "description":
 			m.Description = v
+		case "verify_entry", "verify":
+			m.VerifyEntry = v
 		}
+	}
+	if strings.TrimSpace(m.Runner) == "" {
+		return nil, fmt.Errorf("manifest runner is required (do not assume a language)")
 	}
 	if m.Entry == "" {
 		return nil, fmt.Errorf("manifest entry is empty")
@@ -100,6 +108,17 @@ func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	text, err := runSkillCmd(ctx, wd, argv)
+	if err != nil {
+		return text, fmt.Errorf("run_skill %s: %w", args.Skill, err)
+	}
+	return fmt.Sprintf("run_skill %s ok (cwd=%s)\n%s", args.Skill, wd, text), nil
+}
+
+func runSkillCmd(ctx context.Context, wd string, argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", fmt.Errorf("empty argv")
+	}
 	to := 120 * time.Second
 	if config.Config != nil && config.Config.Exec.TimeoutSeconds > 0 {
 		to = time.Duration(config.Config.Exec.TimeoutSeconds) * time.Second
@@ -122,26 +141,45 @@ func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
 	if trunc {
 		text += "\n…(truncated)"
 	}
-	if err != nil {
-		return text, fmt.Errorf("run_skill %s: %w", args.Skill, err)
-	}
-	return fmt.Sprintf("run_skill %s ok (cwd=%s)\n%s", args.Skill, wd, text), nil
+	return text, err
 }
 
 func buildSkillArgv(runner, entry string, params map[string]interface{}) ([]string, error) {
-	switch strings.ToLower(strings.TrimSpace(runner)) {
-	case "python", "python3", "":
-		argv := []string{"python", entry}
+	r := strings.ToLower(strings.TrimSpace(runner))
+	if r == "" {
+		return nil, fmt.Errorf("runner required (do not assume a language)")
+	}
+	switch r {
+	case "node":
+		argv := []string{"node", entry}
 		if len(params) > 0 {
 			if b, e := json.Marshal(params); e == nil && len(b) > 2 && string(b) != "{}" {
 				argv = append(argv, string(b))
 			}
 		}
 		return argv, nil
-	case "node":
-		return []string{"node", entry}, nil
+	case "bash", "sh":
+		return []string{"bash", entry}, nil
+	case "go", "go-run":
+		return []string{"go", "run", entry}, nil
+	case "python", "python3":
+		// 仅当 manifest 显式声明 runner 时才用；系统不默认选 python。
+		argv := []string{r, entry}
+		if len(params) > 0 {
+			if b, e := json.Marshal(params); e == nil && len(b) > 2 && string(b) != "{}" {
+				argv = append(argv, string(b))
+			}
+		}
+		return argv, nil
 	default:
-		return nil, fmt.Errorf("unsupported runner %q", runner)
+		// 通用：runner 即 PATH 中的可执行文件名
+		argv := []string{runner, entry}
+		if len(params) > 0 {
+			if b, e := json.Marshal(params); e == nil && len(b) > 2 && string(b) != "{}" {
+				argv = append(argv, string(b))
+			}
+		}
+		return argv, nil
 	}
 }
 

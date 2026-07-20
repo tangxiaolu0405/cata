@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"cata/internal/cata/clock"
 )
@@ -97,6 +99,22 @@ func ListRegistryEntries() ([]RegistryEntry, error) {
 	out := make([]RegistryEntry, len(rf.Workspaces))
 	copy(out, rf.Workspaces)
 	return out, nil
+}
+
+// RecentlyActive 判断 last_seen_at 是否在 within 窗口内（空或无效时间戳视为不活跃）。
+func (e RegistryEntry) RecentlyActive(within time.Duration) bool {
+	if within <= 0 {
+		within = DefaultEvolveActiveWindow
+	}
+	s := strings.TrimSpace(e.LastSeenAt)
+	if s == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return false
+	}
+	return clock.Now().Sub(t) <= within
 }
 
 func touchRegistryEntry(id string) {

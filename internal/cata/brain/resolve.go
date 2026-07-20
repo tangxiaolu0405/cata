@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"cata/internal/cata/clock"
@@ -227,6 +228,28 @@ func ListWorkspaces() ([]*Workspace, error) {
 	for i := range entries {
 		ws := entryToWorkspace(&entries[i])
 		out[i] = ws
+	}
+	return out, nil
+}
+
+// DefaultEvolveActiveWindow 近期活跃窗口：仅对该时间内有过 chat 绑定的工作区跑 evolve。
+const DefaultEvolveActiveWindow = 24 * time.Hour
+
+// ListRecentlyActiveWorkspaces 返回 last_seen_at 落在 within 内的工作区（渠道/TUI 近期用过）。
+func ListRecentlyActiveWorkspaces(within time.Duration) ([]*Workspace, error) {
+	if within <= 0 {
+		within = DefaultEvolveActiveWindow
+	}
+	entries, err := ListRegistryEntries()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Workspace, 0, len(entries))
+	for i := range entries {
+		if !entries[i].RecentlyActive(within) {
+			continue
+		}
+		out = append(out, entryToWorkspace(&entries[i]))
 	}
 	return out, nil
 }

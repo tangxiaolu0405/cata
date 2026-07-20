@@ -81,31 +81,35 @@ func (ss *SocketServer) executeChatToolCalls(
 	round int,
 	sessPromptTok, sessCompletionTok *int,
 	chatWS *brain.Workspace,
-) error {
+) ([]chatToolExecResult, error) {
+	var all []chatToolExecResult
 	fatalBrowser := false
 	for _, batch := range partitionChatToolBatches(toolCalls) {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return all, ctx.Err()
 		}
 		if batch.parallel && len(batch.calls) > 1 {
-			if err := ss.runChatToolBatchParallel(ctx, conn, client, history, tools, batch.calls, round, sessPromptTok, sessCompletionTok, chatWS); err != nil {
-				return err
+			batchRes, err := ss.runChatToolBatchParallel(ctx, conn, client, history, tools, batch.calls, round, sessPromptTok, sessCompletionTok, chatWS)
+			all = append(all, batchRes...)
+			if err != nil {
+				return all, err
 			}
 			continue
 		}
 		for _, tc := range batch.calls {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return all, ctx.Err()
 			}
 			res, fb, err := ss.runChatToolSequential(ctx, conn, client, history, tools, tc, round, sessPromptTok, sessCompletionTok, chatWS, fatalBrowser)
 			if err != nil {
-				return err
+				return all, err
 			}
 			fatalBrowser = fb
 			ss.appendChatToolResult(history, res)
+			all = append(all, res)
 		}
 	}
-	return nil
+	return all, nil
 }
 
 func (ss *SocketServer) runChatToolSequential(
@@ -149,7 +153,7 @@ func (ss *SocketServer) runChatToolBatchParallel(
 	round int,
 	sessPromptTok, sessCompletionTok *int,
 	chatWS *brain.Workspace,
-) error {
+) ([]chatToolExecResult, error) {
 	_ = ss.emitStreamLine(conn, map[string]interface{}{
 		"type":    "progress",
 		"message": fmt.Sprintf("executing %d tools in parallel", len(calls)),
@@ -181,7 +185,7 @@ func (ss *SocketServer) runChatToolBatchParallel(
 	wg.Wait()
 	select {
 	case err := <-errCh:
-		return err
+		return results, err
 	default:
 	}
 
@@ -191,7 +195,7 @@ func (ss *SocketServer) runChatToolBatchParallel(
 		})
 		ss.appendChatToolResult(history, res)
 	}
-	return nil
+	return results, nil
 }
 
 func (ss *SocketServer) appendChatToolResult(history *[]llm.Message, res chatToolExecResult) {

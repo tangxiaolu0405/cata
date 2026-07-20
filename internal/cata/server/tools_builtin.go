@@ -34,6 +34,7 @@ func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
 	}
 	reg.Register(&runSkillTool{})
 	reg.Register(&readSkillTool{})
+	reg.Register(&declareTaskTool{})
 	reg.Register(&askUserTool{ss: ss})
 	reg.Register(&delegateTaskTool{ss: ss})
 	reg.Register(&delegateWaitTool{ss: ss})
@@ -250,6 +251,57 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 		log.Printf("run_command: exit=%d argv=%v cwd=%s bytes=%d", exitCode, p.Argv, wd, totalLen)
 	}
 	return result, nil
+}
+
+// --- declare_task ---
+
+type declareTaskTool struct{}
+
+func (t *declareTaskTool) Name() string { return "declare_task" }
+
+func (t *declareTaskTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name: "declare_task",
+		Description: "Persist recoverable task contract: goal, acceptance, steps, and THIS task's loop limits. " +
+			"Termination limits are task-specific (not global): set max_tool_rounds / max_consecutive_failures / max_stale_rounds for this job. " +
+			"0 disables that breaker (except hard ceiling). Call early on multi-step work.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"goal":{"type":"string"},"acceptance":{"type":"array","items":{"type":"string"},"description":"Done criteria for THIS task"},"steps":{"type":"array","items":{"type":"string"}},"max_tool_rounds":{"type":"integer","description":"Task tool-round budget; 0=use hard ceiling only"},"max_consecutive_failures":{"type":"integer","description":"Stop after N all-fail tool rounds; 0=off"},"max_stale_rounds":{"type":"integer","description":"Stop after N identical-outcome rounds; 0=off"}},"required":["goal"]}`),
+	}}
+}
+
+func (t *declareTaskTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		Goal                   string   `json:"goal"`
+		Acceptance             []string `json:"acceptance"`
+		Steps                  []string `json:"steps"`
+		MaxToolRounds          *int     `json:"max_tool_rounds"`
+		MaxConsecutiveFailures *int     `json:"max_consecutive_failures"`
+		MaxStaleRounds         *int     `json:"max_stale_rounds"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("declare_task args: %w", err)
+	}
+	w := brain.Active()
+	if w == nil {
+		return "", fmt.Errorf("declare_task: no active workspace")
+	}
+	c := brain.TaskContract{
+		Goal:                   p.Goal,
+		Acceptance:             p.Acceptance,
+		Steps:                  p.Steps,
+		SetAcceptance:          p.Acceptance != nil,
+		SetSteps:               p.Steps != nil,
+		MaxToolRounds:          p.MaxToolRounds,
+		MaxConsecutiveFailures: p.MaxConsecutiveFailures,
+		MaxStaleRounds:         p.MaxStaleRounds,
+	}
+	st, err := brain.UpdateTaskContract(w, c)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("task %s status=%s goal=%q acceptance=%d steps=%d limits=rounds:%d fail:%d stale:%d",
+		st.ID, st.Status, st.Goal, len(st.Acceptance), len(st.Steps),
+		st.MaxToolRounds, st.MaxConsecutiveFailures, st.MaxStaleRounds), nil
 }
 
 // --- run_skill ---

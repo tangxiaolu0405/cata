@@ -97,6 +97,7 @@ var configFields = map[string]fieldSpec{
 	"subagent.max_tool_result_bytes":  {get: intGet(func(c *AppConfig) int { return c.Subagent.MaxToolResultBytes }), set: intSet(func(c *AppConfig, v int) { c.Subagent.MaxToolResultBytes = v })},
 	"subagent.max_output_tokens":      {get: intGet(func(c *AppConfig) int { return c.Subagent.MaxOutputTokens }), set: intSet(func(c *AppConfig, v int) { c.Subagent.MaxOutputTokens = v })},
 	"subagent.default_tools":          {get: subagentDefaultToolsGet, set: subagentDefaultToolsSet},
+	"chat.hard_max_tool_rounds": {get: intGet(func(c *AppConfig) int { return c.Chat.HardMaxToolRounds }), set: intSet(func(c *AppConfig, v int) { c.Chat.HardMaxToolRounds = v })},
 	"mcp.enabled":                    {get: boolGet(func(c *AppConfig) bool { return c.MCP.Enabled }), set: boolSet(func(c *AppConfig, v bool) { c.MCP.Enabled = v })},
 	"mcp.tool_timeout_seconds":       {get: intGet(func(c *AppConfig) int { return c.MCP.ToolTimeoutSeconds }), set: intSet(func(c *AppConfig, v int) { c.MCP.ToolTimeoutSeconds = v })},
 	"mcp.max_output_bytes":           {get: intGet(func(c *AppConfig) int { return c.MCP.MaxOutputBytes }), set: intSet(func(c *AppConfig, v int) { c.MCP.MaxOutputBytes = v })},

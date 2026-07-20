@@ -366,6 +366,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 				reasoning = cr.Choices[0].Message.ReasoningContent
 			}
 		}
+		toolCalls = NormalizeToolCalls(toolCalls)
 		finishReason = "tool_calls"
 	}
 

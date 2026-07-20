@@ -68,12 +68,13 @@ func (e *Engine) Start(ctx context.Context) {
 
 func (e *Engine) runAll(ctx context.Context) {
 	_ = brain.EnsureCataLayout()
-	list, err := brain.ListWorkspaces()
+	list, err := brain.ListRecentlyActiveWorkspaces(brain.DefaultEvolveActiveWindow)
 	if err != nil {
 		log.Printf("Autonomous evolution: list workspaces: %v", err)
 		return
 	}
 	if len(list) == 0 {
+		log.Printf("Autonomous evolution: no workspace active in last %s", brain.DefaultEvolveActiveWindow)
 		return
 	}
 	prev := brain.Active()

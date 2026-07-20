@@ -30,9 +30,16 @@ func NormalizeToolArguments(toolName, raw string) string {
 	if json.Valid([]byte(raw)) {
 		return raw
 	}
+	// 模型常在 JSON 字符串值里塞裸换行（合法 Go string / 非法 JSON）；先转义再验。
+	if fixed := escapeRawControlsInJSONStrings(raw); fixed != raw && json.Valid([]byte(fixed)) {
+		return fixed
+	}
 	compact := compactJSONOutsideStrings(raw)
 	if json.Valid([]byte(compact)) {
 		return compact
+	}
+	if fixed := escapeRawControlsInJSONStrings(compact); fixed != compact && json.Valid([]byte(fixed)) {
+		return fixed
 	}
 	if fixed := repairToolArgumentsByName(toolName, raw); fixed != "" {
 		return fixed
@@ -41,8 +48,59 @@ func NormalizeToolArguments(toolName, raw string) string {
 		if fixed := repairToolArgumentsByName(toolName, compact); fixed != "" {
 			return fixed
 		}
+		if fixed := repairToolArgumentsByName(toolName, escapeRawControlsInJSONStrings(raw)); fixed != "" {
+			return fixed
+		}
 	}
 	return ""
+}
+
+// escapeRawControlsInJSONStrings 将 JSON 字符串字面量内的裸 \n/\r/\t 转成 \\n 等，使其可被 json.Valid。
+func escapeRawControlsInJSONStrings(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 32)
+	inStr := false
+	esc := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if esc {
+			b.WriteByte(c)
+			esc = false
+			continue
+		}
+		if inStr {
+			if c == '\\' {
+				b.WriteByte(c)
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+				b.WriteByte(c)
+				continue
+			}
+			switch c {
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '\t':
+				b.WriteString(`\t`)
+			default:
+				if c < 0x20 {
+					b.WriteString(fmt.Sprintf(`\u%04x`, c))
+				} else {
+					b.WriteByte(c)
+				}
+			}
+			continue
+		}
+		if c == '"' {
+			inStr = true
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func repairToolArgumentsByName(name, raw string) string {

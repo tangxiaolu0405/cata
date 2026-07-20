@@ -42,6 +42,35 @@ func AppendSkillToCapabilities(w *Workspace, skillID string) error {
 	return os.WriteFile(path, []byte(out), 0644)
 }
 
+// RemoveSkillFromCapabilities 从 capabilities.yaml 移除 skill（验证失败回退）。
+func RemoveSkillFromCapabilities(w *Workspace, skillID string) error {
+	if w == nil {
+		return fmt.Errorf("no workspace")
+	}
+	skillID = strings.TrimSpace(skillID)
+	if skillID == "" {
+		return fmt.Errorf("empty skill id")
+	}
+	path := w.CapabilitiesPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	caps := ParseCapabilitiesYAML(data)
+	filtered := caps.Skills[:0]
+	for _, s := range caps.Skills {
+		if strings.EqualFold(s, skillID) {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	caps.Skills = filtered
+	return os.WriteFile(path, []byte(FormatCapabilitiesYAML(caps)), 0644)
+}
+
 // RejectCapabilitiesPatch 演进 patch capabilities 时保留 mcp 段（skill 名仍优先 server append）。
 func RejectCapabilitiesPatch(rel, mode, content string) error {
 	if !strings.HasSuffix(filepath.ToSlash(rel), FileCapabilities) {
