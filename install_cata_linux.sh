@@ -52,7 +52,10 @@ download() {
   local url="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  # Bind path at trap-set time: `local tmp` is unset after return, and EXIT
+  # would then hit `set -u` → "tmp: unbound variable".
+  # shellcheck disable=SC2064
+  trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
 
   log "version: ${VERSION}"
   log "artifact: ${ARCHIVE}"
@@ -68,6 +71,9 @@ download() {
   install -m 0755 "${tmp}/${GATEWAY_BIN}" "${INSTALL_DIR}/${GATEWAY_BIN}"
   log "installed: ${INSTALL_DIR}/${BIN_NAME}"
   log "installed: ${INSTALL_DIR}/${GATEWAY_BIN}"
+
+  rm -rf -- "$tmp"
+  trap - EXIT
 }
 
 ensure_path() {
