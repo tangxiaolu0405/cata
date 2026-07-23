@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"cata/internal/cata/config"
+	"cata/internal/cata/version"
 	"cata/internal/gateway"
 	"cata/internal/gateway/qq"
 	"cata/internal/gateway/telegram"
@@ -18,12 +19,20 @@ import (
 )
 
 func main() {
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "-V":
+			fmt.Printf("cata-gateway %s\n", version.Version)
+			return
+		}
+	}
+
 	if err := config.InitBrainPath(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	args := os.Args[1:]
 	if len(args) == 0 || args[0] == "run" {
 		runGateway("")
 		return
@@ -53,6 +62,7 @@ func printUsage() {
 	fmt.Println("  cata-gateway telegram     Telegram only (UI still if enabled)")
 	fmt.Println("  cata-gateway qq           QQ WebSocket only (experimental; UI if enabled)")
 	fmt.Println("  cata-gateway init         Create ~/.cata/gateway.json from template")
+	fmt.Println("  cata-gateway version      Print version")
 	fmt.Println()
 	fmt.Println("Local Web UI (default http://127.0.0.1:8787):")
 	fmt.Println("  Multi-project chat (cwd = real project path); channels panel is read-only")

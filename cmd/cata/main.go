@@ -11,15 +11,25 @@ import (
 	"cata/internal/cata/clock"
 	"cata/internal/cata/config"
 	"cata/internal/cata/server"
+	"cata/internal/cata/update"
+	"cata/internal/cata/version"
 )
 
 func main() {
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "-V":
+			fmt.Printf("cata %s\n", version.Version)
+			return
+		}
+	}
+
 	if err := config.InitBrainPath(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Failed to initialize brain path: %v\n", err)
 		os.Exit(1)
 	}
 
-	args := os.Args[1:]
 	if len(args) == 0 {
 		client.RunChat(nil)
 		return
@@ -36,6 +46,8 @@ func main() {
 		handleConfigCommand(args[1:])
 	case "run":
 		runServer(args[1:])
+	case "update":
+		runUpdate(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: Unknown command: %s\n\n", args[0])
 		printUsage()
@@ -52,14 +64,45 @@ func printUsage() {
 	fmt.Println("  cata run                Start server (one per machine; foreground)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout")
 	fmt.Println("  cata config             Manage configuration")
+	fmt.Println("  cata version            Print version")
+	fmt.Println("  cata update [--check|--force]  Update from GitHub Releases")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  cata")
 	fmt.Println("  cata chat --dir ~/project")
 	fmt.Println("  cata chat --dir ~/a --dir ~/b")
+	fmt.Println("  cata update")
+	fmt.Println("  cata update --check")
 	fmt.Println()
 	fmt.Println("Same output directory: second `cata` exits with an error.")
 	fmt.Println("See README.md and agents.md")
+}
+
+func runUpdate(args []string) {
+	opts := update.Options{}
+	for _, a := range args {
+		switch a {
+		case "--check":
+			opts.CheckOnly = true
+		case "--force":
+			opts.Force = true
+		case "-h", "--help":
+			fmt.Println("Usage: cata update [--check] [--force]")
+			fmt.Println()
+			fmt.Println("  --check   Check for a newer release without downloading")
+			fmt.Println("  --force   Reinstall even if versions match")
+			fmt.Println()
+			fmt.Println("Env: CATA_REPO (default tangxiaolu0405/cata), GITHUB_TOKEN (optional)")
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown update flag: %s\n", a)
+			os.Exit(1)
+		}
+	}
+	if err := update.Run(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func runInit() {

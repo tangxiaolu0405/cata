@@ -12,3 +12,9 @@
 /cata-windows
 /cata-gateway
 /cata-gateway.exe
+
+# macOS
+.DS_Store
+**/.DS_Store
+.DS_Store
+**/.DS_Store

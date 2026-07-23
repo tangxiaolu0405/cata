@@ -51,6 +51,20 @@ $env:CATA_VERSION = "v0.1.9"; .\install_cata_windows.ps1
 
 安装完成后**新开终端**，确认 `cata` 在 PATH 中，再配置 `~/.cata/config.json` 中的 LLM API Key。
 
+## 更新
+
+已安装带 `update` 子命令的版本后，可直接：
+
+```bash
+cata version          # 查看当前版本
+cata update --check   # 仅检查是否有新版
+cata update           # 从 GitHub Releases 下载并替换本机 cata + cata-gateway
+```
+
+`cata update` 会替换**当前可执行文件所在目录**下的二进制（与安装脚本默认路径一致时即为 `~/.local/bin` 或 Windows `%LOCALAPPDATA%\cata\bin`）。可用 `CATA_REPO` 覆盖仓库，`GITHUB_TOKEN` 降低 GitHub API 限流。
+
+若当前还是**不含** `cata update` 的旧版，需先再跑一次上方安装脚本拿到新二进制，之后即可用 `cata update` 升级。
+
 ## 快速开始
 
 ```bash
