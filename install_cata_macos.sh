@@ -79,35 +79,51 @@ download() {
 
 ensure_path() {
   local export_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
-  local profiles=()
+  local targets=()
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
 
-  if [ -f "${HOME}/.zprofile" ]; then
-    profiles+=("${HOME}/.zprofile")
+  # Interactive shells read *.rc; login shells read *.profile.
+  # macOS Terminal / Cursor often start interactive non-login zsh → only .zshrc.
+  if [ "$shell_name" = "zsh" ] || [ -n "${ZSH_VERSION:-}" ] || [ -f "${HOME}/.zshrc" ] || [ -f "${HOME}/.zprofile" ]; then
+    targets+=("${HOME}/.zshrc")
+    targets+=("${HOME}/.zprofile")
   fi
-  if [ -f "${HOME}/.zshrc" ]; then
-    profiles+=("${HOME}/.zshrc")
+  if [ "$shell_name" = "bash" ] || [ -n "${BASH_VERSION:-}" ] || [ -f "${HOME}/.bashrc" ] || [ -f "${HOME}/.bash_profile" ]; then
+    targets+=("${HOME}/.bashrc")
+    targets+=("${HOME}/.bash_profile")
   fi
-  if [ -f "${HOME}/.bash_profile" ]; then
-    profiles+=("${HOME}/.bash_profile")
-  fi
-  profiles+=("${HOME}/.profile")
+  targets+=("${HOME}/.profile")
 
-  for profile in "${profiles[@]}"; do
-    [ -f "$profile" ] || continue
-    if grep -Fq "$INSTALL_DIR" "$profile" 2>/dev/null; then
-      log "PATH already configured in ${profile}"
-      return
+  local target added=0
+  for target in "${targets[@]}"; do
+    # Create common rc files so PATH is available in interactive sessions.
+    case "$target" in
+      */.zshrc|*/.zprofile|*/.bashrc|*/.bash_profile)
+        [ -f "$target" ] || touch "$target"
+        ;;
+      *)
+        [ -f "$target" ] || continue
+        ;;
+    esac
+    if grep -Fq "$INSTALL_DIR" "$target" 2>/dev/null; then
+      continue
     fi
+    {
+      echo ""
+      echo "# cata installer"
+      echo "$export_line"
+    } >>"$target"
+    log "added PATH to ${target}"
+    added=1
   done
 
-  local target="${profiles[0]}"
-  {
-    echo ""
-    echo "# cata installer"
-    echo "$export_line"
-  } >>"$target"
-  log "added PATH to ${target}"
-  log "run: source ${target}   (or open a new shell)"
+  if [ "$added" -eq 0 ]; then
+    log "PATH already configured in shell profiles"
+  fi
+
+  # Current `curl | bash` process PATH does not affect the parent shell.
+  log "run: export PATH=\"${INSTALL_DIR}:\$PATH\"   (or open a new terminal)"
 }
 
 maybe_init() {
