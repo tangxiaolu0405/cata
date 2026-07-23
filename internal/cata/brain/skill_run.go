@@ -28,7 +28,7 @@ type RunSkillArgs struct {
 	Params map[string]interface{} `json:"params"`
 }
 
-// ResolveSkillDir workspace 脑子优先，其次 ~/.cata/skills/。
+// ResolveSkillDir 项目 .cata/skills 优先，其次 ~/.cata/skills/（全局回退）。
 func ResolveSkillDir(skillID string) (dir string, err error) {
 	skillID = strings.TrimSpace(skillID)
 	if skillID == "" {
@@ -39,12 +39,19 @@ func ResolveSkillDir(skillID string) (dir string, err error) {
 		if _, e := os.Stat(filepath.Join(p, FileSkillManifest)); e == nil {
 			return p, nil
 		}
+		// SKILL.md-only skills (no manifest yet) still resolve for read_skill.
+		if _, e := os.Stat(filepath.Join(p, FileSkillMD)); e == nil {
+			return p, nil
+		}
 	}
 	g := filepath.Join(CataHome(), DirSkills, skillID)
 	if _, e := os.Stat(filepath.Join(g, FileSkillManifest)); e == nil {
 		return g, nil
 	}
-	return "", fmt.Errorf("skill %q: manifest not found in workspace brain or ~/.cata/skills", skillID)
+	if _, e := os.Stat(filepath.Join(g, FileSkillMD)); e == nil {
+		return g, nil
+	}
+	return "", fmt.Errorf("skill %q: not found under focus_path/.cata/skills/ or ~/.cata/skills/", skillID)
 }
 
 // LoadSkillManifest 解析 manifest.yaml（简易 key: value）。

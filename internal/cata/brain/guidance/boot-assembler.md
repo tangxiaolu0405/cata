@@ -13,8 +13,9 @@
 ## 路径约定
 
 - **引导** `~/.cata/global/`：constraints、behavior、boot-assembler；全机共享，改前须用户明确同意；**evolve 不写**
-- **主要内容** `focus_path/.cata/`：persona、modes、skills；节选已注入 system；工具路径 `brain/modes/...`、`brain/persona.local.md`
-- **运行时记忆** `~/.cata/brain/workspaces/<id>/`：short-term、long-term、index；工具路径 `brain/memory/...`
+- 主要内容 `focus_path/.cata/`：persona、modes、skills；节选已注入 system；工具路径 `brain/modes/...`、`brain/persona.local.md`、`brain/skills/<id>/...`
+- 运行时记忆 `~/.cata/brain/workspaces/<id>/`：short-term、long-term、index；工具路径 `brain/memory/...`（**不含** skills）
+- 产出区：默认相对路径；与脑子分离
 - **产出区** cwd：默认文件路径、`run_command` cwd；交付物写这里
 - 禁止把 **项目交付物** 默认写进 CATA_HOME 或当成 global 事实
 

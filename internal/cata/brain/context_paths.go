@@ -2,6 +2,7 @@ package brain
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -160,6 +161,14 @@ func terminalPathsSystemBlockFull() string {
 		b.WriteString("- `brain/memory/…` → `")
 		b.WriteString(w.Dir())
 		b.WriteString("/memory/…`\n")
+		b.WriteString("- `brain/skills/<id>/…` → `")
+		b.WriteString(filepath.Join(w.ProjectCataRoot(), DirSkills))
+		b.WriteString("/<id>/…`（**禁止**写入 home 格 `")
+		b.WriteString(w.Dir())
+		b.WriteString("/skills`）\n")
+		b.WriteString("- 注册 skill：改 `brain/modes/")
+		b.WriteString(w.modeID())
+		b.WriteString("/capabilities.yaml` 的 `skills:` 列表（勿把 capabilities 写进 skills/ 目录）\n")
 	} else {
 		b.WriteString("- 脑子分区：（未解析）\n")
 	}
@@ -201,7 +210,8 @@ func terminalPathsSystemBlockFull() string {
 	b.WriteString(env.ToolsAvailabilityBlock())
 	b.WriteString("\n")
 	b.WriteString(env.runCommandHints())
-	b.WriteString("\n改产出区用默认路径；改**项目内容**用 `brain/modes/...`、`brain/persona.local.md`；改**全机引导**用 `global/constraints.md`（须用户明确同意，evolve 不写）。\n")
+	b.WriteString("\n改产出区用默认路径；改**项目内容**用 `brain/modes/...`、`brain/persona.local.md`、`brain/skills/<id>/...`；改**全机引导**用 `global/constraints.md`（须用户明确同意，evolve 不写）。\n")
+	b.WriteString("创建/固化 skill：用文件工具写 `brain/skills/<id>/SKILL.md`（及 manifest），并更新 `brain/modes/<mode>/capabilities.yaml` 的 skills 列表；**禁止** `mkdir ~/.cata/brain/workspaces/.../skills`。\n")
 	b.WriteString("改文件优先 **read_file** → **search_replace** / **append_file**；跑命令用 **run_command**。禁止只写代码块或 XML 假装已执行。\n")
 	return b.String()
 }

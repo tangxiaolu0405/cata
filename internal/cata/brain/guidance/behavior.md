@@ -17,8 +17,12 @@
 | 本项目用途、栈、当前任务 | `brain/persona.local.md` | `<focus_path>/.cata/persona.local.md` |
 | 在本项目下的习惯、偏好 | `brain/modes/<mode>/persona.md` | `<focus_path>/.cata/modes/...` |
 | 本项目 SOP、补充约束 | `brain/modes/<mode>/behavior.md` 等 | `<focus_path>/.cata/modes/...` |
+| 可执行 skill（SKILL.md / manifest） | `brain/skills/<id>/…` | `<focus_path>/.cata/skills/<id>/` |
+| skill 启用列表 | `brain/modes/<mode>/capabilities.yaml` | `<focus_path>/.cata/modes/.../capabilities.yaml` |
 | 对话流水、长期细节 | `brain/memory/…` | `~/.cata/brain/workspaces/<id>/memory/…` |
 | **全机** 都要遵守的规则 | `global/constraints.md` 等 | `~/.cata/global/` |
+
+**禁止**把 skills 写到 `~/.cata/brain/workspaces/<id>/skills`（那是旧位置；home 格只存 memory/meta）。
 
 ## 命令与环境
 

@@ -27,6 +27,7 @@
 |----|--------|------------|-----------|--------|
 | server（每轮 chat） | — | — | 追加 short-term | — |
 | evolve（后台） | **禁止** | 本 workspace 主要内容 | 本格 memory | **禁止** |
-| chat 文件工具 | 用户明确要改全机规则时 | `brain/persona.local` 等 | `brain/memory/…` | 默认路径 |
+| chat 文件工具 | 用户明确要改全机规则时 | `brain/persona.local`、`brain/skills/…` 等 | `brain/memory/…` | 默认路径 |
 
 **禁止** 把某项目的栈、任务、仓库细节写进 global（会污染所有 workspace）。
+**禁止** 把 skills 写到 `~/.cata/brain/workspaces/<id>/skills`（应用 `brain/skills/<id>/` → 项目 `.cata/skills/`）。

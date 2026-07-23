@@ -14,14 +14,14 @@ import (
 var embeddedGuidanceFS embed.FS
 
 // guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从嵌入模板覆盖 ~/.cata/global 引导文件。
-const guidanceTemplateVersion = 3
+const guidanceTemplateVersion = 4
 
 const fileGuidanceVersion = ".guidance_version"
 
 var globalMemoryMigrateOnce sync.Once
 
 // ChatBrainToolPathNote 文件工具 schema 中 brain/ 前缀说明。
-const ChatBrainToolPathNote = "brain/persona.local+modes+skills → focus_path/.cata/; brain/memory/ → ~/.cata/brain/workspaces/<id>/"
+const ChatBrainToolPathNote = "brain/persona.local+modes+skills → focus_path/.cata/; brain/memory/ → ~/.cata/brain/workspaces/<id>/ (skills NEVER in home cell)"
 
 // EnsureCataLayout 创建 ~/.cata 顶层目录与 global 模板。
 func EnsureCataLayout() error {

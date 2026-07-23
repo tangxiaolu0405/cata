@@ -6,6 +6,7 @@ import (
 )
 
 // migrateHomeBrainDocsToProject 将旧版 home 脑子格内的 persona/modes/skills 迁入 focus_path/.cata/。
+// skills 迁完后删除 home 侧目录，避免模型继续往 ~/.cata/brain/.../skills 写。
 func (w *Workspace) migrateHomeBrainDocsToProject() error {
 	home := w.Dir()
 	proj := w.ProjectCataRoot()
@@ -25,6 +26,9 @@ func (w *Workspace) migrateHomeBrainDocsToProject() error {
 			}
 			if err := mergeDirFiles(src, dst); err != nil {
 				return err
+			}
+			if name == DirSkills {
+				_ = os.RemoveAll(src)
 			}
 			continue
 		}

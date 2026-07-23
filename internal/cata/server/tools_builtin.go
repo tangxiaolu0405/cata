@@ -50,7 +50,7 @@ func (t *readFileTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "read_file",
 		Description: "Read a text file. Path: default=output cwd; " + brain.ChatBrainToolPathNote + " global/…=~/.cata/global/. Response includes resolved= absolute path.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path: default=output; brain/persona.local → focus_path/.cata/; brain/memory/ → home cell; global/…"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path: default=output; brain/persona.local|modes|skills → focus_path/.cata/; brain/memory/ → home cell; global/…"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`),
 	}}
 }
 
@@ -312,9 +312,10 @@ func (t *runSkillTool) Name() string { return "run_skill" }
 
 func (t *runSkillTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name:        "run_skill",
-		Description: "Run a crystallized skill script from brain (workspace ~/.cata/brain/.../skills/<id>/). Outputs go to output cwd. Use for known tasks; use browser_* for new sites.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from capabilities.yaml (brain skills/<id>/)"},"params":{"type":"object","description":"Optional JSON params passed to the skill script"}},"required":["skill"]}`),
+		Name: "run_skill",
+		Description: "Run a crystallized skill from focus_path/.cata/skills/<id>/ (tool path brain/skills/<id>/). " +
+			"NOT under ~/.cata/brain/workspaces/. Outputs go to output cwd. Prefer this for known tasks; use browser_* for new sites.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id listed in modes/<mode>/capabilities.yaml (files live at brain/skills/<id>/ → focus_path/.cata/skills/<id>/)"},"params":{"type":"object","description":"Optional JSON params passed to the skill script"}},"required":["skill"]}`),
 	}}
 }
 
@@ -334,9 +335,10 @@ func (t *readSkillTool) Name() string { return "read_skill" }
 
 func (t *readSkillTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name:        "read_skill",
-		Description: "Load full SKILL.md for a skill id from the Cata skills index (capabilities.yaml). Use before run_skill when you need complete instructions.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from the skills index"}},"required":["skill"]}`),
+		Name: "read_skill",
+		Description: "Load full SKILL.md for a skill id (project focus_path/.cata/skills/<id>/, tool path brain/skills/<id>/SKILL.md). " +
+			"Use before run_skill when you need complete instructions.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from modes/<mode>/capabilities.yaml skills list"}},"required":["skill"]}`),
 	}}
 }
 
