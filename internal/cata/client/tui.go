@@ -97,6 +97,8 @@ type model struct {
 
 	streaming bool
 	overlay   *overlayState
+	// cancelRequested：流式中已发过一次 chat_cancel；再按 ctrl+c 则强制退出。
+	cancelRequested bool
 
 	stats    paneStats
 	runtime  brain.RuntimeEnv
@@ -197,9 +199,43 @@ func (m *model) Init() tea.Cmd {
 	return m.input.Focus()
 }
 
+func isQuitKey(msg tea.KeyMsg) bool {
+	// macOS：终端中断是 Ctrl+C；Cmd+C 由终端做复制，应用收不到。
+	return msg.Type == tea.KeyCtrlC || msg.String() == "ctrl+c"
+}
+
+func (m *model) handleQuitKey() (tea.Model, tea.Cmd) {
+	if m.streaming {
+		if m.cancelRequested {
+			m.quitting = true
+			m.appendLog(styleDim.Render("\n— quit\n"), true)
+			return m, tea.Quit
+		}
+		m.cancelRequested = true
+		if m.overlay != nil {
+			m.dismissOverlayWithCancel()
+			m.overlay = nil
+		}
+		_ = m.sess.write(req{Command: "chat_cancel"})
+		m.appendLog(styleDim.Render("\n— cancel requested (ctrl+c again to quit)\n"), true)
+		m.stats.state = "cancelling"
+		return m, waitStream(m.sess)
+	}
+	if m.overlay != nil {
+		m.dismissOverlayWithCancel()
+		m.overlay = nil
+	}
+	m.quitting = true
+	return m, tea.Quit
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// 先于 overlay / streaming 吞键：否则确认框或卡死流式时 ctrl+c 无法退出。
+		if isQuitKey(msg) {
+			return m.handleQuitKey()
+		}
 		if m.overlay != nil {
 			return m.updateOverlayKey(msg)
 		}
@@ -207,19 +243,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.streaming {
-			switch msg.String() {
-			case "ctrl+c":
-				_ = m.sess.write(req{Command: "chat_cancel"})
-				return m, nil
-			}
 			if m.hoverPane == hoverChat && chatScrollKey(msg) {
 				m.vp, _ = m.vp.Update(msg)
 				return m, nil
 			}
 			return m, nil
-		}
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
 		}
 		if msg.String() == "d" && len(m.subagents) > 0 {
 			return m.openSubagentPicker()
@@ -462,6 +490,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	m.stats.state = "thinking"
 	m.appendLog(styleUser.Render("you: ")+line+"\n\n", true)
 	m.streaming = true
+	m.cancelRequested = false
 	m.input.Blur()
 
 	outCwd, _ := os.Getwd()
@@ -471,6 +500,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	rt := m.runtime
 	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt}); err != nil {
 		m.streaming = false
+		m.cancelRequested = false
 		m.input.Focus()
 		m.appendLog(styleErr.Render("! "+err.Error())+"\n", true)
 		return m, m.input.Focus()
@@ -487,6 +517,7 @@ func waitStream(s *session) tea.Cmd {
 func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	if ev.kind == "io" {
 		m.streaming = false
+		m.cancelRequested = false
 		m.input.Focus()
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
@@ -553,12 +584,14 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		}
 		m.stats.state = "ready"
 		m.streaming = false
+		m.cancelRequested = false
 		m.input.Focus()
 		return m, m.input.Focus()
 	}
 
 	if ev.done {
 		m.streaming = false
+		m.cancelRequested = false
 		return m, m.input.Focus()
 	}
 	return m, waitStream(m.sess)
@@ -761,15 +794,18 @@ func (m *model) layoutViewports() {
 
 func (m *model) footerView() string {
 	if m.streaming {
-		return styleDim.Render("streaming… ctrl+c cancel round")
+		if m.cancelRequested {
+			return styleDim.Render("cancelling… ctrl+c again to quit")
+		}
+		return styleDim.Render("streaming… ctrl+c cancel · twice to quit")
 	}
 	if m.slashList != nil {
 		return styleDim.Render("↑↓ select · enter run (or apply) · tab complete · esc clear")
 	}
 	if sidebarActive(m.width) {
-		return styleDim.Render("滚轮切换区 · d 子任务 · /status 详情 · ctrl+c")
+		return styleDim.Render("滚轮切换区 · d 子任务 · /status · ctrl+c quit")
 	}
-	return styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · wheel scrolls pane under cursor")
+	return styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · /exit")
 }
 
 func (m *model) View() string {

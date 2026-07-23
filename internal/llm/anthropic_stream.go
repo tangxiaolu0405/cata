@@ -133,10 +133,13 @@ func ReadAnthropicStream(r io.Reader, onDelta func(string) error) (content strin
 	return contentBuf.String(), reasoning, toolCalls, finishReason, usage, nil
 }
 
-// pickStreamReader 按 api_format 选择流式解析器。
-func pickStreamReader(apiFormat string, contentType string, body io.Reader, onDelta func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+// pickStreamReader 按 api_format / URL 选择流式解析器。
+func pickStreamReader(apiFormat, apiURL, contentType string, body io.Reader, onDelta func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	if ResolveAPIFormat(apiFormat, "", "") == APIFormatAnthropic && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		return ReadAnthropicStream(body, onDelta)
+	}
+	if isResponsesAPIURL(apiURL) {
+		return ReadOpenAIResponsesStream(body, onDelta)
 	}
 	return ReadOpenAIChatStream(body, onDelta)
 }

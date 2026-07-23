@@ -113,9 +113,15 @@ func Run(opts Options) error {
 	if err := replaceFile(newBin, dstBin); err != nil {
 		return fmt.Errorf("replace %s: %w", binName, err)
 	}
+	if err := adhocResign(dstBin); err != nil {
+		return fmt.Errorf("resign %s: %w", binName, err)
+	}
 	fmt.Fprintf(out, "install: %s\n", dstGateway)
 	if err := replaceFile(newGateway, dstGateway); err != nil {
 		return fmt.Errorf("replace %s: %w", gatewayName, err)
+	}
+	if err := adhocResign(dstGateway); err != nil {
+		return fmt.Errorf("resign %s: %w", gatewayName, err)
 	}
 
 	fmt.Fprintf(out, "updated: %s → %s\n", current, latest)

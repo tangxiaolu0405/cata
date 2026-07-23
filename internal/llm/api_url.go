@@ -7,7 +7,7 @@ const (
 	anthropicMessagesPath       = "/v1/messages"
 )
 
-// AppendAPIFormatPath 按 api_format 为 base URL 拼接默认路径（不按域名匹配）。
+// AppendAPIFormatPath 按 api_format 为 base URL 拼接默认路径（用于候选探测，不强制写回配置）。
 // openai → /chat/completions；anthropic → /v1/messages。
 // URL 中已含对应路径片段时不再追加。
 func AppendAPIFormatPath(apiFormat, apiURL string) string {
@@ -22,14 +22,14 @@ func AppendAPIFormatPath(apiFormat, apiURL string) string {
 		}
 		return u + anthropicMessagesPath
 	default:
-		if strings.Contains(u, openAIChatCompletionsPath) {
+		if strings.Contains(u, openAIChatCompletionsPath) || isResponsesAPIURL(u) {
 			return u
 		}
 		return u + openAIChatCompletionsPath
 	}
 }
 
-// NormalizeAPIURL 去掉末尾斜杠并按 api_format 补默认路径。
-func NormalizeAPIURL(apiFormat, apiURL string) string {
-	return AppendAPIFormatPath(apiFormat, apiURL)
+// NormalizeAPIURL 只规范化空白/尾斜杠；路径由运行时 CandidateAPIURLs 探测并记住。
+func NormalizeAPIURL(_, apiURL string) string {
+	return TrimAPIURL(apiURL)
 }

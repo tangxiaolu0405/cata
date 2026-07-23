@@ -22,6 +22,14 @@
     "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     "model": "qwen-turbo"
   },
+  "llm_gemini_openai_compat_example": {
+    "_comment": "Gemini OpenAI 兼容：api_format=openai，填 base 或完整 chat/completions 均可。cata 会试两种路径并记住成功的（~/.cata/api_url_resolved.json）。注意：地区不支持会返回 FAILED_PRECONDITION，与 URL 无关。见 https://ai.google.dev/gemini-api/docs/openai",
+    "provider": "gemini",
+    "api_format": "openai",
+    "api_key": "",
+    "api_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "model": "gemini-3.6-flash"
+  },
   "server": {
     "socket_path": "",
     "log_level": "info",

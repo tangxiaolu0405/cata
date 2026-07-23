@@ -94,7 +94,8 @@ type LLMConfig struct {
 	MaxTokens     int               `json:"max_tokens"`
 	Timeout       int               `json:"timeout"`
 	ContextWindow int               `json:"context_window"`
-	// Thinking DeepSeek 思考模式：auto（有 tools 时 disabled）、enabled、disabled
+	// Thinking DeepSeek/MiMo 思考模式：auto（有 tools 时 disabled）、enabled、disabled。
+	// 仅对支持该扩展的网关生效；OpenAI / Gemini OpenAI 兼容层等不会下发 thinking 字段。
 	Thinking  string `json:"thinking,omitempty"`
 	Enabled   bool   `json:"enabled"`
 }
@@ -844,33 +845,14 @@ func NormalizeAPIFormat(apiFormat, _, providerLabel string) string {
 	return "openai"
 }
 
-// normalizeLLMConfig 规范化 api_format，并按格式拼接默认 API 路径。
+// normalizeLLMConfig 规范化 api_format；api_url 保持用户原样（仅 trim），路径由 LLM 客户端运行时探测。
 func normalizeLLMConfig(llm *LLMConfig) {
 	if llm == nil {
 		return
 	}
 	llm.APIFormat = NormalizeAPIFormat(llm.APIFormat, llm.APIURL, llm.Provider)
 	if u := strings.TrimSpace(llm.APIURL); u != "" {
-		llm.APIURL = appendAPIFormatPath(llm.APIFormat, u)
-	}
-}
-
-func appendAPIFormatPath(apiFormat, apiURL string) string {
-	u := strings.TrimRight(strings.TrimSpace(apiURL), "/")
-	if u == "" {
-		return apiURL
-	}
-	switch NormalizeAPIFormat(apiFormat, apiURL, "") {
-	case "anthropic":
-		if strings.Contains(u, "/v1/messages") {
-			return u
-		}
-		return u + "/v1/messages"
-	default:
-		if strings.Contains(u, "/chat/completions") {
-			return u
-		}
-		return u + "/chat/completions"
+		llm.APIURL = strings.TrimRight(u, "/")
 	}
 }
 

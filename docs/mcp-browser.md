@@ -11,6 +11,8 @@ cata 通过 `~/.cata/config.json` → `mcp.servers` 启动 **Playwright MCP**（
 | Console | **默认关闭**（旧版带 `--console` 会把页面 console 附在每次工具结果里，占 token 且易误导模型） |
 | 工具超时 | `tool_timeout_seconds`: **300**（发帖、大页加载别卡 120s，否则 cata 会 Kill MCP 重连 → 浏览器窗口消失） |
 
+> **注意（已修）**：旧版用 `exec.CommandContext` 绑在 Init 的 60s 超时上，初始化一结束就会 Kill MCP，有界面时像「浏览器闪一下就关」。请用含该修复的构建。
+
 旧配置 `["-y", "@playwright/mcp@latest", "--console"]` 或 `["-y", "@playwright/mcp@latest"]` 在 **LoadConfig 时自动迁移** 为新默认。
 
 ## 两种浏览器模式

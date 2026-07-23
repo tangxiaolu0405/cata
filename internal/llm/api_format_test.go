@@ -70,7 +70,89 @@ func TestAnthropicParseResponse(t *testing.T) {
 }
 
 func TestResolveWireThinking(t *testing.T) {
-	if resolveWireThinking(nil, true) == nil || resolveWireThinking(nil, true).Type != "disabled" {
-		t.Fatal("force disabled")
+	deepseekURL := "https://api.deepseek.com/chat/completions"
+	if resolveWireThinking(deepseekURL, nil, true) == nil || resolveWireThinking(deepseekURL, nil, true).Type != "disabled" {
+		t.Fatal("force disabled on deepseek")
+	}
+	geminiURL := "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+	if resolveWireThinking(geminiURL, nil, true) != nil {
+		t.Fatal("gemini must not get DeepSeek thinking wire field")
+	}
+	openaiURL := "https://api.openai.com/v1/chat/completions"
+	if resolveWireThinking(openaiURL, nil, false) != nil {
+		t.Fatal("openai must not get DeepSeek thinking by default")
+	}
+}
+
+func TestSupportsDeepSeekThinkingWire(t *testing.T) {
+	if !supportsDeepSeekThinkingWire("https://api.deepseek.com/chat/completions") {
+		t.Fatal("deepseek url")
+	}
+	if supportsDeepSeekThinkingWire("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions") {
+		t.Fatal("gemini url should not use deepseek thinking")
+	}
+}
+
+func TestAppendAPIFormatPath_GeminiOpenAICompat(t *testing.T) {
+	base := "https://generativelanguage.googleapis.com/v1beta/openai/"
+	want := "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+	if got := AppendAPIFormatPath("openai", base); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestCandidateAPIURLs(t *testing.T) {
+	base := "https://generativelanguage.googleapis.com/v1beta/openai"
+	cands := CandidateAPIURLs("openai", base)
+	if len(cands) != 2 {
+		t.Fatalf("len=%d %v", len(cands), cands)
+	}
+	if cands[0] != base {
+		t.Fatalf("primary %q", cands[0])
+	}
+	if cands[1] != base+"/chat/completions" {
+		t.Fatalf("alt %q", cands[1])
+	}
+	full := base + "/chat/completions"
+	if got := CandidateAPIURLs("openai", full); len(got) != 1 || got[0] != full {
+		t.Fatalf("full candidates %v", got)
+	}
+
+	respURL := "https://api.x.ai/v1/responses"
+	got := CandidateAPIURLs("openai", respURL)
+	if len(got) != 2 || got[0] != respURL || got[1] != "https://api.x.ai/v1/chat/completions" {
+		t.Fatalf("responses candidates %v", got)
+	}
+}
+
+func TestMarshalResponsesUsesMaxOutputTokens(t *testing.T) {
+	b, err := marshalOpenAIChatBody(
+		"https://api.x.ai/v1/responses",
+		"grok-3",
+		[]Message{{Role: "user", Content: "hi"}},
+		128, 0.7, nil, "", false, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if strings.Contains(s, `"max_tokens"`) {
+		t.Fatalf("responses body must not use max_tokens: %s", s)
+	}
+	if !strings.Contains(s, `"max_output_tokens"`) {
+		t.Fatalf("expected max_output_tokens: %s", s)
+	}
+	if !strings.Contains(s, `"input"`) {
+		t.Fatalf("expected input: %s", s)
+	}
+	if strings.Contains(s, `"messages"`) {
+		t.Fatalf("responses body must not use messages: %s", s)
+	}
+}
+
+func TestNormalizeAPIURLNoAppend(t *testing.T) {
+	got := NormalizeAPIURL("openai", "https://api.example.com/v1/")
+	if got != "https://api.example.com/v1" {
+		t.Fatalf("got %q", got)
 	}
 }

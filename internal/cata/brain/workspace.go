@@ -133,7 +133,7 @@ func (w *Workspace) EnsureScaffold() error {
 	if err := ensureFile(filepath.Join(modeDir, FileConstraints), "# Mode constraints\n\n"); err != nil {
 		return err
 	}
-	if err := ensureFile(filepath.Join(modeDir, FileCapabilities), "skills: []\nmcp:\n  - browser\n"); err != nil {
+	if err := ensureFile(filepath.Join(modeDir, FileCapabilities), "skills: []\nmcp: []\n"); err != nil {
 		return err
 	}
 	if err := EnsureShortTermFileFor(w); err != nil {

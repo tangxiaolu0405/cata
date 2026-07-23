@@ -73,7 +73,9 @@ func startStdioClient(ctx context.Context, name, command string, args []string, 
 	if strings.TrimSpace(command) == "" {
 		return nil, fmt.Errorf("mcp server %q: empty command", name)
 	}
-	cmd := exec.CommandContext(ctx, command, args...)
+	// 不要用 CommandContext(ctx)：Init/TryCall 的超时 ctx 结束时会 Kill 整个 MCP，
+	// 表现为浏览器窗口打开又立刻关掉（闪一下）。进程生命周期由 Close() 管理。
+	cmd := exec.Command(command, args...)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), flattenEnv(env)...)
 	}

@@ -89,7 +89,7 @@ func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
 			continue
 		}
 		if err := connectServer(mgr, ctx, s); err != nil {
-			log.Printf("MCP server %q: %v", s.Name, err)
+			log.Printf("MCP server %q unavailable (optional, chat continues without it): %v", s.Name, err)
 		}
 	}
 	global = mgr

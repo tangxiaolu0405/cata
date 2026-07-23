@@ -20,22 +20,22 @@ func TestNormalizeAPIFormat(t *testing.T) {
 	}
 }
 
-func TestNormalizeLLMConfigAppendPath(t *testing.T) {
+func TestNormalizeLLMConfigKeepsURL(t *testing.T) {
 	llm := &LLMConfig{
 		APIFormat: "openai",
-		APIURL:    "https://api.xiaomimimo.com/v1",
+		APIURL:    "https://api.xiaomimimo.com/v1/",
 	}
 	normalizeLLMConfig(llm)
-	if llm.APIURL != "https://api.xiaomimimo.com/v1/chat/completions" {
-		t.Fatalf("openai api_url=%q", llm.APIURL)
+	if llm.APIURL != "https://api.xiaomimimo.com/v1" {
+		t.Fatalf("openai api_url=%q want trimmed base without forced path", llm.APIURL)
 	}
 
 	llm2 := &LLMConfig{
 		APIFormat: "anthropic",
-		APIURL:    "https://api.xiaomimimo.com/anthropic",
+		APIURL:    "https://api.xiaomimimo.com/anthropic/",
 	}
 	normalizeLLMConfig(llm2)
-	if llm2.APIURL != "https://api.xiaomimimo.com/anthropic/v1/messages" {
+	if llm2.APIURL != "https://api.xiaomimimo.com/anthropic" {
 		t.Fatalf("anthropic api_url=%q", llm2.APIURL)
 	}
 }

@@ -277,29 +277,47 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		SubagentID:      flags.subagentID,
 		SessionID:       flags.sessionID,
 	}
-	httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
-	if err != nil {
-		return "", "", nil, "", usage, err
-	}
-
 	hc := c.streamHTTPClient
 	if hc == nil {
 		hc = c.httpClient
 	}
-	resp, err := hc.Do(httpReq)
-	if err != nil {
-		return "", "", nil, "", usage, fmt.Errorf("stream request: %w", err)
-	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	candidates := c.apiURLCandidates()
+	if len(candidates) == 0 {
+		return "", "", nil, "", usage, fmt.Errorf("API URL is empty")
+	}
+
+	var resp *http.Response
+	for i, u := range candidates {
+		c.apiURL = u
+		httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
+		if err != nil {
+			return "", "", nil, "", usage, err
+		}
+		resp, err = hc.Do(httpReq)
+		if err != nil {
+			return "", "", nil, "", usage, fmt.Errorf("stream request: %w", err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			c.commitAPIURL(u)
+			break
+		}
 		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		msg := string(body)
 		if len(msg) > 800 {
 			msg = msg[:800] + "..."
 		}
+		if shouldTryAlternateAPIURL(resp.StatusCode, msg) && i+1 < len(candidates) {
+			log.Printf("LLM: stream endpoint miss (%d) at %s; trying alternate URL", resp.StatusCode, u)
+			continue
+		}
 		return "", "", nil, "", usage, fmt.Errorf("stream API status %d (url=%s): %s", resp.StatusCode, c.apiURL, msg)
 	}
+	if resp == nil {
+		return "", "", nil, "", usage, fmt.Errorf("stream request: no response")
+	}
+	defer resp.Body.Close()
 
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/event-stream") && !strings.Contains(ct, "application/x-ndjson") {
@@ -315,7 +333,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		return content, "", toolCalls2, "stop", usage, nil
 	}
 
-	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, ct, resp.Body, onDelta)
+	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta)
 	if err != nil {
 		return "", "", nil, "", usage, err
 	}

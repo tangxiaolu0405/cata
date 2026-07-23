@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 	"cata/internal/cata/evolve"
 	"cata/internal/mcp"
@@ -59,6 +60,12 @@ func (s *Server) Start() error {
 
 	if config.Config != nil && config.Config.MCP.Enabled {
 		go func() {
+			// 仅当当前 mode 的 capabilities 声明了 mcp 时才预热；browser 非必须。
+			caps := brain.LoadActiveCapabilitiesCached()
+			if len(caps.MCP) == 0 {
+				log.Println("- MCP: no servers in capabilities (skip warm)")
+				return
+			}
 			log.Println("MCP: background warm (non-blocking)")
 			mcp.EnsureInit()
 		}()

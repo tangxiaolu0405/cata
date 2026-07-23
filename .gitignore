@@ -5,6 +5,8 @@
 !/.github/
 !/.github/**
 
+手动签名.txt
+
 # Build artifacts (repo root only — do not ignore internal/cata/)
 /cata.exe
 /cata

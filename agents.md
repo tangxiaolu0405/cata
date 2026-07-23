@@ -90,15 +90,17 @@
 - **密钥**：`llm.api_key` 或 `DEEPSEEK_API_KEY`
 - **`llm.thinking`**：`auto`（默认，有 tools 时 `disabled`，避免 tool 轮次 400）、`enabled`、`disabled`
 - 思考模式 + tool 调用时须回传 `reasoning_content`（已实现）；见 [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)
+- **仅 DeepSeek / MiMo 类网关**会下发非标准 `thinking` / `reasoning_content`；OpenAI、Gemini OpenAI 兼容层等通用端点不发这些字段，换模型只需改 `api_url` / `model` / `api_key`（`api_format=openai`）。`api_url` 可写 base；缺路径时运行时探测并记住。
 - 原千问配置备份在 `~/.cata/config.json` → `llm_previous_qwen`（不参与加载）
 
 ## MCP 与 Skill（已接入）
 
-- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@0.0.75`，无 `--console`；`tool_timeout_seconds` 300）；`focus_path/.cata/modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。小红书/已登录发布见 **`docs/mcp-browser.md`**（`--extension`）。
+- **MCP browser**：默认**不**在 capabilities 启用；`~/.cata/config.json` → `mcp.servers` 可配 Playwright，仅当 `modes/*/capabilities.yaml` 含 `mcp: [browser]` 时才会连接。未安装时失败只记日志，对话继续。小红书见 **`docs/mcp-browser.md`**。
 - **双模型**：`llm.models.chat`（主对话）/ `evolution` / `worker`（`delegate_task`）；未配置时回退 `llm.model`
 - **delegate_task**：主 Agent 委派**有界子任务**给 worker（低成本、可并行）；`delegate_wait` 收集摘要；留痕 `~/.cata/subagent_runs/<产出区>.csv`；TUI「委托」或 `d` 查看
-- **run_skill**：执行项目 `.cata/skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化；**不删** `mcp: [browser]`。
+- **run_skill**：执行项目 `.cata/skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化。
 - **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 到**项目 `.cata`** 并自动 append capabilities；下次 chat 生效。
+- **api_url**：可写 base 或完整路径；运行时会试「原样 / +默认路径」，成功后写入 `~/.cata/api_url_resolved.json` 记住。
 
 ## 产出区（Output Area / Workspace）
 

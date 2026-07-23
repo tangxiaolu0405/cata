@@ -1,6 +1,9 @@
 package update
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestNormalizeVersion(t *testing.T) {
 	cases := map[string]string{
@@ -45,5 +48,14 @@ func TestDetectArtifactSmoke(t *testing.T) {
 	}
 	if artifact == "" || ext == "" || bin == "" || gw == "" {
 		t.Fatalf("empty artifact fields: %q %q %q %q", artifact, ext, bin, gw)
+	}
+}
+
+func TestAdhocResignNonDarwinNoop(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin uses real codesign")
+	}
+	if err := adhocResign("/any/path"); err != nil {
+		t.Fatal(err)
 	}
 }

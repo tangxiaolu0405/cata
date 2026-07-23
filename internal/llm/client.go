@@ -83,16 +83,59 @@ func compactMessageContentForAPI(msgs []Message) []Message {
 
 // Client LLM 客户端
 type Client struct {
-	apiKey       string
-	apiURL       string
-	model        string
-	providerLabel string // 展示标签，不参与协议选择
-	apiFormat    string
-	maxTokens    int
+	apiKey             string
+	apiURL             string // 当前使用的 endpoint（可能已探测记住）
+	apiURLConfigured   string // 用户配置原样（trim 后）
+	model              string
+	providerLabel      string // 展示标签，不参与协议选择
+	apiFormat          string
+	maxTokens          int
 	timeout            time.Duration
 	httpClient         *http.Client
 	streamHTTPClient   *http.Client
 	adapter            APIAdapter
+}
+
+func resolveInitialAPIURL(apiFormat, configured string) (active, configuredOut string) {
+	configuredOut = TrimAPIURL(configured)
+	if configuredOut == "" {
+		return "", ""
+	}
+	if cached := LookupResolvedAPIURL(configuredOut); cached != "" {
+		return cached, configuredOut
+	}
+	// 尚未记住时先用配置原样；缺路径则首次请求会按 CandidateAPIURLs 再试。
+	_ = apiFormat
+	return configuredOut, configuredOut
+}
+
+func (c *Client) apiURLCandidates() []string {
+	if c == nil {
+		return nil
+	}
+	base := c.apiURLConfigured
+	if base == "" {
+		base = c.apiURL
+	}
+	cands := CandidateAPIURLs(c.apiFormat, base)
+	// 若已记住且仍在候选中，优先只用记住的（避免每次多打一次）。
+	if cached := LookupResolvedAPIURL(base); cached != "" {
+		return []string{cached}
+	}
+	return cands
+}
+
+func (c *Client) commitAPIURL(u string) {
+	u = TrimAPIURL(u)
+	if u == "" || c == nil {
+		return
+	}
+	c.apiURL = u
+	cfg := c.apiURLConfigured
+	if cfg == "" {
+		cfg = u
+	}
+	RememberResolvedAPIURL(cfg, u)
 }
 
 func streamRoundTimeout(base time.Duration) time.Duration {
@@ -121,6 +164,7 @@ func configureHTTPTransport(timeout time.Duration) *http.Transport {
 				tr.Proxy = http.ProxyURL(parsedProxy)
 				log.Printf("Using HTTP proxy: %s", proxyURL)
 			} else if parsedProxy.Scheme == "socks5" {
+				tr.Proxy = http.ProxyURL(parsedProxy)
 				log.Printf("WARNING: SOCKS5 proxy detected (%s) but not fully supported. If you see EOF errors, try: 1) Start your proxy server, 2) Use HTTP proxy instead, or 3) Unset proxy env vars", proxyURL)
 			}
 		}
@@ -331,7 +375,7 @@ func NewClientFromConfig(providerLabel, apiFormat, apiKey, apiURL, model string,
 	if apiURL == "" {
 		apiURL = defaultAPIURLForFormat(apiFormat)
 	}
-	apiURL = NormalizeAPIURL(apiFormat, apiURL)
+	activeURL, configuredURL := resolveInitialAPIURL(apiFormat, apiURL)
 
 	if model == "" {
 		model = os.Getenv("LLM_MODEL")
@@ -352,12 +396,13 @@ func NewClientFromConfig(providerLabel, apiFormat, apiKey, apiURL, model string,
 
 	httpClient, streamClient := newHTTPClientPair(timeout)
 
-	log.Printf("Creating LLM Client: label=%s format=%s URL=%s Model=%s APIKey present=%v timeout=%s stream_timeout=%s",
-		providerLabel, apiFormat, apiURL, model, apiKey != "", timeout, streamRoundTimeout(timeout))
+	log.Printf("Creating LLM Client: label=%s format=%s URL=%s (configured=%s) Model=%s APIKey present=%v timeout=%s stream_timeout=%s",
+		providerLabel, apiFormat, activeURL, configuredURL, model, apiKey != "", timeout, streamRoundTimeout(timeout))
 
 	return &Client{
 		apiKey:           apiKey,
-		apiURL:           apiURL,
+		apiURL:           activeURL,
+		apiURLConfigured: configuredURL,
 		model:            model,
 		providerLabel:    providerLabel,
 		apiFormat:        apiFormat,
@@ -409,9 +454,11 @@ func NewClientWithAPIFormat(apiKey, apiURL, model, apiFormat string, maxTokens i
 
 	httpClient, streamClient := newHTTPClientPair(timeout)
 	format := ResolveAPIFormat(apiFormat, apiURL, "")
+	activeURL, configuredURL := resolveInitialAPIURL(format, apiURL)
 	return &Client{
 		apiKey:           apiKey,
-		apiURL:           NormalizeAPIURL(format, apiURL),
+		apiURL:           activeURL,
+		apiURLConfigured: configuredURL,
 		model:            model,
 		apiFormat:        format,
 		maxTokens:        maxTokens,
@@ -766,108 +813,113 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 
 // chat 发送 HTTP 请求到 LLM API（内部统一入口）。skipAppendLog 为 true 时不写 llm.log（由调用方统一写）。
 func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppendLog bool) (*ChatResponse, []ToolCall, error) {
-	httpReq, err := c.buildHTTPChatRequest(context.Background(), req, tools, toolChoice, false)
-	if err != nil {
-		return nil, nil, err
+	candidates := c.apiURLCandidates()
+	if len(candidates) == 0 {
+		return nil, nil, fmt.Errorf("API URL is empty")
 	}
 
-	// 调试：检查 header 是否设置（仅在开发时启用）
-	if os.Getenv("DEBUG_LLM") == "true" {
-		log.Printf("DEBUG: API URL: %s", c.apiURL)
-		log.Printf("DEBUG: Provider adapter: %T format=%s", c.adapter, c.apiFormat)
-		log.Printf("DEBUG: API Key length: %d", len(c.apiKey))
-		authHeader := httpReq.Header.Get("Authorization")
-		if len(authHeader) > 20 {
-			log.Printf("DEBUG: Authorization header: %s...", authHeader[:20])
-		} else {
-			log.Printf("DEBUG: Authorization header: %s", authHeader)
+	var lastStatusErr error
+	for i, u := range candidates {
+		c.apiURL = u
+		httpReq, err := c.buildHTTPChatRequest(context.Background(), req, tools, toolChoice, false)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		// EOF 错误可能是连接问题或 API key 问题
-		log.Printf("HTTP Request failed: URL=%s, Error=%v", c.apiURL, err)
-		errStr := err.Error()
-		if errStr == "EOF" || strings.Contains(errStr, "EOF") {
+		if os.Getenv("DEBUG_LLM") == "true" {
+			log.Printf("DEBUG: API URL: %s", c.apiURL)
+			log.Printf("DEBUG: Provider adapter: %T format=%s", c.adapter, c.apiFormat)
+			log.Printf("DEBUG: API Key length: %d", len(c.apiKey))
 			authHeader := httpReq.Header.Get("Authorization")
-			authPresent := authHeader != ""
-			authPrefix := ""
 			if len(authHeader) > 20 {
-				authPrefix = authHeader[:20]
+				log.Printf("DEBUG: Authorization header: %s...", authHeader[:20])
 			} else {
-				authPrefix = authHeader
+				log.Printf("DEBUG: Authorization header: %s", authHeader)
 			}
-			
-			// 针对千问的 EOF 错误提供更具体的建议
-			helpMsg := ""
-			if strings.Contains(c.apiURL, "dashscope") {
-				helpMsg = "\nFor Qwen/DashScope EOF errors, try:\n" +
-					"1. Verify API key matches your region (China/International/US)\n" +
-					"2. Try international endpoint: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions\n" +
-					"3. Verify API key is valid and has proper permissions\n" +
-					"4. Check network connectivity to DashScope servers"
-			}
-			
-			return nil, nil, fmt.Errorf("connection closed unexpectedly (EOF). URL=%s, AuthHeader present=%v, AuthPrefix=%s.%s\nPossible causes: 1) API key invalid/missing or region mismatch, 2) Network issue, 3) API endpoint incorrect", 
-				c.apiURL, authPresent, authPrefix, helpMsg)
 		}
-		return nil, nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Failed to read response body: %v", err)
-		return nil, nil, fmt.Errorf("failed to read response: %w", err)
-	}
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			log.Printf("HTTP Request failed: URL=%s, Error=%v", c.apiURL, err)
+			errStr := err.Error()
+			if errStr == "EOF" || strings.Contains(errStr, "EOF") {
+				authHeader := httpReq.Header.Get("Authorization")
+				authPresent := authHeader != ""
+				authPrefix := ""
+				if len(authHeader) > 20 {
+					authPrefix = authHeader[:20]
+				} else {
+					authPrefix = authHeader
+				}
+				helpMsg := ""
+				if strings.Contains(c.apiURL, "dashscope") {
+					helpMsg = "\nFor Qwen/DashScope EOF errors, try:\n" +
+						"1. Verify API key matches your region (China/International/US)\n" +
+						"2. Try international endpoint: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions\n" +
+						"3. Verify API key is valid and has proper permissions\n" +
+						"4. Check network connectivity to DashScope servers"
+				}
+				return nil, nil, fmt.Errorf("connection closed unexpectedly (EOF). URL=%s, AuthHeader present=%v, AuthPrefix=%s.%s\nPossible causes: 1) API key invalid/missing or region mismatch, 2) Network issue, 3) API endpoint incorrect",
+					c.apiURL, authPresent, authPrefix, helpMsg)
+			}
+			return nil, nil, fmt.Errorf("failed to send request: %w", err)
+		}
 
-	// 检查 HTTP 状态码
-	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to read response body: %v", err)
+			return nil, nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			c.commitAPIURL(u)
+			content, toolCalls, err := c.adapter.ParseResponse(body)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !skipAppendLog {
+				c.appendLLMLog(req, tools, toolChoice, content, toolCalls, body)
+			}
+			chatResp := &ChatResponse{
+				Choices: []struct {
+					Index        int     `json:"index"`
+					Message      Message `json:"message"`
+					FinishReason string  `json:"finish_reason"`
+				}{
+					{
+						Index: 0,
+						Message: Message{
+							Role:    "assistant",
+							Content: content,
+						},
+						FinishReason: "stop",
+					},
+				},
+			}
+			return chatResp, toolCalls, nil
+		}
+
 		errorMsg := string(body)
 		if len(errorMsg) > 500 {
 			errorMsg = errorMsg[:500] + "..."
 		}
 		log.Printf("API returned non-200 status: %d, URL=%s, Body: %s", resp.StatusCode, c.apiURL, errorMsg)
-		
-		// 对于 404 错误，提供更具体的提示
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, nil, fmt.Errorf("API endpoint not found (404). URL=%s. Please check: 1) URL is correct (should end with /chat/completions), 2) Model name is valid (e.g., qwen-plus, qwen-turbo), 3) API endpoint matches your region", c.apiURL)
+		if shouldTryAlternateAPIURL(resp.StatusCode, errorMsg) && i+1 < len(candidates) {
+			log.Printf("LLM: endpoint miss (%d) at %s; trying alternate URL", resp.StatusCode, u)
+			continue
 		}
-		
-		return nil, nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, errorMsg)
+		if resp.StatusCode == http.StatusNotFound {
+			lastStatusErr = fmt.Errorf("API endpoint not found (404). URL=%s. Please check: 1) URL is correct (should end with /chat/completions for OpenAI-compat), 2) Model name is valid, 3) API endpoint matches your region", c.apiURL)
+		} else {
+			lastStatusErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, errorMsg)
+		}
+		return nil, nil, lastStatusErr
 	}
-
-	// 使用 provider 解析响应（得到文本与 tools 调用）
-	content, toolCalls, err := c.adapter.ParseResponse(body)
-	if err != nil {
-		return nil, nil, err
+	if lastStatusErr != nil {
+		return nil, nil, lastStatusErr
 	}
-
-	// 将本次 LLM 交互写入可选的日志文件（通过 LLM_LOG_FILE 控制，避免影响正常 stdout 日志）。
-	if !skipAppendLog {
-		c.appendLLMLog(req, tools, toolChoice, content, toolCalls, body)
-	}
-
-	// 转换为 ChatResponse 格式（向后兼容）
-	chatResp := &ChatResponse{
-		Choices: []struct {
-			Index        int     `json:"index"`
-			Message      Message `json:"message"`
-			FinishReason string  `json:"finish_reason"`
-		}{
-			{
-				Index: 0,
-				Message: Message{
-					Role:    "assistant",
-					Content: content,
-				},
-				FinishReason: "stop",
-			},
-		},
-	}
-
-	return chatResp, toolCalls, nil
+	return nil, nil, fmt.Errorf("no API URL candidates")
 }
 
 // assistantText 合并 content 与 reasoning_content（DeepSeek thinking 可能只填后者）。
