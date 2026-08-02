@@ -116,6 +116,15 @@ func (w *Workspace) EnsureScaffold() error {
 		return err
 	}
 
+	// 若短暂误用过 _orchestrator，幂等收回 _default。
+	if err := w.maybeMigrateModesDefaultV2(); err != nil {
+		return err
+	}
+	// 清掉曾误种的演示专职 mode（用户改过的保留）。
+	if err := w.maybeRemoveScaffoldDemoModesV1(); err != nil {
+		return err
+	}
+
 	if err := w.saveMeta(); err != nil {
 		return err
 	}
@@ -127,7 +136,7 @@ func (w *Workspace) EnsureScaffold() error {
 	if err := ensureFile(filepath.Join(modeDir, FilePersona), defaultModePersona); err != nil {
 		return err
 	}
-	if err := ensureFile(filepath.Join(modeDir, FileBehavior), "# Mode behavior\n\n(Inherit global behavior; override here if needed.)\n"); err != nil {
+	if err := ensureFile(filepath.Join(modeDir, FileBehavior), defaultModeBehavior); err != nil {
 		return err
 	}
 	if err := ensureFile(filepath.Join(modeDir, FileConstraints), "# Mode constraints\n\n"); err != nil {
@@ -181,6 +190,12 @@ const defaultModePersona = `# Persona
 ## Who I am
 
 ## Preferences & taboos
+
+`
+
+const defaultModeBehavior = `# Mode behavior
+
+(Inherit global behavior; override here if needed.)
 
 `
 

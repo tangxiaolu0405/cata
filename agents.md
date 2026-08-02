@@ -20,7 +20,7 @@
 | **`~/.cata/`** | **CATA_HOME**：引导型提示词（`global/`）、运行时记忆（`brain/workspaces/<id>/memory`）、config、socket、registry |
 | **`focus_path/.cata/`** | **项目主要内容**：`persona.local`、`modes/<mode>/*`、`skills/<id>/*`、`workspace.yaml` |
 | **当前工作目录 cwd** | **产出区**：代码与命令结果；`run_command` 与默认文件工具在此 |
-| **仓库 `brain/`** | 模板种子（`cata init` → `~/.cata/global/`） |
+| **仓库 `brain/`** | 模板种子（`cata init` → `~/.cata/global/`；`cata initconfig` 种子 config.json） |
 
 `focus_path`（git 根 / `.cata/workspace.yaml` / cwd）决定绑定哪一格脑子（`ws_id`），**不把产出存进 `~/.cata`**。
 
@@ -46,14 +46,15 @@
 
 | 区域 | 作用 |
 |------|------|
-| **`cmd/cata`** | `init`（初始化 ~/.cata）、`config`、`run`（socket + 后台演进） |
+| **`cmd/cata`** | `init`（初始化 ~/.cata）、`initconfig`（种子 config.json）、`config`、`run`（socket + 后台演进） |
 | **`cmd/cata`（`chat`）** | 默认 Bubble Tea TUI；协议：`chat`（`stream:true`）、`chat_reset`、`ping` |
 | **`cmd/cata-gateway`** | 渠道入口；凭证驱动并发启渠道 |
+| **`cmd/cata-pet`** | 可选桌宠客户端（Wails + `cmd/cata-pet/pet`）；同一 socket，不改 server |
 | **`internal/cata/server`** | Unix socket、终端 chat 工具循环 |
 | **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
 | **`internal/cata/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
 | **`internal/cata/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
-| **`internal/cata/config`** | `~/.cata/config.json`：LLM（`deepseek` / `qwen` 等 OpenAI 兼容）、exec、`evolution.enabled` / `cycle_interval` |
+| **`internal/cata/config`** | `~/.cata/config.json`：LLM、exec、`evolution.enabled` / `cycle_interval` / `short_term_trigger_bytes` |
 
 **已移除**：`internal/memory`、`internal/evolution`（旧任务引擎）、`internal/scheduler`、`internal/git`、`skills/` 服务端加载。
 
@@ -96,11 +97,23 @@
 ## MCP 与 Skill（已接入）
 
 - **MCP browser**：默认**不**在 capabilities 启用；`~/.cata/config.json` → `mcp.servers` 可配 Playwright，仅当 `modes/*/capabilities.yaml` 含 `mcp: [browser]` 时才会连接。未安装时失败只记日志，对话继续。小红书见 **`docs/mcp-browser.md`**。
-- **双模型**：`llm.models.chat`（主对话）/ `evolution` / `worker`（`delegate_task`）；未配置时回退 `llm.model`
-- **delegate_task**：主 Agent 委派**有界子任务**给 worker（低成本、可并行）；`delegate_wait` 收集摘要；留痕 `~/.cata/subagent_runs/<产出区>.csv`；TUI「委托」或 `d` 查看
+- **双模型**：`llm.models.chat`（主对话）/ `evolution` / `worker`（`delegate_task`，可选 `mode_id`）；未配置时回退 `llm.model`
+- **委派**：`delegate_task` 无 `mode_id` = 廉价 worker；带 `mode_id`+`case_id` = 专职 mode（`delegate_mode` 为其别名）。主 chat 会注入【专职 Modes】目录；有专职时首轮至少 standard（含委派工具）。`crystallize_mode` 会在 `_default/behavior.md` 登记委派路由。
+- **长期记忆**：`memory/long/learnings.md` 等除 index 外注入【长期记忆节选】近条；需要全文时 `read_file brain/memory/long/…`。
+- **evolve**：对外主行动 `consolidate` / `crystallize`（+ `crystallize_mode`）；`mode_evolve`/`orch_evolve` 仍为别名，Observe 读 `mode_buckets` 内部路由
 - **run_skill**：执行项目 `.cata/skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化。
 - **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 到**项目 `.cata`** 并自动 append capabilities；下次 chat 生效。
 - **api_url**：可写 base 或完整路径；运行时会试「原样 / +默认路径」，成功后写入 `~/.cata/api_url_resolved.json` 记住。
+
+## 卫星客户端（非核心环）
+
+| 入口 | 角色 |
+|------|------|
+| `cata chat` TUI | **核心**交互 |
+| `cata-gateway`（Telegram / QQ / Web UI） | 渠道适配 → 同一 socket |
+| `cata-pet` | 桌面宠物 UI → 同一 socket |
+
+改核心优先 `internal/cata/{server,client,evolve,brain}` + `internal/llm`；渠道与 pet 默认不进必读路径。
 
 ## 产出区（Output Area / Workspace）
 
@@ -136,22 +149,22 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 | 顺序 | API `messages[]` | 来源（代码） |
 |------|------------------|--------------|
-| ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点 |
+| ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点；**只含身份/优先级/交互，不复述路径表** |
 | ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`（单条 system，内部分段） |
 | ③+ | `user` / `assistant` / `tool` | `internal/cata/server/socket_chat.go` 内存 history |
 | 并行 | `tools[]` | 内置工具 + MCP（不经 messages 拼接正文） |
 
 **② brain 节选**（`internal/cata/brain/terminal_context.go`）自上而下：
 
-1. **路径块** — `TerminalPathsSystemBlock()`：CATA_HOME vs 项目 `.cata` vs 产出区、`focus_path`、`output_cwd`、平台/shell、工具注册
+1. **路径块** — `TerminalPathsSystemBlock()`：**仅**本轮绝对路径与本机环境（勿与 constraints/behavior 重复 SOP）
 2. **Skills** — `SkillsPromptBlock()`：读项目 `capabilities.yaml` 的 `skills`，查找 `SKILL.md`（项目 → `~/.cata/skills/` → `~/.cursor/skills-cursor/`）
 3. **记忆索引** — `MemoryIndexPromptBlock()` ← home 格 `memory/index.json`（≤2800 bytes）
-4. **【Cata 引导 · ~/.cata/global】** — `constraints.md`、`behavior.md`（引导型，evolve 不写）
+4. **【Cata 引导 · ~/.cata/global】** — `constraints.md`（写入边界）、`behavior.md`（协作 SOP）；evolve 不写
 5. **【Cata 项目内容 · focus_path/.cata】** — `modes/<active_mode>/persona|behavior|constraints`、`persona.local.md`
 
-**演进 LLM**（`internal/cata/evolve`）：`messages` 自带 `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`）；仍经同一 `chat()` 路径，故 **同样会前置 ①②**。
+**演进 LLM**（`internal/cata/evolve`）：自带 `system` + `user`；经 `ChatEvolution` 且 **`NoBrainInject`**，**不**再前置 ①②。
 
-**其它 LLM 调用**：`Summarize` / 查询预处理等在 `client.go` 内联 `system` + `user`，走 `chat()` 时也会带上 ①②。
+**其它 LLM 调用**：`Summarize` / 查询预处理等走 `chat()` 时仍会带上 ①②。
 
 **日志拆解**：`internal/llm/prompt_log.go`（`LLM_LOG_FILE`）；组件 id：`boot-leader`、`brain-excerpt`、`conversation`、`tools`。
 
@@ -194,7 +207,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ## 给 AI 的约束
 
-1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**。
+1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**；桌宠看 **`cmd/cata-pet`**（含 `pet/` 子包与 `frontend/`）。
 2. 路径以 **`internal/cata/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
 3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
 4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。

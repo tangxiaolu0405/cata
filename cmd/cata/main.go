@@ -42,6 +42,8 @@ func main() {
 		client.RunChat(client.ParseOutputDirs(args[1:]))
 	case "init":
 		runInit()
+	case "initconfig":
+		runInitConfig()
 	case "config":
 		handleConfigCommand(args[1:])
 	case "run":
@@ -62,7 +64,8 @@ func printUsage() {
 	fmt.Println("  cata                    Start chat (default, TUI)")
 	fmt.Println("  cata chat [--dir <path>]  Start chat at output dir")
 	fmt.Println("  cata run                Start server (one per machine; foreground)")
-	fmt.Println("  cata init               Initialize ~/.cata brain layout")
+	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
+	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")
 	fmt.Println("  cata config             Manage configuration")
 	fmt.Println("  cata version            Print version")
 	fmt.Println("  cata update [--check|--force]  Update from GitHub Releases")
@@ -106,14 +109,20 @@ func runUpdate(args []string) {
 }
 
 func runInit() {
+	if err := brain.InitDirectory(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Brain initialized: %s\n", config.CataHome())
+	fmt.Println("Config untouched. Seed defaults with: cata initconfig")
+	fmt.Println("Next: cata")
+}
+
+// runInitConfig 写入 config.json 默认项。未知顶层键（如 llm_ds / llm_previous_qwen）会保留。
+func runInitConfig() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := brain.InitDirectory(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -133,15 +142,16 @@ func runInit() {
 		created = true
 	}
 	if err := config.SaveConfig(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save config file: %v\n", err)
-	} else if created {
-		fmt.Printf("Configuration file created: %s\n", configPath)
+		fmt.Fprintf(os.Stderr, "Error: failed to save config file: %v\n", err)
+		os.Exit(1)
 	}
-
-	fmt.Printf("Brain initialized: %s\n", cfg.Brain.Dir)
-	fmt.Printf("Config: %s (llm=%s evolution=%ds exec=%v)\n",
-		configPath, cfg.LLM.Provider, cfg.Evolution.CycleInterval, cfg.Exec.Enabled)
-	fmt.Println("Next: cata")
+	if created {
+		fmt.Printf("Configuration file created: %s\n", configPath)
+	} else {
+		fmt.Printf("Configuration file updated: %s\n", configPath)
+	}
+	fmt.Printf("Config: llm=%s evolution=%ds exec=%v\n",
+		cfg.LLM.Provider, cfg.Evolution.CycleInterval, cfg.Exec.Enabled)
 }
 
 func runServer(args []string) {

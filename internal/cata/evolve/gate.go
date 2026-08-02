@@ -40,11 +40,11 @@ func hasFillTrigger(snap *Snapshot) bool {
 func computeTriggers(s *Snapshot, ws *brain.Workspace) {
 	s.Triggers = nil
 
-	if s.ShortTermBytes >= shortTermTriggerBytes {
-		s.Triggers = append(s.Triggers, fmt.Sprintf("short_term>=%dB", shortTermTriggerBytes))
-	} else if s.ShortTermBytes >= shortTermActivityBytes {
+	if s.ShortTermBytes >= int64(ShortTermTriggerBytes()) {
+		s.Triggers = append(s.Triggers, fmt.Sprintf("short_term>=%dB", ShortTermTriggerBytes()))
+	} else if s.ShortTermBytes >= int64(ShortTermActivityBytes()) {
 		if s.LastEvolutionAt == "" {
-			s.Triggers = append(s.Triggers, fmt.Sprintf("short_term>=%dB_first", shortTermActivityBytes))
+			s.Triggers = append(s.Triggers, fmt.Sprintf("short_term>=%dB_first", ShortTermActivityBytes()))
 		} else if s.ShortTermModTime != "" && s.ShortTermModTime > s.LastEvolutionAt {
 			s.Triggers = append(s.Triggers, "short_term_updated_since_evolution")
 		}

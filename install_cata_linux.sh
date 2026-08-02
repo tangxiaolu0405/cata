@@ -124,8 +124,9 @@ ensure_path() {
 
 maybe_init() {
   if [ ! -d "${HOME}/.cata" ]; then
-    log "running cata init"
+    log "running cata init + initconfig"
     "${INSTALL_DIR}/${BIN_NAME}" init
+    "${INSTALL_DIR}/${BIN_NAME}" initconfig
   fi
 }
 

@@ -29,18 +29,21 @@ const (
 	RelMemoryIndex        = "memory/index.json"
 	RelShortCurrent       = "memory/short/current.md"
 	RelMemoryLong         = "memory/long"
-	RelMemoryLongLearnings = "memory/long/learnings.md" // 单文件 playbook（B）；不再写 learnings/*.md
+	RelMemoryLongLearnings = "memory/long/learnings.md" // 审计滚动账本（long-term 槽）；可复用事实走 updates→persona
 	RelMemoryLongSessionNotes = "memory/long/session-notes.md" // 合并的日/会话摘要
 	RelMemoryArchive      = "memory/archive"
 
 	fileLearningPlaybookMigrate = ".learnings_playbook_v1" // 一次性 learnings 碎片迁移
 	fileLongMemoryCompactV1     = ".long_memory_compact_v1" // 一次性 long 目录压缩归档
 
-	DirModes        = "modes"
-	ModeDefaultID   = "_default"
-	FilePersona     = "persona.md"
-	FileBehavior    = "behavior.md"
-	FileConstraints = "constraints.md"
+	DirModes = "modes"
+	// ModeDefaultID 默认前台 mode（对用户说话的那张卡）。
+	ModeDefaultID = "_default"
+	// ModeAliasOrchestratorID 曾短暂误用的默认 mode 名；NormalizeModeID 归一到 ModeDefaultID。
+	ModeAliasOrchestratorID = "_orchestrator"
+	FilePersona      = "persona.md"
+	FileBehavior     = "behavior.md"
+	FileConstraints  = "constraints.md"
 	FileCapabilities = "capabilities.yaml"
 
 	DirSkills         = "skills"
@@ -51,6 +54,7 @@ const (
 	FileWorkspaceYAML   = "workspace.yaml"
 	FileWorkspaceLink   = "workspace.link"
 	DirSubagentRuns     = "subagent_runs"
+	DirCases            = "cases"
 )
 
 // CataHome 状态根（~/.cata）。

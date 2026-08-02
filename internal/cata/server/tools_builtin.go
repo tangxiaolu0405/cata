@@ -36,6 +36,9 @@ func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
 	reg.Register(&readSkillTool{})
 	reg.Register(&declareTaskTool{})
 	reg.Register(&askUserTool{ss: ss})
+	reg.Register(&listModesTool{})
+	reg.Register(&delegateModeTool{ss: ss})
+	reg.Register(&caseArtifactTool{})
 	reg.Register(&delegateTaskTool{ss: ss})
 	reg.Register(&delegateWaitTool{ss: ss})
 }

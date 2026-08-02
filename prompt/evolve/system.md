@@ -19,7 +19,7 @@ updates[].path 为**逻辑相对路径**（如 `modes/_default/persona.md`、`me
 **patch 模式**：见下文「patch 模式选用」；按场景选 `replace_section` / `append` / `overwrite`，勿无脑 append。
 
 **learning 字段**
-- `learning`：本轮审计摘要（≤120 字），写入 `evolution_log.json`；**同时**追加到 home `memory/long/learnings.md`（单文件 playbook）
+- `learning`：本轮审计摘要（≤120 字），写入 `evolution_log.json`；**同时**追加到 home `memory/long/learnings.md`（long-term 滚动账本）
 - **禁止**再创建 `memory/long/learnings/learning-*.md` 碎片文件
 - **可复用、会影响后续行为的 durable 事实**必须通过 `updates[]` 写入：
   - 用户偏好/输出格式 → `modes/<active_mode>/persona.md`
@@ -50,4 +50,15 @@ updates[].path 为**逻辑相对路径**（如 `modes/_default/persona.md`、`me
 
 - capabilities.yaml：禁止 append（skill 名由 server 追加）；write/overwrite 须保留 mcp:
 
-默认 mode 目录名为 **`_default`**（带前导下划线），勿写 `modes/default/`。
+默认 mode 目录名为 **`_default`**。专职 mode **由本项目结晶**（`crystallize_mode`），勿假设存在通用 `coder`/`qa` 等脚手架岗。勿写 `modes/default/`（会归一到 `_default`）。
+
+**分桶 evolve（必遵）**
+- Observe 提供 `mode_buckets` 与 triggers：`mode_bucket:<id>` / `orch_bucket` / `crystallize_mode_candidate`（含跨日 `recurring_job_days`：每日一次同类活也算）
+- **主 action**（桶名仅内部使用，LLM 优先用下列）：
+  - `action=consolidate`（可选 `target_mode=<id>`）：提炼 short-term / 记忆进项目内容与 home memory
+    - `target_mode` 非空且 ≠ `_default` → `updates[].path` **仅** `modes/<id>/*`
+    - `target_mode` 为空或 `_default` → 可写 `modes/_default/*`、home `memory/*`、项目 persona.local 等（与常规 consolidate 相同）
+  - `action=crystallize` 或 `crystallize_skill`：固化 skill → `skills/<id>/*`
+  - `action=crystallize_mode` + `new_mode_id=<id>`：新建 draft 专职 mode（persona/behavior）；勿把专职 SOP 糊进 `_default`
+- **别名（仍接受，写入 evolution_log 时保留原名）**：`mode_evolve` / `evolve_mode`（等同 consolidate + `target_mode`）；`orch_evolve` / `evolve_orch`（仅 `modes/_default/*`）
+- 有桶 trigger 时优先按桶选 action；无 `target_mode` 的 consolidate 仍可写 active_mode

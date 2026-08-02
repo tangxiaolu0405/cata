@@ -295,21 +295,3 @@ func firstNonEmpty(a, b string) string {
 	}
 	return b
 }
-
-// SyncTaskGuardCounters 把熔断计数写回任务状态（未失败时也刷新）。
-func SyncTaskGuardCounters(w *Workspace, st *TaskState, round, consec, stale int, lastTool, fp string) error {
-	if st == nil {
-		return nil
-	}
-	st.Round = round
-	st.ConsecutiveFailures = consec
-	st.StaleRounds = stale
-	if lastTool != "" {
-		st.LastTool = lastTool
-	}
-	if fp != "" {
-		st.LastProgressFingerprint = fp
-	}
-	st.Status = TaskStatusRunning
-	return SaveCurrentTask(w, st)
-}

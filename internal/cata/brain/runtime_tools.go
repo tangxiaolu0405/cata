@@ -112,7 +112,7 @@ func (t HostTools) pythonLine() string {
 	if t.Python != "" {
 		return fmt.Sprintf("python: yes (`python` → `%s`)", t.Python)
 	}
-	return "python: **not in PATH** — do not assume; use run_command to verify or ask user"
+	return "python: **not in PATH**"
 }
 
 func (t HostTools) toolLine(name string, path string) string {
@@ -128,28 +128,21 @@ func (e *RuntimeEnv) ToolsAvailabilityBlock() string {
 		return ""
 	}
 	t := e.Tools
-	var b strings.Builder
-	b.WriteString("### PATH 中的运行时（客户端探测）\n\n")
-	b.WriteString(t.pythonLine())
-	b.WriteString("\n")
-	b.WriteString(t.toolLine("node", t.Node))
-	b.WriteString("\n")
-	b.WriteString(t.toolLine("npm", t.NPM))
-	b.WriteString("\n")
-	b.WriteString(t.toolLine("npx", t.NPX))
-	b.WriteString("\n")
-	b.WriteString(t.toolLine("go", t.Go))
-	b.WriteString("\n")
-	b.WriteString(t.toolLine("git", t.Git))
-	b.WriteString("\n")
+	parts := []string{
+		t.pythonLine(),
+		t.toolLine("node", t.Node),
+		t.toolLine("npm", t.NPM),
+		t.toolLine("npx", t.NPX),
+		t.toolLine("go", t.Go),
+		t.toolLine("git", t.Git),
+	}
 	if t.Bash != "" {
-		b.WriteString(fmt.Sprintf("bash: yes (`%s`)\n", t.Bash))
+		parts = append(parts, fmt.Sprintf("bash: yes (`%s`)", t.Bash))
 	}
 	if t.Pwsh != "" {
-		b.WriteString(fmt.Sprintf("powershell: yes (`%s`)\n", t.Pwsh))
+		parts = append(parts, fmt.Sprintf("powershell: yes (`%s`)", t.Pwsh))
 	}
-	b.WriteString("\n未列出的工具同样可能不在 PATH；需要时先用 `run_command` 探测（如 `command -v <tool>` / `which <tool>`），**勿假设**某语言或包管理器可用。\n")
-	return b.String()
+	return "PATH：" + strings.Join(parts, "；") + "。未列出者勿假设可用；需时 `command -v` 探测。\n"
 }
 
 // ShellSyntaxLabel 侧栏 / status 用的语法说明。

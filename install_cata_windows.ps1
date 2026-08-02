@@ -88,8 +88,9 @@ function Ensure-Path {
 function Maybe-Init {
     $cataHome = if ($env:CATA_HOME) { $env:CATA_HOME } else { Join-Path $env:USERPROFILE ".cata" }
     if (-not (Test-Path $cataHome)) {
-        Log "running cata init"
+        Log "running cata init + initconfig"
         & (Join-Path $InstallDir $BinName) init
+        & (Join-Path $InstallDir $BinName) initconfig
     }
 }
 

@@ -64,15 +64,17 @@ type paneStats struct {
 	lastTool, state     string
 	wsID, outputCwd     string
 	focusPath, mode     string
+	projectCata         string
+	cataHome            string
 	sessionTok          int
-	contextEst            int
-	evolveOn              bool
-	evolveSec             int
-	evolveLast            string
-	chatModel             string
-	promptProfile         string
-	subagentRunning       int
-	subagentMax           int
+	contextEst          int
+	evolveOn            bool
+	evolveSec           int
+	evolveLast          string
+	chatModel           string
+	promptProfile       string
+	subagentRunning     int
+	subagentMax         int
 }
 
 type pickItem struct {
@@ -151,6 +153,8 @@ func newModel(s *session, cwd string) model {
 	if w := brain.Active(); w != nil {
 		m.stats.wsID = w.ID
 		m.stats.focusPath = w.RootPath
+		m.stats.projectCata = w.ProjectCataRoot()
+		m.stats.cataHome = brain.CataHome()
 		m.stats.mode = w.ActiveMode
 	}
 	m.loadEvolve()

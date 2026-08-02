@@ -47,7 +47,7 @@ func TestTerminalBrainExtensionMinimalSkipsDocs(t *testing.T) {
 	}
 }
 
-func TestTerminalBrainExtensionTaskSkipsPersona(t *testing.T) {
+func TestTerminalBrainExtensionTaskIncludesPersonaSkipsGuidance(t *testing.T) {
 	SetPromptProfile(PromptProfileTask)
 	defer ClearPromptProfile()
 
@@ -55,8 +55,9 @@ func TestTerminalBrainExtensionTaskSkipsPersona(t *testing.T) {
 	if strings.Contains(ext, TerminalGuidanceSystemPrefix) {
 		t.Fatal("task should skip global guidance")
 	}
-	if strings.Contains(ext, TerminalProjectContentSystemPrefix) {
-		t.Fatal("task should skip project persona")
+	// task 档需注入 active mode，否则首轮看不到项目 SOP / 委派路由
+	if !strings.Contains(ext, TerminalProjectContentSystemPrefix) {
+		t.Fatal("task should include project persona/behavior")
 	}
 }
 
@@ -73,8 +74,8 @@ func TestPromptProfileMaxSticky(t *testing.T) {
 }
 
 func TestProfileRank(t *testing.T) {
-	if ProfileRank(PromptProfileLight) != 0 {
-		t.Fatal("light alias should rank as minimal")
+	if ProfileRank(PromptProfileMinimal) != 0 {
+		t.Fatal("minimal should rank lowest")
 	}
 	if ProfileRank(PromptProfileTask) != 1 || ProfileRank(PromptProfileFull) != 2 {
 		t.Fatal("rank order")

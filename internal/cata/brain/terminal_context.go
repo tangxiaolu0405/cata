@@ -88,11 +88,21 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 			if skills := SkillsIndexBlockCached(caps.Skills); !appendBlock(skills) {
 				return b.String()
 			}
+			if modes := ModesCatalogPromptBlock(w); !appendBlock(modes) {
+				return b.String()
+			}
+			if hot := LongMemoryHotPromptBlock(w, maxLongMemoryHotBytes); !appendBlock(hot) {
+				return b.String()
+			}
 		}
 		if idx := MemoryIndexPromptBlockFor(p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
 			if !appendBlock(idx) {
 				return b.String()
 			}
+		}
+		// task 档也要有 active mode 节选，否则首轮看不到项目 SOP / 委派路由
+		if content := terminalProjectContentExcerpt(minInt(maxPerFile, 3200), maxTotal-used); content != "" {
+			_ = appendBlock(content)
 		}
 		return b.String()
 	}
@@ -100,6 +110,12 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 	if w := Active(); w != nil {
 		caps := LoadActiveCapabilitiesCached()
 		if skills := SkillsIndexBlockCached(caps.Skills); !appendBlock(skills) {
+			return b.String()
+		}
+		if modes := ModesCatalogPromptBlock(w); !appendBlock(modes) {
+			return b.String()
+		}
+		if hot := LongMemoryHotPromptBlock(w, maxLongMemoryHotBytes); !appendBlock(hot) {
 			return b.String()
 		}
 	}
@@ -118,6 +134,13 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 		}
 	}
 	return b.String()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // terminalGuidanceExcerpt ~/.cata/global 引导型：constraints + behavior（不由 evolve 写入）。

@@ -8,10 +8,12 @@ import (
 
 // Decision LLM 一轮自主演进决策。
 type Decision struct {
-	Action   string      `json:"action"`
-	Reason   string      `json:"reason"`
-	Learning string      `json:"learning"`
-	Updates  []DocUpdate `json:"updates"`
+	Action     string      `json:"action"`
+	Reason     string      `json:"reason"`
+	Learning   string      `json:"learning"`
+	TargetMode string      `json:"target_mode,omitempty"` // mode-evolve：只 patch 该 mode
+	NewModeID  string      `json:"new_mode_id,omitempty"` // crystallize_mode：新建 mode id
+	Updates    []DocUpdate `json:"updates"`
 }
 
 func parseDecision(raw string) (*Decision, error) {
@@ -27,7 +29,20 @@ func parseDecision(raw string) (*Decision, error) {
 	if d.Action == "" {
 		d.Action = "idle"
 	}
+	d.Action = normalizeDecisionAction(d.Action)
 	return &d, nil
+}
+
+// normalizeDecisionAction 软映射别名；mode_evolve / orch_evolve 保留原名供 evolution_log。
+func normalizeDecisionAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "evolve_mode":
+		return "mode_evolve"
+	case "evolve_orch":
+		return "orch_evolve"
+	default:
+		return strings.ToLower(strings.TrimSpace(action))
+	}
 }
 
 func stripCodeFences(s string) string {

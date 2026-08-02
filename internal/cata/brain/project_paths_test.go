@@ -11,9 +11,9 @@ func TestIsHomeBrainRel(t *testing.T) {
 		"memory/index.json":         true,
 		"meta.json":                 true,
 		"evolution_log.json":      true,
-		"persona.local.md":        false,
+		"persona.local.md":          false,
 		"modes/_default/persona.md": false,
-		"skills/foo/SKILL.md":     false,
+		"skills/foo/SKILL.md":       false,
 		"brain/memory/long/x.md":    true,
 		"brain/persona.local.md":  false,
 	}

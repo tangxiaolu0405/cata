@@ -90,4 +90,5 @@
 | `constraints.md` | `~/.cata/global/constraints.md` |
 | `behavior.md` | `~/.cata/global/behavior.md` |
 | `boot-assembler.md` | `~/.cata/global/boot-assembler.md` |
-| `modes/_default/*` | 项目 `.cata` scaffold 种子 |
+| `modes/_default/*` | 项目 `.cata` scaffold 种子（默认前台） |
+| `modes/<id>/*` | 专职 mode：**不**脚手架预种；由 evolve `crystallize_mode` 或用户自建 |

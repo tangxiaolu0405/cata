@@ -16,6 +16,6 @@
   "worker_root": "",
   "socket_path": "",
   "cata_url": "",
-  "ui_listen": "127.0.0.1:8787",
+  "ui_listen": "0.0.0.0:8787",
   "projects": []
 }

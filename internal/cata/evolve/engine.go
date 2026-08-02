@@ -172,26 +172,50 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
-	if crystallize {
-		dec.Updates = filterUpdatesCrystallize(dec.Updates)
-	} else {
-		dec.Updates = filterUpdates(dec.Updates)
-	}
+		if crystallize {
+			dec.Updates = filterUpdatesCrystallize(dec.Updates)
+		} else {
+			dec.Updates = filterUpdatesForDecision(dec, dec.Updates)
+		}
 
-	var touched []string
-	action := strings.ToLower(strings.TrimSpace(dec.Action))
-	if action != "idle" && len(dec.Updates) > 0 {
-		touched, err = ApplyUpdates(ws, dec.Updates)
-		if err != nil {
-			return fmt.Errorf("apply: %w", err)
+		var touched []string
+		action := strings.ToLower(strings.TrimSpace(dec.Action))
+		if action == "crystallize_mode" || action == "crystallize" {
+			if id := resolveCrystallizeModeID(dec); id != "" {
+				persona, behavior := extractModeSeedFromUpdates(dec.Updates, id)
+				if _, err := brain.EnsureModeDraft(ws, id, persona, behavior); err != nil {
+					log.Printf("Autonomous evolution [%s]: crystallize_mode: %v", ws.ID, err)
+				} else {
+					touched = append(touched, "modes/"+id+"/persona.md")
+					one := ""
+					for _, ln := range strings.Split(persona, "\n") {
+						ln = strings.TrimSpace(ln)
+						if ln != "" && !strings.HasPrefix(ln, "#") {
+							one = ln
+							break
+						}
+					}
+					if err := brain.EnsureDefaultSpecialistRoute(ws, id, one); err != nil {
+						log.Printf("Autonomous evolution [%s]: specialist route: %v", ws.ID, err)
+					} else {
+						touched = append(touched, "modes/"+brain.ModeDefaultID+"/behavior.md")
+					}
+				}
+			}
 		}
-		if extra := compactTouchedProjectContent(ws, touched); len(extra) > 0 {
-			touched = append(touched, extra...)
+		if action != "idle" && len(dec.Updates) > 0 {
+			t2, err := ApplyUpdates(ws, dec.Updates)
+			if err != nil {
+				return fmt.Errorf("apply: %w", err)
+			}
+			touched = append(touched, t2...)
+			if extra := compactTouchedProjectContent(ws, touched); len(extra) > 0 {
+				touched = append(touched, extra...)
+			}
 		}
-	}
-	if crystallize && (action == "crystallize_skill" || len(touched) > 0) {
-		ingestCrystallizedSkills(ws, touched)
-	}
+		if crystallize && (action == "crystallize_skill" || action == "crystallize" || len(touched) > 0) {
+			ingestCrystallizedSkills(ws, touched)
+		}
 
 	// Deterministic long-term → archive when file count exceeds threshold.
 	if snap.LongTermFileCount >= longTermSummarizeMinFiles {
@@ -214,14 +238,22 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if learning == "" {
 		learning = dec.Reason
 	}
-	entry := LogEntry{
-		WorkspaceID: ws.ID,
-		ModeID:      ws.ActiveMode,
-		Action:      dec.Action,
-		Reason:      dec.Reason,
-		Learning:    learning,
-		DocTouched:  touched,
-	}
+		entry := LogEntry{
+			WorkspaceID: ws.ID,
+			ModeID:      ws.ActiveMode,
+			Action:      dec.Action,
+			Reason:      dec.Reason,
+			Learning:    learning,
+			DocTouched:  touched,
+		}
+		if tm := strings.TrimSpace(dec.TargetMode); tm != "" {
+			entry.ModeID = brain.ResolveDelegateModeID(tm)
+		}
+		if action == "crystallize_mode" || action == "crystallize" {
+			if id := resolveCrystallizeModeID(dec); id != "" {
+				entry.ModeID = id
+			}
+		}
 	if shouldFinalizeShortTerm(dec, touched, snap, sessionCompress) {
 		if arch, err := brain.FinalizeShortTermAfterConsolidate(brain.DefaultKeepRecentAfterConsolidate); err != nil {
 			log.Printf("Autonomous evolution [%s]: short-term finalize: %v", ws.ID, err)
@@ -280,18 +312,49 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 	if crystallize {
 		b.WriteString(" (crystallize_skill)")
 	}
-	if len(snap.SkillIDs) > 0 {
-		b.WriteString("\nexisting_skills: ")
-		b.WriteString(strings.Join(snap.SkillIDs, ", "))
-	}
-	b.WriteString("\nstate: ")
-	compact, _ := json.Marshal(snap)
-	b.Write(compact)
+		if len(snap.SkillIDs) > 0 {
+			b.WriteString("\nexisting_skills: ")
+			b.WriteString(strings.Join(snap.SkillIDs, ", "))
+		}
+		if modes, err := brain.ListProjectModes(ws); err == nil && len(modes) > 0 {
+			b.WriteString("\nexisting_modes:")
+			for _, m := range modes {
+				b.WriteByte(' ')
+				b.WriteString(m.ID)
+			}
+			b.WriteByte('\n')
+		}
+		if len(snap.ModeBuckets) > 0 {
+			b.WriteString("mode_buckets:")
+			for _, mb := range snap.ModeBuckets {
+				fmt.Fprintf(&b, " %s(runs=%d,fail=%d)", mb.ModeID, mb.Runs, mb.Failures)
+			}
+			b.WriteByte('\n')
+		}
+		hasCrystallizeMode := false
+		for _, t := range snap.Triggers {
+			if t == "crystallize_mode_candidate" {
+				hasCrystallizeMode = true
+				break
+			}
+		}
+		if len(snap.ModeBuckets) > 0 || hasCrystallizeMode {
+			b.WriteString("evolve_buckets: use action=consolidate (+ optional target_mode=<id> to patch only modes/<id>/*; omit or _default for modes/_default/* + memory); ")
+			b.WriteString("action=crystallize or crystallize_skill for skills/*; ")
+			b.WriteString("action=crystallize_mode + new_mode_id=<id> (+ updates persona/behavior) to draft a NEW specialist mode from repeated project work — do not invent generic coder/qa; name by THIS project's jobs; do not paste specialist SOP into _default; ")
+			b.WriteString("aliases mode_evolve/evolve_mode and orch_evolve/evolve_orch still accepted.\n")
+			if hasCrystallizeMode {
+				b.WriteString("PRIORITY: triggers include crystallize_mode_candidate — prefer crystallize_mode if short-term/archives show a repeatable specialist job (including once-per-day across ≥3 calendar days) not covered by existing_modes.\n")
+			}
+		}
+		b.WriteString("\nstate: ")
+		compact, _ := json.Marshal(snap)
+		b.Write(compact)
 
-	if snap.ShortTermBytes >= shortTermActivityBytes {
+	if snap.ShortTermBytes >= int64(ShortTermActivityBytes()) {
 		includeExcerpt := true
 		if snap.LastEvolutionAt != "" && snap.ShortTermModTime != "" &&
-			snap.ShortTermModTime <= snap.LastEvolutionAt && snap.ShortTermBytes < shortTermTriggerBytes {
+			snap.ShortTermModTime <= snap.LastEvolutionAt && snap.ShortTermBytes < int64(ShortTermTriggerBytes()) {
 			includeExcerpt = false
 		}
 		if includeExcerpt {
@@ -346,6 +409,28 @@ func readFileCap(path string, max int) (string, error) {
 		return s[:max] + "\n…(truncated)", nil
 	}
 	return s, nil
+}
+
+func extractModeSeedFromUpdates(updates []DocUpdate, modeID string) (persona, behavior string) {
+	id := brain.ResolveDelegateModeID(modeID)
+	prefix := "modes/" + id + "/"
+	for _, u := range updates {
+		rel, err := brain.NormalizeEvolveUpdatePath(u.Path)
+		if err != nil {
+			continue
+		}
+		content := strings.TrimSpace(u.Content)
+		if content == "" {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(rel, "/"+brain.FilePersona) && strings.HasPrefix(rel, prefix):
+			persona = content
+		case strings.HasSuffix(rel, "/"+brain.FileBehavior) && strings.HasPrefix(rel, prefix):
+			behavior = content
+		}
+	}
+	return persona, behavior
 }
 
 // RunCycle 对当前活跃 workspace 执行一轮（测试用）。

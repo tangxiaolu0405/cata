@@ -33,16 +33,12 @@ type wireChatRequest struct {
 func (OpenAICompatAdapter) Format() string { return APIFormatOpenAI }
 
 // supportsDeepSeekThinkingWire 是否发送 DeepSeek 风格 thinking / reasoning_content。
-// 通用 OpenAI 兼容网关（OpenAI、Gemini openai/、多数代理）不认该字段，乱发可能 400。
+// 通用 OpenAI 兼容网关（OpenAI、Gemini openai/、多数第三方代理）不认该字段，乱发可能 400 或返回空 JSON。
+// 仅按 api_url 判断；勿因 provider 标签写成 deepseek、但实际走代理就发扩展字段。
 func supportsDeepSeekThinkingWire(apiURL string) bool {
-	if config.Config != nil {
-		p := strings.ToLower(strings.TrimSpace(config.Config.LLM.Provider))
-		if strings.Contains(p, "deepseek") || strings.Contains(p, "mimo") {
-			return true
-		}
-	}
 	u := strings.ToLower(apiURL)
-	return strings.Contains(u, "deepseek") ||
+	return strings.Contains(u, "deepseek.com") ||
+		strings.Contains(u, "api.deepseek") ||
 		strings.Contains(u, "xiaomimimo")
 }
 
@@ -150,6 +146,15 @@ func (p *OpenAICompatAdapter) BuildRequest(apiURL string, apiKey string, model s
 }
 
 func (p *OpenAICompatAdapter) ParseResponse(body []byte) (string, []ToolCall, error) {
+	trim := bytes.TrimSpace(body)
+	if len(trim) == 0 {
+		return "", nil, fmt.Errorf("no response from LLM (empty body)")
+	}
+	// 部分代理把 SSE 标成 application/json；交给调用方用流式解析。
+	if looksLikeSSEChatBody(trim) {
+		return "", nil, errBodyLooksLikeSSE
+	}
+
 	var resp struct {
 		Choices []struct {
 			Message      Message    `json:"message"`
@@ -164,20 +169,27 @@ func (p *OpenAICompatAdapter) ParseResponse(body []byte) (string, []ToolCall, er
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"output"`
-		OutputText string `json:"output_text"`
-		Error      *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error,omitempty"`
+		OutputText string          `json:"output_text"`
+		Error      json.RawMessage `json:"error,omitempty"`
 	}
 
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	if err := json.Unmarshal(trim, &resp); err != nil {
+		return "", nil, fmt.Errorf("failed to unmarshal response: %w; body=%s", err, truncateForErr(trim, 240))
 	}
-	if resp.Error != nil {
-		return "", nil, fmt.Errorf("API error: %s (type: %s, code: %s)",
-			resp.Error.Message, resp.Error.Type, resp.Error.Code)
+	if len(resp.Error) > 0 && string(resp.Error) != "null" {
+		if msg := formatOpenAIErrorField(resp.Error); msg != "" {
+			return "", nil, fmt.Errorf("API error: %s", msg)
+		}
+	}
+	// 部分网关：{"object":"error","message":"...","type":"BadRequest","code":400}
+	var altErr struct {
+		Object  string `json:"object"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    any    `json:"code"`
+	}
+	if json.Unmarshal(trim, &altErr) == nil && strings.EqualFold(altErr.Object, "error") && strings.TrimSpace(altErr.Message) != "" {
+		return "", nil, fmt.Errorf("API error: %s (type: %s)", altErr.Message, altErr.Type)
 	}
 
 	// Chat Completions
@@ -212,7 +224,53 @@ func (p *OpenAICompatAdapter) ParseResponse(body []byte) (string, []ToolCall, er
 	if text := strings.TrimSpace(b.String()); text != "" {
 		return text, nil, nil
 	}
-	return "", nil, fmt.Errorf("no response from LLM")
+	return "", nil, fmt.Errorf("no response from LLM; body=%s", truncateForErr(trim, 280))
+}
+
+var errBodyLooksLikeSSE = fmt.Errorf("body looks like SSE stream")
+
+func looksLikeSSEChatBody(body []byte) bool {
+	s := string(bytes.TrimSpace(body))
+	if strings.HasPrefix(s, "data:") {
+		return true
+	}
+	// 常见：先空行或注释再 data:
+	return strings.Contains(s, "\ndata:") || strings.HasPrefix(s, ":") && strings.Contains(s, "data:")
+}
+
+func formatOpenAIErrorField(raw json.RawMessage) string {
+	var asStr string
+	if err := json.Unmarshal(raw, &asStr); err == nil {
+		return strings.TrimSpace(asStr)
+	}
+	var obj struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		parts := []string{}
+		if obj.Message != "" {
+			parts = append(parts, obj.Message)
+		}
+		if obj.Type != "" {
+			parts = append(parts, "type="+obj.Type)
+		}
+		if obj.Code != "" {
+			parts = append(parts, "code="+obj.Code)
+		}
+		return strings.Join(parts, " ")
+	}
+	return truncateForErr(raw, 200)
+}
+
+func truncateForErr(b []byte, max int) string {
+	s := strings.TrimSpace(string(b))
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func (OpenAICompatAdapter) GetAPIKeyHeader(apiKey string) (string, string) {

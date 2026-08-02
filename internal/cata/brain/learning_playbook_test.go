@@ -124,7 +124,7 @@ func TestSyncMemoryIndexAfterEvolution_playbookNotFragments(t *testing.T) {
 
 func TestInferIndexCategory_learningsPlaybook(t *testing.T) {
 	cat, pri, _ := inferIndexCategory(RelMemoryLongLearnings)
-	if cat != "procedure" || pri != 6 {
+	if cat != "procedure" || pri != 8 {
 		t.Fatalf("got %s p%d", cat, pri)
 	}
 }

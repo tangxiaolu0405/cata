@@ -60,12 +60,12 @@ type Config struct {
 	WorkerRoot         string           `json:"worker_root,omitempty"`
 	SocketPath         string           `json:"socket_path,omitempty"`
 	CataURL            string           `json:"cata_url,omitempty"` // 模式二/三预留
-	UIListen           string           `json:"ui_listen,omitempty"` // 本地控制台，默认 127.0.0.1:8787；off 关闭
+	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	Projects           []Project        `json:"projects,omitempty"`
 }
 
-// DefaultUIListen 本地控制台默认监听地址。
-const DefaultUIListen = "127.0.0.1:8787"
+// DefaultUIListen 控制台默认监听地址（全网卡，便于局域网手机访问）。
+const DefaultUIListen = "0.0.0.0:8787"
 
 // LoadConfig 读取 gateway 配置。
 func LoadConfig() (Config, error) {
@@ -273,21 +273,156 @@ func ConfigPath() string {
 	return filepath.Join(brain.CataHome(), "gateway.json")
 }
 
-// SaveConfig 整文件写回 gateway.json（保留当前内存配置）。
+// GatewayKnownTopKeys gateway.json 中由 Config 结构体占用的顶层键。
+func GatewayKnownTopKeys() []string {
+	return []string{
+		"edition", "cata_server",
+		"telegram_bot_token", "telegram_allowed_user_ids",
+		"qq_app_id", "qq_app_secret", "qq_allowed_openids", "qq_sandbox",
+		"worker_root", "socket_path", "cata_url", "ui_listen", "projects",
+	}
+}
+
+// SaveConfig 合并写回 gateway.json，保留未知顶层键。
 func SaveConfig(cfg Config) error {
 	if err := brain.EnsureCataLayout(); err != nil {
 		return err
 	}
 	path := ConfigPath()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	doc := map[string]json.RawMessage{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &doc)
+	}
+	if doc == nil {
+		doc = map[string]json.RawMessage{}
+	}
+	typed, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0644)
+	var typedMap map[string]json.RawMessage
+	if err := json.Unmarshal(typed, &typedMap); err != nil {
+		return err
+	}
+	for _, k := range GatewayKnownTopKeys() {
+		delete(doc, k)
+	}
+	for k, v := range typedMap {
+		doc[k] = v
+	}
+	out, err := json.MarshalIndent(rawMessageDoc(doc), "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	return os.WriteFile(path, out, 0644)
 }
 
-// SaveProjects 仅更新 projects 字段后写回（先读盘再合并，避免丢密钥）。
+// rawMessageDoc 把 RawMessage map 转成可 MarshalIndent 的 any map。
+func rawMessageDoc(doc map[string]json.RawMessage) map[string]any {
+	out := make(map[string]any, len(doc))
+	for k, v := range doc {
+		var val any
+		if err := json.Unmarshal(v, &val); err != nil {
+			out[k] = json.RawMessage(v)
+			continue
+		}
+		out[k] = val
+	}
+	return out
+}
+
+// LoadGatewayDocument 从磁盘读取 gateway.json（不应用环境变量覆盖），并拆出未知顶层键。
+func LoadGatewayDocument() (cfg Config, extras map[string]json.RawMessage, err error) {
+	extras = map[string]json.RawMessage{}
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			cfg.normalize()
+			return cfg, extras, nil
+		}
+		return Config{}, nil, err
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return Config{}, nil, err
+	}
+	known := map[string]struct{}{}
+	for _, k := range GatewayKnownTopKeys() {
+		known[k] = struct{}{}
+	}
+	typed := map[string]json.RawMessage{}
+	for k, v := range doc {
+		if _, ok := known[k]; ok {
+			typed[k] = v
+		} else {
+			extras[k] = v
+		}
+	}
+	tb, err := json.Marshal(typed)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	if err := json.Unmarshal(tb, &cfg); err != nil {
+		return Config{}, nil, err
+	}
+	cfg.normalize()
+	return cfg, extras, nil
+}
+
+// SaveGatewayDocument 写回已知配置；extras 非 nil 时替换全部未知顶层键。
+func SaveGatewayDocument(cfg Config, extras map[string]json.RawMessage) error {
+	if err := brain.EnsureCataLayout(); err != nil {
+		return err
+	}
+	path := ConfigPath()
+	doc := map[string]json.RawMessage{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &doc)
+	}
+	if doc == nil {
+		doc = map[string]json.RawMessage{}
+	}
+	known := map[string]struct{}{}
+	for _, k := range GatewayKnownTopKeys() {
+		known[k] = struct{}{}
+	}
+	typed, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	var typedMap map[string]json.RawMessage
+	if err := json.Unmarshal(typed, &typedMap); err != nil {
+		return err
+	}
+	for _, k := range GatewayKnownTopKeys() {
+		delete(doc, k)
+	}
+	for k, v := range typedMap {
+		doc[k] = v
+	}
+	if extras != nil {
+		for k := range doc {
+			if _, ok := known[k]; !ok {
+				delete(doc, k)
+			}
+		}
+		for k, v := range extras {
+			if _, ok := known[k]; ok {
+				continue
+			}
+			doc[k] = v
+		}
+	}
+	out, err := json.MarshalIndent(rawMessageDoc(doc), "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	return os.WriteFile(path, out, 0644)
+}
+
+// SaveProjects 仅更新 projects 字段后写回（先读盘再合并，避免丢密钥与未知键）。
 func SaveProjects(projects []Project) (Config, error) {
 	cfg, err := LoadConfig()
 	if err != nil {

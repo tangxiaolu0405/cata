@@ -203,6 +203,58 @@
     .msg-log .item { cursor: default; }
     .msg-log .dir { font-size: 0.7rem; font-weight: 600; color: var(--ok); }
     .msg-log .dir.out { color: var(--accent-deep); }
+    .settings-dlg {
+      background: #fff; border-radius: 16px; padding: 0; width: min(720px, 96vw);
+      max-height: min(92vh, 900px); display: flex; flex-direction: column;
+      box-shadow: 0 20px 50px rgba(0,0,0,.15); overflow: hidden;
+    }
+    .settings-dlg .hd {
+      padding: 1rem 1.2rem; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    }
+    .settings-dlg .hd h3 { font-family: var(--font-d); margin: 0; font-size: 1.25rem; }
+    .settings-dlg .tabs { display: flex; gap: 0.35rem; padding: 0.65rem 1.2rem 0; }
+    .settings-dlg .tab {
+      background: transparent; color: var(--muted); border: 1px solid transparent;
+      padding: 0.4rem 0.85rem; border-radius: 999px; font-size: 0.85rem;
+    }
+    .settings-dlg .tab.active {
+      background: rgba(217,119,6,.12); color: var(--accent-deep); border-color: rgba(217,119,6,.35);
+    }
+    .settings-dlg .body { overflow: auto; padding: 0.85rem 1.2rem 1.2rem; flex: 1; }
+    .settings-dlg .ft {
+      padding: 0.75rem 1.2rem; border-top: 1px solid var(--line);
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+    }
+    .settings-dlg .ft .hint { flex: 1; font-size: 0.78rem; color: var(--muted); }
+    .settings-dlg label.field { display: block; margin-top: 0.7rem; }
+    .settings-dlg label.field > span {
+      display: block; font-size: 0.72rem; font-weight: 600; letter-spacing: .02em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem;
+    }
+    .settings-dlg .grid2 { display: grid; gap: 0.65rem; }
+    @media (min-width: 560px) { .settings-dlg .grid2 { grid-template-columns: 1fr 1fr; } }
+    .settings-dlg .sec {
+      margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line);
+    }
+    .settings-dlg .sec h4 {
+      margin: 0 0 0.35rem; font-family: var(--font-d); font-size: 1rem; font-weight: 600;
+    }
+    .settings-dlg .sec p.help { margin: 0 0 0.5rem; font-size: 0.8rem; color: var(--muted); }
+    .settings-dlg textarea.json {
+      min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem;
+      line-height: 1.4; resize: vertical;
+    }
+    .settings-dlg .checks { display: flex; flex-wrap: wrap; gap: 0.65rem 1.1rem; margin-top: 0.55rem; }
+    .settings-dlg .check {
+      display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; cursor: pointer;
+    }
+    .toast {
+      position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%) translateY(120%);
+      background: var(--ink); color: #fff; padding: 0.65rem 1.1rem; border-radius: 999px;
+      font-size: 0.88rem; z-index: 30; transition: transform .25s ease; max-width: 90vw;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -214,7 +266,10 @@
       </div>
       <div class="list" id="projectList"></div>
       <div class="side-foot">
-        <button type="button" class="ghost" id="btnRefresh" style="width:100%">刷新工作区</button>
+        <div class="row">
+          <button type="button" class="ghost" id="btnRefresh" style="flex:1">刷新工作区</button>
+          <button type="button" class="ghost" id="btnSettings" title="设置">设置</button>
+        </div>
       </div>
     </aside>
 
@@ -259,6 +314,136 @@
       <div id="choiceOpts"></div>
     </div>
   </div>
+
+  <div class="overlay" id="settingsDlg">
+    <div class="settings-dlg">
+      <div class="hd">
+        <h3>设置</h3>
+        <button type="button" class="ghost" id="btnSettingsClose">关闭</button>
+      </div>
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="app">应用 config.json</button>
+        <button type="button" class="tab" data-tab="gateway">Gateway gateway.json</button>
+      </div>
+      <div class="body">
+        <div id="tabApp">
+          <p class="help" id="appPath" style="margin:0;font-size:0.8rem;color:var(--muted)"></p>
+          <div class="sec" style="border-top:none;padding-top:0;margin-top:0.5rem">
+            <h4>LLM</h4>
+            <div class="grid2">
+              <label class="field"><span>provider</span><input id="app_llm_provider" type="text" /></label>
+              <label class="field"><span>api_format</span>
+                <select id="app_llm_api_format"><option value="openai">openai</option><option value="anthropic">anthropic</option></select>
+              </label>
+              <label class="field"><span>api_key</span><input id="app_llm_api_key" type="password" autocomplete="off" placeholder="未改则保留原值" /></label>
+              <label class="field"><span>model</span><input id="app_llm_model" type="text" /></label>
+            </div>
+            <label class="field"><span>api_url</span><input id="app_llm_api_url" type="text" /></label>
+            <div class="grid2">
+              <label class="field"><span>max_tokens</span><input id="app_llm_max_tokens" type="number" /></label>
+              <label class="field"><span>timeout</span><input id="app_llm_timeout" type="number" /></label>
+              <label class="field"><span>context_window</span><input id="app_llm_context_window" type="number" /></label>
+              <label class="field"><span>thinking</span>
+                <select id="app_llm_thinking"><option value="auto">auto</option><option value="enabled">enabled</option><option value="disabled">disabled</option><option value="">(omit)</option></select>
+              </label>
+            </div>
+            <div class="checks"><label class="check"><input type="checkbox" id="app_llm_enabled" /> enabled</label></div>
+            <label class="field"><span>models（JSON 对象，可空）</span><textarea class="json" id="app_llm_models" spellcheck="false"></textarea></label>
+          </div>
+          <div class="sec">
+            <h4>Server / Evolution</h4>
+            <div class="grid2">
+              <label class="field"><span>server.socket_path</span><input id="app_server_socket" type="text" /></label>
+              <label class="field"><span>server.log_level</span><input id="app_server_log" type="text" /></label>
+              <label class="field"><span>server.timezone</span><input id="app_server_tz" type="text" /></label>
+              <label class="field"><span>evolution.cycle_interval</span><input id="app_evo_cycle" type="number" /></label>
+            </div>
+            <div class="grid2">
+              <label class="field"><span>context_compress_ratio</span><input id="app_evo_ratio" type="number" step="0.01" /></label>
+              <label class="field"><span>session_compress_turns</span><input id="app_evo_turns" type="number" /></label>
+              <label class="field"><span>decision_max_tokens</span><input id="app_evo_dec" type="number" /></label>
+              <label class="field"><span>short_term_trigger_bytes</span><input id="app_evo_trig" type="number" /></label>
+            </div>
+            <label class="field"><span>short_term_activity_bytes</span><input id="app_evo_act" type="number" /></label>
+            <div class="checks"><label class="check"><input type="checkbox" id="app_evo_enabled" /> evolution.enabled</label></div>
+          </div>
+          <div class="sec">
+            <h4>Exec / Workspace / Subagent / Chat / MCP</h4>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="app_exec_enabled" /> exec.enabled</label>
+              <label class="check"><input type="checkbox" id="app_exec_confirm" /> require_confirm</label>
+              <label class="check"><input type="checkbox" id="app_ws_enabled" /> workspace_files.enabled</label>
+              <label class="check"><input type="checkbox" id="app_mcp_enabled" /> mcp.enabled</label>
+            </div>
+            <div class="grid2">
+              <label class="field"><span>exec.timeout_seconds</span><input id="app_exec_timeout" type="number" /></label>
+              <label class="field"><span>exec.max_output_bytes</span><input id="app_exec_out" type="number" /></label>
+              <label class="field"><span>subagent.max_concurrent</span><input id="app_sub_conc" type="number" /></label>
+              <label class="field"><span>subagent.default_max_rounds</span><input id="app_sub_rounds" type="number" /></label>
+              <label class="field"><span>chat.hard_max_tool_rounds</span><input id="app_chat_hard" type="number" /></label>
+              <label class="field"><span>mcp.tool_timeout_seconds</span><input id="app_mcp_timeout" type="number" /></label>
+            </div>
+            <label class="field"><span>mcp.servers（JSON 数组）</span><textarea class="json" id="app_mcp_servers" spellcheck="false"></textarea></label>
+            <label class="field"><span>exec.whitelist（逗号分隔）</span><input id="app_exec_white" type="text" /></label>
+            <label class="field"><span>exec.blacklist（逗号分隔）</span><input id="app_exec_black" type="text" /></label>
+          </div>
+          <div class="sec">
+            <h4>额外顶层字段</h4>
+            <p class="help">如 <code>llm_previous_qwen</code> / <code>llm_xxx</code>。保存时会原样写回，不会丢。</p>
+            <textarea class="json" id="app_extras" spellcheck="false"></textarea>
+          </div>
+        </div>
+        <div id="tabGateway" hidden>
+          <p class="help" id="gwPath" style="margin:0;font-size:0.8rem;color:var(--muted)"></p>
+          <div class="sec" style="border-top:none;padding-top:0;margin-top:0.5rem">
+            <h4>发行与连接</h4>
+            <div class="grid2">
+              <label class="field"><span>edition</span>
+                <select id="gw_edition"><option value="base">base</option><option value="channel">channel</option></select>
+              </label>
+              <label class="field"><span>cata_server.mode</span>
+                <select id="gw_mode"><option value="socket">socket</option><option value="external">external</option><option value="remote">remote</option></select>
+              </label>
+            </div>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="gw_auto" /> auto_start</label>
+              <label class="check"><input type="checkbox" id="gw_managed" /> managed</label>
+              <label class="check"><input type="checkbox" id="gw_stop" /> stop_on_exit</label>
+              <label class="check"><input type="checkbox" id="gw_qq_sandbox" /> qq_sandbox</label>
+            </div>
+            <div class="grid2">
+              <label class="field"><span>ui_listen</span><input id="gw_ui" type="text" placeholder="0.0.0.0:8787" /></label>
+              <label class="field"><span>socket_path</span><input id="gw_socket" type="text" /></label>
+              <label class="field"><span>worker_root</span><input id="gw_worker" type="text" /></label>
+              <label class="field"><span>cata_server.binary</span><input id="gw_bin" type="text" /></label>
+            </div>
+            <label class="field"><span>cata_url</span><input id="gw_url" type="text" /></label>
+          </div>
+          <div class="sec">
+            <h4>渠道</h4>
+            <label class="field"><span>telegram_bot_token</span><input id="gw_tg_token" type="password" autocomplete="off" placeholder="未改则保留原值" /></label>
+            <label class="field"><span>telegram_allowed_user_ids（逗号）</span><input id="gw_tg_ids" type="text" /></label>
+            <div class="grid2">
+              <label class="field"><span>qq_app_id</span><input id="gw_qq_id" type="text" /></label>
+              <label class="field"><span>qq_app_secret</span><input id="gw_qq_secret" type="password" autocomplete="off" /></label>
+            </div>
+            <label class="field"><span>qq_allowed_openids（逗号）</span><input id="gw_qq_oids" type="text" /></label>
+          </div>
+          <div class="sec">
+            <h4>额外顶层字段</h4>
+            <p class="help">未知键保存时保留。</p>
+            <textarea class="json" id="gw_extras" spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="ft">
+        <span class="hint" id="settingsHint">密钥留空或保持脱敏占位则不覆盖。</span>
+        <button type="button" class="ghost" id="btnSettingsReload">重新加载</button>
+        <button type="button" id="btnSettingsSave">保存</button>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
 
   <script>
     let projects = [];
@@ -620,6 +805,260 @@
         };
       } catch (_) {}
     }
+
+    // —— Settings ——
+    let settingsTab = "app";
+    let appLoaded = null; // last GET payload
+    let gwLoaded = null;
+
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove("show"), 2400);
+    }
+
+    function csvJoin(arr) {
+      return Array.isArray(arr) ? arr.join(", ") : "";
+    }
+    function csvSplit(s) {
+      return String(s || "").split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean);
+    }
+    function csvIntSplit(s) {
+      return csvSplit(s).map((x) => Number(x)).filter((n) => Number.isFinite(n));
+    }
+    function prettyJSON(v) {
+      try { return JSON.stringify(v ?? {}, null, 2); } catch { return "{}"; }
+    }
+    function parseJSONField(raw, fallback) {
+      const t = String(raw || "").trim();
+      if (!t) return fallback;
+      return JSON.parse(t);
+    }
+
+    function setSettingsTab(tab) {
+      settingsTab = tab;
+      document.querySelectorAll("#settingsDlg .tab").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === tab);
+      });
+      $("tabApp").hidden = tab !== "app";
+      $("tabGateway").hidden = tab !== "gateway";
+    }
+
+    function fillAppForm(data) {
+      appLoaded = data;
+      const c = data.config || {};
+      const llm = c.llm || {};
+      $("appPath").textContent = data.path || "";
+      $("app_llm_provider").value = llm.provider || "";
+      $("app_llm_api_format").value = llm.api_format || "openai";
+      $("app_llm_api_key").value = llm.api_key || "";
+      $("app_llm_model").value = llm.model || "";
+      $("app_llm_api_url").value = llm.api_url || "";
+      $("app_llm_max_tokens").value = llm.max_tokens ?? "";
+      $("app_llm_timeout").value = llm.timeout ?? "";
+      $("app_llm_context_window").value = llm.context_window ?? "";
+      $("app_llm_thinking").value = llm.thinking || "auto";
+      $("app_llm_enabled").checked = !!llm.enabled;
+      $("app_llm_models").value = llm.models ? prettyJSON(llm.models) : "";
+      const srv = c.server || {};
+      $("app_server_socket").value = srv.socket_path || "";
+      $("app_server_log").value = srv.log_level || "";
+      $("app_server_tz").value = srv.timezone || "";
+      const evo = c.evolution || {};
+      $("app_evo_enabled").checked = !!evo.enabled;
+      $("app_evo_cycle").value = evo.cycle_interval ?? "";
+      $("app_evo_ratio").value = evo.context_compress_ratio ?? "";
+      $("app_evo_turns").value = evo.session_compress_turns ?? "";
+      $("app_evo_dec").value = evo.decision_max_tokens ?? "";
+      $("app_evo_trig").value = evo.short_term_trigger_bytes ?? "";
+      $("app_evo_act").value = evo.short_term_activity_bytes ?? "";
+      const ex = c.exec || {};
+      $("app_exec_enabled").checked = !!ex.enabled;
+      $("app_exec_confirm").checked = !!ex.require_confirm;
+      $("app_exec_timeout").value = ex.timeout_seconds ?? "";
+      $("app_exec_out").value = ex.max_output_bytes ?? "";
+      $("app_exec_white").value = csvJoin(ex.whitelist);
+      $("app_exec_black").value = csvJoin(ex.blacklist);
+      const ws = c.workspace_files || {};
+      $("app_ws_enabled").checked = ws.enabled !== false;
+      const sub = c.subagent || {};
+      $("app_sub_conc").value = sub.max_concurrent ?? "";
+      $("app_sub_rounds").value = sub.default_max_rounds ?? "";
+      $("app_chat_hard").value = (c.chat && c.chat.hard_max_tool_rounds) ?? "";
+      const mcp = c.mcp || {};
+      $("app_mcp_enabled").checked = !!mcp.enabled;
+      $("app_mcp_timeout").value = mcp.tool_timeout_seconds ?? "";
+      $("app_mcp_servers").value = prettyJSON(mcp.servers || []);
+      $("app_extras").value = prettyJSON(data.extras || {});
+    }
+
+    function gatherAppForm() {
+      let models = null;
+      const modelsRaw = $("app_llm_models").value.trim();
+      if (modelsRaw) models = parseJSONField(modelsRaw, null);
+      const servers = parseJSONField($("app_mcp_servers").value, []);
+      if (!Array.isArray(servers)) throw new Error("mcp.servers 必须是 JSON 数组");
+      const extras = parseJSONField($("app_extras").value, {});
+      if (!extras || typeof extras !== "object" || Array.isArray(extras)) {
+        throw new Error("额外字段必须是 JSON 对象");
+      }
+      const base = JSON.parse(JSON.stringify((appLoaded && appLoaded.config) || {}));
+      base.llm = Object.assign({}, base.llm || {}, {
+        provider: $("app_llm_provider").value.trim(),
+        api_format: $("app_llm_api_format").value,
+        api_key: $("app_llm_api_key").value,
+        api_url: $("app_llm_api_url").value.trim(),
+        model: $("app_llm_model").value.trim(),
+        models,
+        max_tokens: Number($("app_llm_max_tokens").value) || 0,
+        timeout: Number($("app_llm_timeout").value) || 0,
+        context_window: Number($("app_llm_context_window").value) || 0,
+        thinking: $("app_llm_thinking").value,
+        enabled: $("app_llm_enabled").checked,
+      });
+      base.server = Object.assign({}, base.server || {}, {
+        socket_path: $("app_server_socket").value.trim(),
+        log_level: $("app_server_log").value.trim(),
+        timezone: $("app_server_tz").value.trim(),
+      });
+      base.evolution = Object.assign({}, base.evolution || {}, {
+        enabled: $("app_evo_enabled").checked,
+        cycle_interval: Number($("app_evo_cycle").value) || 0,
+        context_compress_ratio: Number($("app_evo_ratio").value) || 0,
+        session_compress_turns: Number($("app_evo_turns").value) || 0,
+        decision_max_tokens: Number($("app_evo_dec").value) || 0,
+        short_term_trigger_bytes: Number($("app_evo_trig").value) || 0,
+        short_term_activity_bytes: Number($("app_evo_act").value) || 0,
+      });
+      base.exec = Object.assign({}, base.exec || {}, {
+        enabled: $("app_exec_enabled").checked,
+        require_confirm: $("app_exec_confirm").checked,
+        whitelist: csvSplit($("app_exec_white").value),
+        blacklist: csvSplit($("app_exec_black").value),
+        max_output_bytes: Number($("app_exec_out").value) || 0,
+        timeout_seconds: Number($("app_exec_timeout").value) || 0,
+      });
+      base.workspace_files = Object.assign({}, base.workspace_files || {}, {
+        enabled: $("app_ws_enabled").checked,
+      });
+      base.subagent = Object.assign({}, base.subagent || {}, {
+        max_concurrent: Number($("app_sub_conc").value) || 0,
+        default_max_rounds: Number($("app_sub_rounds").value) || 0,
+      });
+      base.chat = Object.assign({}, base.chat || {}, {
+        hard_max_tool_rounds: Number($("app_chat_hard").value) || 0,
+      });
+      base.mcp = Object.assign({}, base.mcp || {}, {
+        enabled: $("app_mcp_enabled").checked,
+        servers,
+        tool_timeout_seconds: Number($("app_mcp_timeout").value) || 0,
+      });
+      return { config: base, extras };
+    }
+
+    function fillGwForm(data) {
+      gwLoaded = data;
+      const c = data.config || {};
+      const cs = c.cata_server || {};
+      $("gwPath").textContent = data.path || "";
+      $("gw_edition").value = c.edition || "channel";
+      $("gw_mode").value = cs.mode || "external";
+      $("gw_auto").checked = !!cs.auto_start;
+      $("gw_managed").checked = !!cs.managed;
+      $("gw_stop").checked = !!cs.stop_on_exit;
+      $("gw_ui").value = c.ui_listen || "";
+      $("gw_socket").value = c.socket_path || "";
+      $("gw_worker").value = c.worker_root || "";
+      $("gw_bin").value = cs.binary || "";
+      $("gw_url").value = c.cata_url || "";
+      $("gw_tg_token").value = c.telegram_bot_token || "";
+      $("gw_tg_ids").value = csvJoin(c.telegram_allowed_user_ids);
+      $("gw_qq_id").value = c.qq_app_id || "";
+      $("gw_qq_secret").value = c.qq_app_secret || "";
+      $("gw_qq_sandbox").checked = !!c.qq_sandbox;
+      $("gw_qq_oids").value = csvJoin(c.qq_allowed_openids);
+      $("gw_extras").value = prettyJSON(data.extras || {});
+    }
+
+    function gatherGwForm() {
+      const extras = parseJSONField($("gw_extras").value, {});
+      if (!extras || typeof extras !== "object" || Array.isArray(extras)) {
+        throw new Error("额外字段必须是 JSON 对象");
+      }
+      const base = JSON.parse(JSON.stringify((gwLoaded && gwLoaded.config) || {}));
+      base.edition = $("gw_edition").value;
+      base.cata_server = Object.assign({}, base.cata_server || {}, {
+        mode: $("gw_mode").value,
+        binary: $("gw_bin").value.trim(),
+        auto_start: $("gw_auto").checked,
+        managed: $("gw_managed").checked,
+        stop_on_exit: $("gw_stop").checked,
+      });
+      base.telegram_bot_token = $("gw_tg_token").value;
+      base.telegram_allowed_user_ids = csvIntSplit($("gw_tg_ids").value);
+      base.qq_app_id = $("gw_qq_id").value.trim();
+      base.qq_app_secret = $("gw_qq_secret").value;
+      base.qq_allowed_openids = csvSplit($("gw_qq_oids").value);
+      base.qq_sandbox = $("gw_qq_sandbox").checked;
+      base.worker_root = $("gw_worker").value.trim();
+      base.socket_path = $("gw_socket").value.trim();
+      base.cata_url = $("gw_url").value.trim();
+      base.ui_listen = $("gw_ui").value.trim();
+      return { config: base, extras };
+    }
+
+    async function loadSettings() {
+      const [app, gw] = await Promise.all([
+        api("/api/settings/app"),
+        api("/api/settings/gateway"),
+      ]);
+      fillAppForm(app);
+      fillGwForm(gw);
+    }
+
+    async function saveSettings() {
+      try {
+        if (settingsTab === "app") {
+          const body = gatherAppForm();
+          const saved = await api("/api/settings/app", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          fillAppForm(saved);
+          toast("已保存 config.json（额外字段已保留）");
+        } else {
+          const body = gatherGwForm();
+          const saved = await api("/api/settings/gateway", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          fillGwForm(saved);
+          toast(saved.note || "已保存 gateway.json");
+        }
+      } catch (e) {
+        alert(e.message || e);
+      }
+    }
+
+    $("btnSettings").onclick = async () => {
+      try {
+        await loadSettings();
+        setSettingsTab("app");
+        $("settingsDlg").classList.add("show");
+      } catch (e) {
+        alert(e.message || e);
+      }
+    };
+    $("btnSettingsClose").onclick = () => $("settingsDlg").classList.remove("show");
+    $("btnSettingsReload").onclick = () => loadSettings().then(() => toast("已重新加载")).catch((e) => alert(e.message || e));
+    $("btnSettingsSave").onclick = saveSettings;
+    document.querySelectorAll("#settingsDlg .tab").forEach((b) => {
+      b.onclick = () => setSettingsTab(b.dataset.tab);
+    });
 
     loadProjects();
     refreshChannels();

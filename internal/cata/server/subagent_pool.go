@@ -56,6 +56,13 @@ type subagentTask struct {
 	sessionID string
 	delegateIndex uint64
 
+	// mode 委托（空 = 普通 delegate_task）
+	modeID       string
+	caseID       string
+	artifactsIn  []string
+	artifactsOut []string
+	userPrompt   string // 若非空，替代 buildWorkerSystemPrompt
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -63,6 +70,7 @@ type subagentTask struct {
 	result subagentResult
 	done   chan struct{}
 }
+
 
 func (t *subagentTask) finish(r subagentResult) {
 	t.mu.Lock()
@@ -104,15 +112,38 @@ func (t *subagentTask) wait(ctx context.Context) error {
 func (t *subagentTask) complete(ss *SocketServer, conn net.Conn, r subagentResult) {
 	t.finish(r)
 	t.persistRunCSV(r)
+	if t.modeID != "" && t.caseID != "" {
+		status := "ok"
+		if !r.success {
+			status = "failed"
+		}
+		if path, err := brain.AppendModeRunLog(t.outputCwd, brain.ModeRunLog{
+			ModeID: t.modeID, CaseID: t.caseID, SubagentID: t.id,
+			Task: t.task, Status: status, Summary: r.summary,
+			ArtifactsIn: t.artifactsIn, ArtifactsOut: t.artifactsOut, Rounds: r.rounds,
+		}); err != nil {
+			log.Printf("mode run log: %v", err)
+		} else {
+			_ = path
+		}
+		if err := brain.AppendDelegateModeNote(t.modeID, t.caseID, t.id, status, r.summary); err != nil {
+			log.Printf("delegate_mode short-term: %v", err)
+		}
+	}
 	ev := map[string]interface{}{
 		"type": "subagent_done", "id": t.id, "success": r.success, "summary": r.summary,
 		"log_path": brain.SubagentRunsCSVPath(t.outputCwd),
+	}
+	if t.modeID != "" {
+		ev["mode"] = t.modeID
+		ev["case_id"] = t.caseID
 	}
 	if r.rounds > 0 {
 		ev["rounds"] = r.rounds
 	}
 	_ = ss.emitStreamLine(conn, ev)
 }
+
 
 func (t *subagentTask) abortIfCancelled(ss *SocketServer, conn net.Conn, rounds int) error {
 	if t.ctx.Err() == nil {
@@ -165,6 +196,30 @@ func (p *subagentPool) CancelAll() {
 
 // Start launches a worker goroutine. Returns task id and a short status line for the parent LLM.
 func (p *subagentPool) Start(parentCtx context.Context, task, parentContext string, toolFilter []string, maxRounds int) (id string, msg string, err error) {
+	return p.start(parentCtx, subagentStartOpts{
+		Task: task, ParentContext: parentContext, ToolFilter: toolFilter, MaxRounds: maxRounds,
+	})
+}
+
+// StartMode 启动注入指定 mode 角色卡的子会话。
+func (p *subagentPool) StartMode(parentCtx context.Context, opts subagentStartOpts) (id string, msg string, err error) {
+	return p.start(parentCtx, opts)
+}
+
+type subagentStartOpts struct {
+	Task          string
+	ParentContext string
+	ToolFilter    []string
+	MaxRounds     int
+	ModeID        string
+	CaseID        string
+	ArtifactsIn   []string
+	ArtifactsOut  []string
+	UserPrompt    string
+}
+
+func (p *subagentPool) start(parentCtx context.Context, opts subagentStartOpts) (id string, msg string, err error) {
+	toolFilter := opts.ToolFilter
 	if len(toolFilter) == 0 {
 		toolFilter = config.DefaultSubagentTools()
 	}
@@ -174,7 +229,7 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 		return "", "", err
 	}
 	if len(tools) == 0 {
-		return "", "", fmt.Errorf("delegate_task: no worker tools configured")
+		return "", "", fmt.Errorf("delegate: no worker tools configured")
 	}
 	client, err := llm.NewClientForRole(llm.RoleWorker)
 	if err != nil {
@@ -183,10 +238,14 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 
 	id = nextSubagentID()
 	if p.ss.subagentSem.isFull() {
-		_ = p.ss.emitStreamLine(p.conn, map[string]interface{}{
-			"type": "subagent_queued", "id": id, "task": task,
+		ev := map[string]interface{}{
+			"type": "subagent_queued", "id": id, "task": opts.Task,
 			"running": p.ss.subagentSem.runningCount(), "max": p.ss.subagentSem.capacity(),
-		})
+		}
+		if opts.ModeID != "" {
+			ev["mode"] = opts.ModeID
+		}
+		_ = p.ss.emitStreamLine(p.conn, ev)
 	}
 	if err := p.ss.subagentSem.acquire(parentCtx); err != nil {
 		return "", "", err
@@ -203,16 +262,21 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 	taskCtx, cancel := context.WithCancel(parentCtx)
 	st := &subagentTask{
 		id:            id,
-		task:          task,
-		context:       brain.EnrichWorkerDelegateContext(parentContext),
+		task:          opts.Task,
+		context:       brain.EnrichWorkerDelegateContext(opts.ParentContext),
 		model:         client.ModelName(),
-		maxRounds:     maxRounds,
+		maxRounds:     opts.MaxRounds,
 		tools:         tools,
 		toolNames:     formatWorkerToolNames(tools),
 		startedAt:     clock.RFC3339(),
 		outputCwd:     brain.OutputCwd(),
 		sessionID:     p.sessionID,
 		delegateIndex: idx,
+		modeID:        opts.ModeID,
+		caseID:        opts.CaseID,
+		artifactsIn:   append([]string(nil), opts.ArtifactsIn...),
+		artifactsOut:  append([]string(nil), opts.ArtifactsOut...),
+		userPrompt:    opts.UserPrompt,
 		ctx:           taskCtx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
@@ -222,18 +286,31 @@ func (p *subagentPool) Start(parentCtx context.Context, task, parentContext stri
 	p.tasks[id] = st
 	p.mu.Unlock()
 
-	_ = p.ss.emitStreamLine(p.conn, map[string]interface{}{
-		"type":            "subagent_start",
-		"id":              id,
-		"task":            task,
-		"model":           client.ModelName(),
-		"prompt_profile":  "minimal",
-	})
+	profile := "minimal"
+	if opts.ModeID != "" {
+		profile = "mode:" + opts.ModeID
+	}
+	ev := map[string]interface{}{
+		"type":           "subagent_start",
+		"id":             id,
+		"task":           opts.Task,
+		"model":          client.ModelName(),
+		"prompt_profile": profile,
+	}
+	if opts.ModeID != "" {
+		ev["mode"] = opts.ModeID
+		ev["case_id"] = opts.CaseID
+	}
+	_ = p.ss.emitStreamLine(p.conn, ev)
 
 	slotHeld = false
 	go p.run(st, client)
+	if opts.ModeID != "" {
+		return id, formatDelegateModeStarted(id, opts.ModeID, opts.CaseID, client.ModelName(), p.ss.subagentSem.capacity(), len(tools), st.outputCwd), nil
+	}
 	return id, formatDelegateStarted(id, client.ModelName(), p.ss.subagentSem.capacity(), len(tools), st.outputCwd), nil
 }
+
 
 func (p *subagentPool) Wait(ctx context.Context, ids []string, all bool) (string, error) {
 	waitList, err := p.resolveWaitList(ids, all)
@@ -326,11 +403,19 @@ func (p *subagentPool) run(st *subagentTask, client *llm.Client) {
 }
 
 func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *llm.Client) {
-	userContent := buildWorkerSystemPrompt(st.task, st.context)
+	userContent := st.userPrompt
+	if strings.TrimSpace(userContent) == "" {
+		userContent = buildWorkerSystemPrompt(st.task, st.context)
+	}
 	messages := []llm.Message{{Role: "user", Content: userContent}}
 	tools := st.tools
 	toolCap := workerToolResultMaxBytes()
 	maxOut := config.SubagentMaxOutputTokens()
+
+	profile := "minimal"
+	if st.modeID != "" {
+		profile = "mode:" + st.modeID
+	}
 
 	for round := 1; round <= st.maxRounds; round++ {
 		if err := st.abortIfCancelled(ss, conn, round-1); err != nil {
@@ -338,7 +423,7 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 		}
 		_ = ss.emitStreamLine(conn, map[string]interface{}{
 			"type": "subagent_progress", "id": st.id, "message": fmt.Sprintf("round %d", round),
-			"prompt_profile": "minimal",
+			"prompt_profile": profile,
 		})
 
 		asst, _, toolCalls, _, _, err := client.ChatWorkerStreamRound(st.ctx, messages, tools, maxOut, llm.WorkerRoundMeta{
@@ -415,6 +500,7 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 	st.complete(ss, conn, subagentResult{success: false, summary: summary, rounds: st.maxRounds})
 }
 
+
 func (p *subagentPool) RunningCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -432,6 +518,13 @@ func formatDelegateStarted(id, model string, maxConcurrent, toolCount int, outpu
 		"log=%s — call delegate_wait with ids=[%q] or omit ids to collect summaries.",
 		id, model, toolCount, maxConcurrent, brain.SubagentRunsCSVPath(outputCwd), id)
 }
+
+func formatDelegateModeStarted(id, modeID, caseID, model string, maxConcurrent, toolCount int, outputCwd string) string {
+	return fmt.Sprintf("[delegate_mode %s] mode=%s case=%s started (model=%s, tools=%d, max_concurrent=%d). "+
+		"cases under %s/%s/ — call delegate_wait with ids=[%q].",
+		id, modeID, caseID, model, toolCount, maxConcurrent, brain.DirCases, caseID, id)
+}
+
 
 func formatDelegateWaitResults(tasks []*subagentTask) string {
 	var b strings.Builder

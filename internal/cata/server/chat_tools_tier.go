@@ -11,31 +11,42 @@ import (
 	"cata/internal/mcp"
 )
 
-// ToolTier 主 chat 按需加载的工具档位。
-type ToolTier int
+// ContextTier 主 chat 按需加载的工具与 system 节选档位（单一决策轴）。
+type ContextTier int
 
 const (
-	ToolTierLight ToolTier = iota
-	ToolTierStandard
-	ToolTierFull
+	ContextTierLight ContextTier = iota
+	ContextTierStandard
+	ContextTierFull
 )
 
-func (t ToolTier) String() string {
+func (t ContextTier) String() string {
 	switch t {
-	case ToolTierLight:
+	case ContextTierLight:
 		return "light"
-	case ToolTierStandard:
+	case ContextTierStandard:
 		return "standard"
 	default:
 		return "full"
 	}
 }
 
+// PromptProfile 返回与该档位对齐的 system 节选档位（主 chat 不使用 minimal）。
+func (t ContextTier) PromptProfile() brain.PromptProfile {
+	switch t {
+	case ContextTierFull:
+		return brain.PromptProfileFull
+	default:
+		return brain.PromptProfileTask
+	}
+}
+
 // 各档位内置工具（MCP 仅 full 档追加）。
 var (
-	toolTierLightNames = []string{"read_file", "list_files", "read_skill", "declare_task"}
-	toolTierStdExtra   = []string{"search_replace", "append_file", "create_file", "run_command", "run_skill", "ask_user"}
-	toolTierFullExtra  = []string{"delegate_task", "delegate_wait"}
+	contextTierLightNames = []string{"read_file", "list_files", "read_skill", "declare_task", "list_modes"}
+	contextTierStdExtra   = []string{"search_replace", "append_file", "create_file", "run_command", "run_skill", "ask_user",
+		"delegate_task", "delegate_mode", "case_artifact", "delegate_wait"}
+	contextTierFullExtra = []string{}
 )
 
 const readOnlyQAMaxRunes = 200
@@ -48,24 +59,28 @@ var (
 	reShellMeta   = regexp.MustCompile(`&&|\|\||\$\(|(?:^|[\s;])(?:sudo|npm|pnpm|yarn|cargo|make|cmake|docker|kubectl|git)\b`)
 )
 
-// InferToolTier 选择工具档位。
+// InferContextTier 选择主 chat 上下文档位（工具集 + system 节选）。
 //
 // 原则：任务形态不可枚举，不做关键词猜测。
-//   - 有 tool 活动或 round≥2 → full（含 MCP / delegate）
-//   - 首轮默认 standard（读写+命令，覆盖绝大多数仓库内任务）
-//   - 仅极高置信「纯问句、无结构信号」→ light（省 token）
+//   - 有 tool 活动或 round≥2 → full（含 MCP）
+//   - 项目有专职 modes → 至少 standard（保证委派工具可用）
+//   - 首轮默认 standard（读写+命令+delegate）
+//   - 仅极高置信「纯问句、无结构信号、无专职 mode」→ light
 //   - MCP 已启用且用户给出 URL → full（可能需要 browser）
-func InferToolTier(round int, history []llm.Message, userText string) ToolTier {
+func InferContextTier(round int, history []llm.Message, userText string) ContextTier {
 	if round > 1 || historyHasToolActivity(history) {
-		return ToolTierFull
+		return ContextTierFull
 	}
 	if mcpEnabled() && reURL.MatchString(userText) {
-		return ToolTierFull
+		return ContextTierFull
+	}
+	if brain.HasSpecialistModes(brain.Active()) {
+		return ContextTierStandard
 	}
 	if isHighConfidenceReadOnlyQA(userText) {
-		return ToolTierLight
+		return ContextTierLight
 	}
-	return ToolTierStandard
+	return ContextTierStandard
 }
 
 func historyHasToolActivity(history []llm.Message) bool {
@@ -121,30 +136,30 @@ func isHighConfidenceReadOnlyQA(text string) bool {
 	return strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？")
 }
 
-func tierToolNames(tier ToolTier) []string {
+func tierToolNames(tier ContextTier) []string {
 	switch tier {
-	case ToolTierLight:
-		return append([]string(nil), toolTierLightNames...)
-	case ToolTierStandard:
-		out := append([]string(nil), toolTierLightNames...)
-		out = append(out, toolTierStdExtra...)
+	case ContextTierLight:
+		return append([]string(nil), contextTierLightNames...)
+	case ContextTierStandard:
+		out := append([]string(nil), contextTierLightNames...)
+		out = append(out, contextTierStdExtra...)
 		return out
 	default:
-		out := append([]string(nil), toolTierLightNames...)
-		out = append(out, toolTierStdExtra...)
-		out = append(out, toolTierFullExtra...)
+		out := append([]string(nil), contextTierLightNames...)
+		out = append(out, contextTierStdExtra...)
+		out = append(out, contextTierFullExtra...)
 		return out
 	}
 }
 
-func (ss *SocketServer) buildTerminalChatToolsForTier(tier ToolTier) []llm.Tool {
+func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier) []llm.Tool {
 	key := ss.chatToolsCacheKey() + "|tier:" + tier.String()
 	if key == ss.chatToolsKey && len(ss.chatToolsCache) > 0 {
 		out := make([]llm.Tool, len(ss.chatToolsCache))
 		copy(out, ss.chatToolsCache)
 		return out
 	}
-	if tier == ToolTierFull {
+	if tier == ContextTierFull {
 		mcp.EnsureInit()
 	}
 	allow := make(map[string]struct{}, len(tierToolNames(tier)))
@@ -157,7 +172,7 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ToolTier) []llm.Tool 
 			out = append(out, schema)
 		}
 	}
-	if tier == ToolTierFull {
+	if tier == ContextTierFull {
 		if mgr := mcp.Global(); mgr != nil {
 			out = append(out, mgr.Tools()...)
 		}
@@ -165,14 +180,4 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ToolTier) []llm.Tool 
 	ss.chatToolsKey = key
 	ss.chatToolsCache = out
 	return out
-}
-
-// PromptProfileForTier 与工具档位对齐的 system 节选档位（主 chat 不使用 minimal）。
-func PromptProfileForTier(tier ToolTier) brain.PromptProfile {
-	switch tier {
-	case ToolTierFull:
-		return brain.PromptProfileFull
-	default:
-		return brain.PromptProfileTask
-	}
 }

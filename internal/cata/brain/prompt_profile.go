@@ -10,9 +10,6 @@ const (
 	PromptProfileMinimal PromptProfile = "minimal"
 	PromptProfileTask    PromptProfile = "task"
 	PromptProfileFull    PromptProfile = "full"
-
-	// PromptProfileLight 已废弃，等同 minimal（兼容旧引用）。
-	PromptProfileLight = PromptProfileMinimal
 )
 
 	// MinimalBootPrompt 已迁至 ~/.cata/global/minimal-boot.md；代码请用 LoadMinimalBootPrompt()。
@@ -67,9 +64,4 @@ func IsMinimalPromptProfile() bool {
 
 func IsTaskPromptProfile() bool {
 	return ActivePromptProfile() == PromptProfileTask
-}
-
-// IsLightPromptProfile 兼容旧名。
-func IsLightPromptProfile() bool {
-	return IsMinimalPromptProfile()
 }

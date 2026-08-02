@@ -14,7 +14,7 @@ import (
 var embeddedGuidanceFS embed.FS
 
 // guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从嵌入模板覆盖 ~/.cata/global 引导文件。
-const guidanceTemplateVersion = 4
+const guidanceTemplateVersion = 6
 
 const fileGuidanceVersion = ".guidance_version"
 
@@ -133,18 +133,9 @@ func seedGlobalDefaults() error {
 	return nil
 }
 
-const defaultBootAssembler = `# Boot（运行时引导）
+const defaultBootAssembler = `# Boot
 
-你是 Cata，终端原生 AI 助手。
-
-## 路径（必遵）
-
-- 引导 ~/.cata/global/：constraints、behavior、本文件
-- 项目主要内容 focus_path/.cata/：persona.local、modes、skills（工具路径 brain/persona.local.md）
-- 运行时记忆 ~/.cata/brain/workspaces/<id>/memory/（工具路径 brain/memory/...）
-- 产出区 = cwd；persona.local 不在 home 脑子格根目录
-
-报路径时以工具返回的 resolved= 为准；见每轮【Cata 路径】块。
+你是 Cata，终端原生 AI 助手。冲突时优先：constraints → behavior → 【Cata 路径】→ 项目内容 → memory/skills。绝对路径只认本轮路径块。
 `
 
 // InitDirectory 创建 ~/.cata 布局、global 模板，并迁移旧版扁平 brain（若有）。

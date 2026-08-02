@@ -41,12 +41,16 @@ var workerBuiltinToolNames = map[string]bool{
 	"append_file":     true,
 	"create_file":     true,
 	"run_skill":       true,
+	"case_artifact":   true,
 }
 
 var workerExcludedBuiltinTools = map[string]bool{
-	"ask_user":      true,
-	"delegate_task": true,
-	"delegate_wait": true,
+	"ask_user":          true,
+	"delegate_task":     true,
+	"delegate_wait":     true,
+	"delegate_mode":     true,
+	"list_modes":        true,
+	// case_artifact allowed for mode workers writing drafts
 }
 
 func (ss *SocketServer) buildWorkerTools() []llm.Tool {
@@ -121,11 +125,15 @@ func (t *delegateTaskTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 		return "", fmt.Errorf("delegate_task: internal pool missing")
 	}
 	var p struct {
-		Task      string   `json:"task"`
-		Context   string   `json:"context"`
-		Tools     []string `json:"tools"`
-		MaxRounds int      `json:"max_rounds"`
-		Wait      bool     `json:"wait"`
+		Task           string   `json:"task"`
+		Context        string   `json:"context"`
+		ModeID         string   `json:"mode_id"`
+		CaseID         string   `json:"case_id"`
+		ReadArtifacts  []string `json:"read_artifacts"`
+		WriteArtifacts []string `json:"write_artifacts"`
+		Tools          []string `json:"tools"`
+		MaxRounds      int      `json:"max_rounds"`
+		Wait           bool     `json:"wait"`
 	}
 	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("delegate_task args: %w", err)
@@ -133,6 +141,19 @@ func (t *delegateTaskTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	task := strings.TrimSpace(p.Task)
 	if task == "" {
 		return "", fmt.Errorf("delegate_task: task required")
+	}
+	if modeID := strings.TrimSpace(p.ModeID); modeID != "" {
+		return startModeDelegate(ctx, pool, modeDelegateArgs{
+			ModeID:         modeID,
+			CaseID:         p.CaseID,
+			Task:           task,
+			Context:        p.Context,
+			ReadArtifacts:  p.ReadArtifacts,
+			WriteArtifacts: p.WriteArtifacts,
+			Tools:          p.Tools,
+			MaxRounds:      p.MaxRounds,
+			Wait:           p.Wait,
+		})
 	}
 	maxRounds := clampDelegateRounds(p.MaxRounds)
 

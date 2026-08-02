@@ -53,7 +53,7 @@ func RedactConfig(cfg *AppConfig) AppConfig {
 	}
 	out := *cfg
 	if out.LLM.APIKey != "" {
-		out.LLM.APIKey = "***hidden***"
+		out.LLM.APIKey = SecretRedacted
 	}
 	return out
 }
@@ -79,11 +79,17 @@ var configFields = map[string]fieldSpec{
 	"server.socket_path":             {get: strGet(func(c *AppConfig) string { return c.Server.SocketPath }), set: strSet(func(c *AppConfig, v string) { c.Server.SocketPath = v })},
 	"server.log_level":               {get: strGet(func(c *AppConfig) string { return c.Server.LogLevel }), set: strSet(func(c *AppConfig, v string) { c.Server.LogLevel = v })},
 	"server.timezone":                {get: strGet(func(c *AppConfig) string { return c.Server.Timezone }), set: strSet(func(c *AppConfig, v string) { c.Server.Timezone = v })},
-	"evolution.enabled":              {get: boolGet(func(c *AppConfig) bool { return c.Evolution.Enabled }), set: boolSet(func(c *AppConfig, v bool) { c.Evolution.Enabled = v })},
-	"evolution.cycle_interval":       {get: intGet(func(c *AppConfig) int { return c.Evolution.CycleInterval }), set: intSet(func(c *AppConfig, v int) { c.Evolution.CycleInterval = v })},
+	"evolution.enabled":                {get: boolGet(func(c *AppConfig) bool { return c.Evolution.Enabled }), set: boolSet(func(c *AppConfig, v bool) { c.Evolution.Enabled = v })},
+	"evolution.cycle_interval":         {get: intGet(func(c *AppConfig) int { return c.Evolution.CycleInterval }), set: intSet(func(c *AppConfig, v int) { c.Evolution.CycleInterval = v })},
 	"evolution.context_compress_ratio": {get: floatGet(func(c *AppConfig) float64 { return c.Evolution.ContextCompressRatio }), set: floatSet(func(c *AppConfig, v float64) { c.Evolution.ContextCompressRatio = v })},
 	"evolution.session_compress_turns": {get: intGet(func(c *AppConfig) int { return c.Evolution.SessionCompressTurns }), set: intSet(func(c *AppConfig, v int) { c.Evolution.SessionCompressTurns = v })},
-	"evolution.decision_max_tokens":  {get: intGet(func(c *AppConfig) int { return c.Evolution.DecisionMaxTokens }), set: intSet(func(c *AppConfig, v int) { c.Evolution.DecisionMaxTokens = v })},
+	"evolution.decision_max_tokens":    {get: intGet(func(c *AppConfig) int { return c.Evolution.DecisionMaxTokens }), set: intSet(func(c *AppConfig, v int) { c.Evolution.DecisionMaxTokens = v })},
+	"evolution.short_term_trigger_bytes": {get: intGet(func(c *AppConfig) int { return c.Evolution.ShortTermTriggerBytes }), set: intSet(func(c *AppConfig, v int) {
+		c.Evolution.ShortTermTriggerBytes = v
+	})},
+	"evolution.short_term_activity_bytes": {get: intGet(func(c *AppConfig) int { return c.Evolution.ShortTermActivityBytes }), set: intSet(func(c *AppConfig, v int) {
+		c.Evolution.ShortTermActivityBytes = v
+	})},
 	"exec.enabled":                   {get: boolGet(func(c *AppConfig) bool { return c.Exec.Enabled }), set: boolSet(func(c *AppConfig, v bool) { c.Exec.Enabled = v })},
 	"exec.require_confirm":           {get: boolGet(func(c *AppConfig) bool { return c.Exec.RequireConfirm }), set: boolSet(func(c *AppConfig, v bool) { c.Exec.RequireConfirm = v })},
 	"exec.timeout_seconds":           {get: intGet(func(c *AppConfig) int { return c.Exec.TimeoutSeconds }), set: intSet(func(c *AppConfig, v int) { c.Exec.TimeoutSeconds = v })},
@@ -166,7 +172,7 @@ func boolSet(f func(*AppConfig, bool)) func(*AppConfig, string) error {
 
 func apiKeyGet(c *AppConfig) (interface{}, error) {
 	if c.LLM.APIKey != "" {
-		return "***hidden***", nil
+		return SecretRedacted, nil
 	}
 	return "", nil
 }

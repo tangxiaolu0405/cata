@@ -25,5 +25,7 @@ func IsRetryableChatError(err error) bool {
 		strings.Contains(s, "connection reset") ||
 		strings.Contains(s, "broken pipe") ||
 		strings.Contains(s, "eof") ||
-		strings.Contains(s, "temporary failure")
+		strings.Contains(s, "temporary failure") ||
+		strings.Contains(s, "empty llm response") ||
+		strings.Contains(s, "non-stream fallback failed")
 }

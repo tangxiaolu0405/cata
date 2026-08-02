@@ -13,7 +13,7 @@
 ```
 
 - **gateway**：渠道消息格式、会话路由、`cwd` 映射、确认按钮 UX；**不**调用 LLM、**不**写脑子。
-- **本地 Web UI**（默认 `http://127.0.0.1:8787`）：多项目真实目录对话 + 渠道只读消息面板。
+- **Web UI**（默认 `http://0.0.0.0:8787`）：多项目真实目录对话 + 渠道只读消息面板；手机用 `http://<电脑局域网IP>:8787`。
 - **cata worker**：现有 `cata run` + Unix socket chat 循环；与 TUI 共用同一协议。
 
 ## 本地 Web UI（多项目）
@@ -24,22 +24,33 @@
 |------|------|
 | **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_worker` 渠道沙箱）；会话 `web:<id>`，`cwd` = meta/registry 的 `root_path` |
 | **Channels** | Telegram/QQ 近期消息只读；**不能**从页面发消息、确认命令或 reset 渠道会话 |
+| **设置** | 编辑 `~/.cata/config.json` 与 `~/.cata/gateway.json`；保存时**保留**未知顶层键（如 `llm_previous_qwen` / `llm_xxx`） |
 
 配置：
 
 ```json
 {
-  "ui_listen": "127.0.0.1:8787"
+  "ui_listen": "0.0.0.0:8787"
 }
 ```
 
 左侧工作区来自本机已有脑子格（`~/.cata/brain/workspaces` + `registry/workspaces.json`），无需再在 `projects[]` 里手动登记。可在 UI 内点「刷新工作区」。
 
-- `ui_listen`：空/缺省 → 默认本机 `127.0.0.1:8787`；`off` / `0` / `false` 关闭
+- `ui_listen`：空/缺省 → 默认 `0.0.0.0:8787`（局域网可访问）；`off` / `0` / `false` 关闭；也可写 `127.0.0.1:8787` 仅本机
 - 环境变量 `CATA_GATEWAY_UI`：同 `ui_listen`（设为 `0` 可关 UI）
+- 访问控制：本机 + 私网 IP（RFC1918 / 链路本地）；公网来源返回 403
 - 绑定仅 loopback；与 TUI 共用产出区锁（同一 `root_path` 不可第二路 web）
 
-配置页入口：[`docs/gateway-config.html`](gateway-config.html)（静态编辑；**运行态控制台仍由 gateway 进程提供**）。
+配置页入口：控制台左下角 **设置**（运行态读写本机配置）；静态编辑仍可用 [`docs/gateway-config.html`](gateway-config.html)。
+
+API：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET/PUT | `/api/settings/app` | `config.json`：`{ path, config, extras }`；`extras` 为未知顶层键 |
+| GET/PUT | `/api/settings/gateway` | `gateway.json`：同上 |
+
+保存策略：已知节覆盖写回，`extras` 原样保留；密钥字段为 `***hidden***` 或空则不覆盖磁盘原值。渠道密钥变更需重启 `cata-gateway`。
 
 ## 产出区（worker 目录）
 
@@ -146,7 +157,7 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 |------|--------|-----------|
 | `edition` | `base` \| `channel` | 同左 |
 | `cata_server` | base 版自动拉起 | channel 或 remote |
-| `ui_listen` / `CATA_GATEWAY_UI` | 本地控制台（默认本机 8787） | 通常关闭 |
+| `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 通常关闭 |
 | `projects` | （可选遗留；UI 列表改读 brain/workspaces） | — |
 | `socket_path` / `CATA_SOCKET` | ✓ | 同机时 ✓ |
 | `cata_url` / `CATA_URL` | 忽略 | worker HTTP 基址 |

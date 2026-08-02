@@ -69,8 +69,9 @@ cata update           # 从 GitHub Releases 下载并替换本机 cata + cata-ga
 
 ```bash
 # 已安装二进制时
-cata init    # 若安装脚本未自动执行
-cata chat    # Bubble Tea TUI（默认命令）
+cata init         # 布局 ~/.cata（不写 config.json）
+cata initconfig   # 首次种子 config.json（合并写回；保留 llm_xxx 等未知顶层键）
+cata chat         # Bubble Tea TUI（默认命令）
 ```
 
 从源码构建：
@@ -78,15 +79,35 @@ cata chat    # Bubble Tea TUI（默认命令）
 ```bash
 go build -o cata ./cmd/cata
 go build -o cata-gateway ./cmd/cata-gateway
+# 桌宠（可选）：先构建前端再编译（必须带 Wails tags）
+(cd cmd/cata-pet/frontend && npm install && npm run build)
+# macOS:
+CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" \
+  go build -tags desktop,production -o cata-pet ./cmd/cata-pet
+# 或一键：./scripts/build-pet.sh
 ./cata init
+./cata initconfig
 ./cata chat
+# 或：./cata-pet   # 透明置顶桌宠；需 PATH 上有 cata（或 CATA_BIN）
 ```
+
+## 桌宠（`cata-pet`，可选）
+
+跨平台桌面伴侣（Go + Wails + React）：勾线猫猫浮窗、默认置顶、透明区鼠标穿透；**单击猫猫**展开后可用**文字或语音**发消息，协议与 `cata chat` 相同（`~/.cata/cata.sock`）。
+
+- 不替换 TUI；不跑 pet 时行为不变
+- 托盘/面板内可关「保持最前」
+- 设置：`~/.cata/pet.json`（cwd、always_on_top）
+- 语音：展开后面板点 🎤，Web Speech 转文字后走同一 `Send`；中间结果会填入输入框。macOS 需麦克风/语音识别权限（`build/darwin/Info.plist`）；裸二进制权限不稳时用 `wails build` 打成 `.app`
+- **构建**：必须 `-tags desktop,production`；macOS 另加 `CGO_LDFLAGS="-framework UniformTypeIdentifiers"`。推荐 `./scripts/build-pet.sh`
+- 代码：`cmd/cata-pet/`（`main.go` + `pet/` 后端 + `frontend/`），不再使用 `internal/cata/pet`
+- 开发：`cd cmd/cata-pet && wails dev`
 
 ## Gateway（本地 UI + Telegram / QQ）
 
 > 部署模式详见 **`docs/gateway.md`**。**当前仅实现模式一（同机）**；模式二（云端 gateway + 内网 worker）、模式三（全云端）保留设计，待模式一完成后再扩展。
 
-`cata-gateway` 内置本机控制台（默认 `http://127.0.0.1:8787`：多项目真实目录对话 + 渠道只读面板），并把 Telegram / QQ 接到本机 **cata worker**（Unix socket），**不**重复实现 LLM/工具/脑子逻辑。无渠道凭证时可 **UI-only**；`CATA_GATEWAY_UI=0` 或 `ui_listen: "off"` 关闭页面。
+`cata-gateway` 内置 Web 控制台（默认 `http://0.0.0.0:8787`：多项目真实目录对话 + 渠道只读面板；手机用本机局域网 IP），并把 Telegram / QQ 接到本机 **cata worker**（Unix socket），**不**重复实现 LLM/工具/脑子逻辑。无渠道凭证时可 **UI-only**；`CATA_GATEWAY_UI=0` 或 `ui_listen: "off"` 关闭页面。
 
 ### 产出区（worker 目录）
 
@@ -116,7 +137,7 @@ cata-gateway init              # 默认 edition=base
 # 编辑 ~/.cata/gateway.json：ui_listen / projects / 渠道凭证
 # 也可用 docs/gateway-config.html 生成配置
 cata-gateway
-# 浏览器打开 http://127.0.0.1:8787 添加项目并对话
+# 浏览器打开 http://127.0.0.1:8787 或手机打开 http://<电脑局域网IP>:8787 添加项目并对话
 ```
 
 可同时启用 Telegram + QQ（凭证都有则并发跑）。QQ 为 **WebSocket 试验**；连不上则仅该渠道失败，不影响 TG。调试：`cata-gateway qq`。
@@ -144,8 +165,8 @@ Telegram：`/start` `/help` `/clear`（危险命令按钮确认）。QQ：`/help
 ## 架构
 
 ```
-cata chat [--dir <产出区>] ──Unix Socket──▶ cata run (server) ──HTTP──▶ LLM
-Telegram 等 ──▶ cata-gateway ──────────────┘
+cata chat / cata-pet ──Unix Socket──▶ cata run (server) ──HTTP──▶ LLM
+Telegram 等 ──▶ cata-gateway ──────────┘
                                 │
                                 ├── ~/.cata/global/          引导型提示词
                                 ├── ~/.cata/brain/ws/<id>/   运行时记忆

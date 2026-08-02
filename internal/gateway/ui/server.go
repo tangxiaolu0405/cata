@@ -49,21 +49,23 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/api/projects", s.handleProjects)
-	mux.HandleFunc("/api/projects/", s.handleProjectAction)
-	mux.HandleFunc("/api/channels", s.handleChannels)
-	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
-	mux.HandleFunc("/api/events", s.handleEventsSSE)
+		mux.HandleFunc("/api/projects", s.handleProjects)
+		mux.HandleFunc("/api/projects/", s.handleProjectAction)
+		mux.HandleFunc("/api/channels", s.handleChannels)
+		mux.HandleFunc("/api/channels/", s.handleChannelMessages)
+		mux.HandleFunc("/api/events", s.handleEventsSSE)
+		mux.HandleFunc("/api/settings/app", s.handleSettingsApp)
+		mux.HandleFunc("/api/settings/gateway", s.handleSettingsGateway)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("ui listen %s: %w", addr, err)
 	}
 	s.httpSrv = &http.Server{
-		Handler:           s.localOnly(mux),
+		Handler:           s.lanOrLocalOnly(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("cata-gateway: local UI http://%s/", ln.Addr().String())
+	log.Printf("cata-gateway: UI http://%s/ (LAN: use this machine's IP:port)", ln.Addr().String())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -86,19 +88,27 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Server) localOnly(next http.Handler) http.Handler {
+// lanOrLocalOnly 允许本机与 RFC1918/链路本地局域网；拒绝公网直连作轻量防护。
+func (s *Server) lanOrLocalOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			host = r.RemoteAddr
 		}
 		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			http.Error(w, "local only", http.StatusForbidden)
+		if !isAllowedUIClient(ip) {
+			http.Error(w, "LAN or localhost only", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isAllowedUIClient(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func (s *Server) loadCfg() gateway.Config {
