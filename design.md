@@ -1,5 +1,7 @@
 ## Cata 系统设计
 
+> **已落地 Phase B–E**：默认 mode 仍为 `_default`；`delegate_mode` + Case；evolve 分桶 + `crystallize_mode`。设计见 vault `design/multi-mode-roles/`。
+
 ### 架构概览
 
 ```
@@ -252,29 +254,27 @@ socket_chat history (user/assistant/tool only)
 
 ```
 [0] system  ① boot-assembler（~/.cata/global/，≤10000 runes）
+            · 身份 + 优先级栈 + 交互底线（不写路径表）
 [1] system  ② 单条 brain 节选（terminal_context.go），自上而下：
-        · 【Cata 路径：脑子与产出区】TerminalPathsSystemBlock
+        · 【Cata 路径】TerminalPathsSystemBlock — 仅本轮绝对路径与本机环境
         · 【Cata Skills】capabilities → SKILL.md（项目 skills 优先）
         · memory/index.json 紧凑块（home 格）
-        · 【Cata 引导 · ~/.cata/global】constraints、behavior
-        · 【Cata 项目内容 · focus_path/.cata】modes/<active_mode>/persona|behavior|constraints、persona.local
+        · 【Cata 引导】constraints（写入边界）+ behavior（协作 SOP）
+        · 【Cata 项目内容】modes/<active_mode>/persona|behavior|constraints、persona.local
 [2…] user / assistant / tool   ← socket 内存 history
 ```
 
-**文件工具 `brain/…` 路由**（`internal/cata/brain/chat_paths.go`）：
-- `brain/memory/…`、`brain/meta.json` → home 格
-- `brain/modes/…`、`brain/persona.local.md`、`brain/skills/…` → 项目 `.cata/`
-- `global/…` → `~/.cata/global/`
+**防重复原则**：路径路由只写在 constraints；工作方式只写在 behavior；绝对路径只写在路径块；boot 只指向这三层，不复述表格。
 
-**工具**：OpenAI `tools` 数组（`server.buildTerminalChatTools`：内置 + MCP），**不**拼进 system 正文。
+**工具**：OpenAI `tools` 数组（`server.buildTerminalChatToolsForTier`：按 ContextTier 内置 + MCP），**不**拼进 system 正文。
 
 **演进与其它 LLM**：
 
-| 调用方 | messages 构造 | injectBrain |
-|--------|---------------|-------------|
-| 终端 chat | history only | `true`（流式 `ChatStreamRound`） |
-| `evolve` 决策 | `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`） | `true`（经 `ChatEvolution` → `chat()`，仍会前置 ①②） |
-| `Summarize` / 查询预处理 | 内联 `system` + `user` | `true` |
+| 调用方 | messages 构造 | 注入 boot/brain |
+|--------|---------------|-----------------|
+| 终端 chat | history only | 是（`ChatStreamRound` → `withBootLeaderSystemMessage`） |
+| `evolve` 决策 | `system`（`evolutionSystemPrompt` 等）+ `user`（`buildDecisionPrompt`） | **否**（`ChatEvolution` → `NoBrainInject`） |
+| `Summarize` / 查询预处理 | 内联 `system` + `user` | 是（经 `chat()`） |
 
 **会话压缩**（与 system 无关）：估算 token ≥ `context_window × context_compress_ratio`（默认 85%）→ `evolve.RunSessionCompress` → history 裁到 `context_window × 40%`（`socket_chat.go`）。
 

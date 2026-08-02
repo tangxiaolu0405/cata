@@ -14,6 +14,13 @@
 /cata-windows
 /cata-gateway
 /cata-gateway.exe
+/cata-pet
+/cata-pet.exe
+
+
+# Frontend deps (cata-pet)
+**/node_modules/
+*/cata-pet/*
 
 # macOS
 .DS_Store

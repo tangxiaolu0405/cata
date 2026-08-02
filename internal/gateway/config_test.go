@@ -9,7 +9,7 @@ func TestConfig_ResolvedUIListen(t *testing.T) {
 	if (Config{UIListen: "off"}).ResolvedUIListen() != "" {
 		t.Fatal("off should disable")
 	}
-	if (Config{UIListen: "127.0.0.1:9000"}).ResolvedUIListen() != "127.0.0.1:9000" {
+	if (Config{UIListen: "0.0.0.0:9000"}).ResolvedUIListen() != "0.0.0.0:9000" {
 		t.Fatal("custom listen")
 	}
 	if !(Config{}).UIEnabled() || (Config{UIListen: "0"}).UIEnabled() {

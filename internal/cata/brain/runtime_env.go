@@ -68,42 +68,30 @@ func (e *RuntimeEnv) runCommandHints() string {
 
 	switch {
 	case e.IsWSL():
-		b.WriteString("- **WSL/Linux bash**（即使在 Windows 里启动了 cata.exe，也按此环境生成命令，**禁止** PowerShell/cmd 脚本）。\n")
-		b.WriteString("- 使用 `mkdir -p`、`ls`、`cat`、heredoc 等 bash 语法；")
+		b.WriteString("- WSL bash（禁 PowerShell/cmd）。")
 		if e.HostOS == "windows" {
-			b.WriteString("`run_command` argv 示例：`[\"wsl.exe\",\"-e\",\"bash\",\"-lc\",\"mkdir -p foo\"]`。\n")
-			b.WriteString("- **禁止**在 `bash -lc` 里塞多行脚本或长段内联代码（如 `… -c \"…\"` / `-e \"…\"`，Windows/WSL 易挂死）；先 `create_file` 写脚本文件，再一行命令执行；**只使用下方 PATH 探测已存在的运行时**，勿假设某语言可用。\n")
+			b.WriteString(" argv 例 `[\"wsl.exe\",\"-e\",\"bash\",\"-lc\",\"…\"]`；禁在 `-lc` 里塞多行/长内联，先 `create_file` 再执行；只用 PATH 已有运行时。\n")
 		} else {
-			b.WriteString("`run_command` argv 示例：`[\"bash\",\"-lc\",\"mkdir -p foo\"]`。\n")
+			b.WriteString(" argv 例 `[\"bash\",\"-lc\",\"…\"]`。\n")
 		}
 		if out != "" && len(out) >= 2 && out[1] == ':' {
-			b.WriteString("- 产出区 Windows 路径：`")
-			b.WriteString(out)
-			b.WriteString("` → WSL 内建议写成：`")
+			b.WriteString("- WSL 路径：`")
 			b.WriteString(WSLPathForOutput(out))
 			b.WriteString("`\n")
 		}
 	case e.IsGitBash():
-		b.WriteString("- **Git Bash on Windows**：用 **bash** 语法（`mkdir -p`、`ls`），不要用 PowerShell。\n")
-		b.WriteString("- argv 示例：`[\"bash\",\"-lc\",\"mkdir -p 'D:/path/dir'\"]` 或调用 Git 的 bash 完整路径。\n")
-		if out != "" {
-			b.WriteString("- 产出区：`")
-			b.WriteString(out)
-			b.WriteString("`（可用 `/d/path` 或 `D:\\\\path`）\n")
-		}
+		b.WriteString("- Git Bash：bash 语法。argv 例 `[\"bash\",\"-lc\",\"…\"]`。\n")
 	case e.Shell == "powershell":
-		b.WriteString("- **PowerShell**：用 PowerShell 语法；argv 示例：`[\"powershell\",\"-NoProfile\",\"-Command\",\"New-Item -ItemType Directory -Path ...\"]`。\n")
-		b.WriteString("- 不要用 bash 的 `mkdir -p`、heredoc；路径用 `D:\\\\...`。\n")
+		b.WriteString("- PowerShell 语法；勿用 bash。argv 例 `[\"powershell\",\"-NoProfile\",\"-Command\",\"…\"]`。\n")
 	case e.Shell == "cmd":
-		b.WriteString("- **cmd**：`[\"cmd.exe\",\"/c\",\"cd /d D:\\\\path && mkdir dir\"]`；用 `mkdir`（非 `mkdir -p`）、`dir`、`type nul > file`。\n")
+		b.WriteString("- cmd：`[\"cmd.exe\",\"/c\",\"…\"]`；`mkdir` 非 `-p`。\n")
 	default:
 		if e.OS == "windows" {
-			b.WriteString("- Windows 原生；优先 `cmd.exe /c` 或 PowerShell，勿混用 bash。\n")
+			b.WriteString("- Windows：优先 cmd/PowerShell，勿混 bash。\n")
 		} else {
-			b.WriteString("- Unix bash；`run_command` 使用 argv 数组，如 `[\"bash\",\"-lc\",\"...\"]`。\n")
+			b.WriteString("- Unix：argv 例 `[\"bash\",\"-lc\",\"…\"]`。\n")
 		}
 	}
-	b.WriteString("- 必须用 **run_command** 工具执行；禁止只写 Markdown 代码块假装已执行。\n")
 	return b.String()
 }
 

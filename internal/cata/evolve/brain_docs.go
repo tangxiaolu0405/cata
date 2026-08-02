@@ -26,7 +26,7 @@ func brainDocFillChecks(w *brain.Workspace) []brainDocFillCheck {
 }
 
 func appendBrainDocFillTriggers(s *Snapshot, ws *brain.Workspace) {
-	if s.ShortTermBytes < shortTermActivityBytes || ws == nil {
+	if s.ShortTermBytes < int64(ShortTermActivityBytes()) || ws == nil {
 		return
 	}
 	for _, c := range brainDocFillChecks(ws) {

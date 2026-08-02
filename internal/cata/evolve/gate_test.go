@@ -15,7 +15,7 @@ func TestShouldInvokeLLM_noTriggers(t *testing.T) {
 }
 
 func TestShouldInvokeLLM_shortTermTrigger(t *testing.T) {
-	snap := &Snapshot{ShortTermBytes: shortTermTriggerBytes, ShortTermModTime: "2026-01-01T00:00:00Z"}
+	snap := &Snapshot{ShortTermBytes: int64(ShortTermTriggerBytes()), ShortTermModTime: "2026-01-01T00:00:00Z"}
 	computeTriggers(snap, nil)
 	ok, reason := shouldInvokeLLM(snap, time.Time{}, "other")
 	if !ok {
@@ -25,7 +25,7 @@ func TestShouldInvokeLLM_shortTermTrigger(t *testing.T) {
 
 func TestShouldInvokeLLM_unchangedFingerprint(t *testing.T) {
 	snap := &Snapshot{
-		ShortTermBytes:   shortTermTriggerBytes,
+		ShortTermBytes:   int64(ShortTermTriggerBytes()),
 		ShortTermModTime: "2026-01-01T00:00:00Z",
 	}
 	computeTriggers(snap, nil)

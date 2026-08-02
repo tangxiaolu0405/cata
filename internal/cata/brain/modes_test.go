@@ -4,12 +4,13 @@ import "testing"
 
 func TestNormalizeModeID(t *testing.T) {
 	cases := map[string]string{
-		"":          ModeDefaultID,
-		"default":   ModeDefaultID,
-		"Default":   ModeDefaultID,
-		"_default":  ModeDefaultID,
-		"work":      "work",
-		" coding ":  "coding",
+		"":              ModeDefaultID,
+		"default":       ModeDefaultID,
+		"Default":       ModeDefaultID,
+		"_default":      ModeDefaultID,
+		"_orchestrator": ModeDefaultID,
+		"work":          "work",
+		" coding ":      "coding",
 	}
 	for in, want := range cases {
 		if got := NormalizeModeID(in); got != want {
@@ -20,9 +21,11 @@ func TestNormalizeModeID(t *testing.T) {
 
 func TestNormalizeModePathRel(t *testing.T) {
 	cases := map[string]string{
-		"modes/default/persona.md":  "modes/_default/persona.md",
-		"modes/Default/constraints.md": "modes/_default/constraints.md",
-		"modes/work/persona.md":     "modes/work/persona.md",
+		"modes/default/persona.md":          "modes/_default/persona.md",
+		"modes/Default/constraints.md":      "modes/_default/constraints.md",
+		"modes/_default/persona.md":         "modes/_default/persona.md",
+		"modes/_orchestrator/persona.md":    "modes/_default/persona.md",
+		"modes/work/persona.md":             "modes/work/persona.md",
 	}
 	for in, want := range cases {
 		if got := normalizeModePathRel(in); got != want {

@@ -116,6 +116,10 @@ type EvolutionConfig struct {
 	SessionCompressTurns int     `json:"session_compress_turns"`
 	// DecisionMaxTokens 演进决策 JSON 的 max_tokens；0 或未配置=不限制（请求中省略 max_tokens）。
 	DecisionMaxTokens int `json:"decision_max_tokens"`
+	// ShortTermTriggerBytes short-term 达到此字节数触发 consolidate 级演进；0=用代码默认（16KiB）。
+	ShortTermTriggerBytes int `json:"short_term_trigger_bytes,omitempty"`
+	// ShortTermActivityBytes short-term 有活动即可尝试演进的下限；0=用代码默认（512）。
+	ShortTermActivityBytes int `json:"short_term_activity_bytes,omitempty"`
 }
 
 // ExecToolConfig 终端 chat 的 run_command（os/exec，不经 shell）。
@@ -216,18 +220,7 @@ func LoadConfig() (*AppConfig, error) {
 	return cfg, nil
 }
 
-// SaveConfig 保存配置文件。
-func SaveConfig(config *AppConfig) error {
-	configPath := getConfigPath()
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-	return os.WriteFile(configPath, data, 0644)
-}
+// SaveConfig 保存配置文件（见 save_merge.go：合并写回，保留未知顶层键）。
 
 // CataHome 状态根：$CATA_HOME 或 ~/.cata。
 func CataHome() string {

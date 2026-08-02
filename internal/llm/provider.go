@@ -66,9 +66,6 @@ type APIAdapter interface {
 	GetAPIKeyHeader(apiKey string) (string, string)
 }
 
-// Provider 保留别名，避免大范围重命名。
-type Provider = APIAdapter
-
 var (
 	openAIAdapter    APIAdapter = &OpenAICompatAdapter{}
 	anthropicAdapter APIAdapter = &AnthropicCompatAdapter{}
@@ -94,19 +91,4 @@ func RegisterCustomAdapter(apiFormat string, adapter APIAdapter) {
 		return
 	}
 	customAdapters[ResolveAPIFormat(apiFormat, "", "")] = adapter
-}
-
-// GetProvider 兼容旧调用；现按 api_format 解析。
-func GetProvider(apiFormat string) Provider {
-	return GetAPIAdapter(apiFormat)
-}
-
-// RegisterCustomProvider 兼容旧名。
-func RegisterCustomProvider(apiFormat string, provider Provider) {
-	RegisterCustomAdapter(apiFormat, provider)
-}
-
-// GetProviderWithCustom 兼容旧名。
-func GetProviderWithCustom(apiFormat string) Provider {
-	return GetAPIAdapter(apiFormat)
 }

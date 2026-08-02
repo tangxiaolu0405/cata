@@ -307,13 +307,59 @@ func indexEntryFromFile(rel, updatedAt string) (IndexEntry, bool) {
 	return IndexEntry{
 		ID:              indexIDFromSource(rel),
 		Source:          rel,
-		Summary:         truncateRunes(firstLineSummary(body), maxIndexSummaryRunes),
+		Summary:         truncateRunes(memorySummaryForIndex(rel, body), maxIndexSummaryRunes),
 		Keywords:        extractKeywords(body, rel),
 		Category:        cat,
 		Priority:        pri,
 		DisclosureLevel: disc,
 		UpdatedAt:       updatedAt,
 	}, true
+}
+
+func memorySummaryForIndex(rel, body string) string {
+	rel = filepath.ToSlash(rel)
+	if rel == RelMemoryLongLearnings {
+		if s := recentLearningsExcerptFromBody(body, 3, maxIndexSummaryRunes); s != "" {
+			return s
+		}
+	}
+	if rel == RelMemoryLongSessionNotes || strings.HasPrefix(rel, RelMemoryLong+"/") {
+		if s := firstContentLineSummary(body); s != "" {
+			return s
+		}
+	}
+	return firstLineSummary(body)
+}
+
+func recentLearningsExcerptFromBody(body string, maxBullets, maxRunes int) string {
+	lines := strings.Split(body, "\n")
+	var bullets []string
+	for i := len(lines) - 1; i >= 0; i-- {
+		ln := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(ln, "- ") && !strings.HasPrefix(ln, "* ") {
+			continue
+		}
+		bullets = append([]string{strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(ln, "- "), "* "))}, bullets...)
+		if len(bullets) >= maxBullets {
+			break
+		}
+	}
+	if len(bullets) == 0 {
+		return ""
+	}
+	s := strings.Join(bullets, " · ")
+	return truncateRunes(s, maxRunes)
+}
+
+func firstContentLineSummary(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ">") {
+			continue
+		}
+		return line
+	}
+	return firstLineSummary(body)
 }
 
 func inferIndexCategory(rel string) (category string, priority int, disclosure string) {
@@ -324,9 +370,9 @@ func inferIndexCategory(rel string) (category string, priority int, disclosure s
 	case strings.HasSuffix(rel, "persona.local.md"):
 		return "fact", 7, "index"
 	case rel == RelMemoryLongLearnings:
-		return "procedure", 6, "index"
+		return "procedure", 8, "index"
 	case rel == RelMemoryLongSessionNotes:
-		return "episodic", 5, "index"
+		return "episodic", 7, "index"
 	case strings.HasPrefix(rel, RelMemoryLong+"/consolidated-"):
 		return "episodic", 4, "index"
 	case strings.HasPrefix(rel, RelMemoryLong+"/"):

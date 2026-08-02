@@ -8,7 +8,7 @@ import (
 
 // shouldFinalizeShortTerm 演进已成功提炼后，归档并缩短 short-term，避免下轮重复喂 LLM。
 func shouldFinalizeShortTerm(dec *Decision, touched []string, snap *Snapshot, sessionCompress bool) bool {
-	if snap.ShortTermBytes < shortTermActivityBytes {
+	if snap.ShortTermBytes < int64(ShortTermActivityBytes()) {
 		return false
 	}
 	action := strings.ToLower(strings.TrimSpace(dec.Action))

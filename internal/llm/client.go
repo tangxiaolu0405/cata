@@ -173,9 +173,12 @@ func configureHTTPTransport(timeout time.Duration) *http.Transport {
 }
 
 func newHTTPClientPair(timeout time.Duration) (*http.Client, *http.Client) {
-	tr := configureHTTPTransport(timeout)
-	regular := &http.Client{Timeout: timeout, Transport: tr}
-	stream := &http.Client{Timeout: streamRoundTimeout(timeout), Transport: tr}
+	// 流式/慢推理：响应头可能很晚才到（代理等模型想完再回），header 超时与整段流超时对齐。
+	regularTr := configureHTTPTransport(timeout)
+	streamTO := streamRoundTimeout(timeout)
+	streamTr := configureHTTPTransport(streamTO)
+	regular := &http.Client{Timeout: timeout, Transport: regularTr}
+	stream := &http.Client{Timeout: streamTO, Transport: streamTr}
 	return regular, stream
 }
 
@@ -269,6 +272,39 @@ func ensureCataBrainExcerptSystemFor(msgs []Message, profile brain.PromptProfile
 		return out
 	}
 	return append([]Message{{Role: "system", Content: pack}}, msgs...)
+}
+
+// coalesceSystemMessagesForAPI 把所有 system 合并成一条并置于 messages 最前。
+// 适配 vLLM / 部分 OpenAI 兼容网关对「system 只能在开头（且只要一条）」的校验。
+func coalesceSystemMessagesForAPI(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	var systems []string
+	rest := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "system" {
+			if c := strings.TrimSpace(m.Content); c != "" {
+				systems = append(systems, c)
+			}
+			continue
+		}
+		rest = append(rest, m)
+	}
+	if len(systems) == 0 {
+		return rest
+	}
+	if len(systems) == 1 {
+		// 已在最前且仅一条时保持原序（rest 前若本来就有这条，重建即可）
+		out := make([]Message, 0, len(rest)+1)
+		out = append(out, Message{Role: "system", Content: systems[0]})
+		out = append(out, rest...)
+		return out
+	}
+	out := make([]Message, 0, len(rest)+1)
+	out = append(out, Message{Role: "system", Content: strings.Join(systems, "\n\n")})
+	out = append(out, rest...)
+	return out
 }
 
 func brainExcerptLimits() (perFile, total int) {
@@ -794,6 +830,8 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	} else {
 		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
+	// vLLM 等严格端点：system 只能在最前且通常只要一条（否则 400 System message must be at the beginning）。
+	msgs = coalesceSystemMessagesForAPI(msgs)
 	req.Messages = msgs
 	log.Printf("LLM Request: URL=%s, Model=%s, format=%s label=%s adapter=%T, stream=%v, APIKey present=%v",
 		c.apiURL, c.model, c.apiFormat, c.providerLabel, c.adapter, stream, c.apiKey != "")

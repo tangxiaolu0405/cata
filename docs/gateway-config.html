@@ -422,8 +422,8 @@
           <input type="text" id="cataUrl" placeholder="https://…" autocomplete="off" />
         </label>
         <label class="field">
-          <span>ui_listen（本地控制台）</span>
-          <input type="text" id="uiListen" placeholder="127.0.0.1:8787；off 关闭" autocomplete="off" />
+          <span>ui_listen（Web 控制台）</span>
+          <input type="text" id="uiListen" placeholder="0.0.0.0:8787；off 关闭" autocomplete="off" />
           <p class="hint">运行态多项目控制台由 <code>cata-gateway</code> 进程提供（默认本机 8787）。本页只编辑配置；设为 <code>off</code> / <code>0</code> 关闭 UI。环境变量 <code>CATA_GATEWAY_UI</code> 可覆盖。</p>
         </label>
         <label class="field">
@@ -569,7 +569,7 @@
         worker_root: $("workerRoot").value.trim(),
         socket_path: $("socketPath").value.trim(),
         cata_url: $("cataUrl").value.trim(),
-        ui_listen: $("uiListen").value.trim() || "127.0.0.1:8787",
+        ui_listen: $("uiListen").value.trim() || "0.0.0.0:8787",
         projects: [],
       };
 
@@ -607,7 +607,7 @@
       $("workerRoot").value = cfg.worker_root || "";
       $("socketPath").value = cfg.socket_path || "";
       $("cataUrl").value = cfg.cata_url || "";
-      $("uiListen").value = cfg.ui_listen || "127.0.0.1:8787";
+      $("uiListen").value = cfg.ui_listen || "0.0.0.0:8787";
       $("projectsJson").value = Array.isArray(cfg.projects)
         ? JSON.stringify(cfg.projects, null, 2)
         : "[]";
@@ -671,7 +671,7 @@
         worker_root: "",
         socket_path: "",
         cata_url: "",
-        ui_listen: "127.0.0.1:8787",
+        ui_listen: "0.0.0.0:8787",
         projects: [],
         _forceTelegram: true,
       };

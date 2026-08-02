@@ -20,7 +20,7 @@ func TestIsLearningNoise(t *testing.T) {
 }
 
 func TestCompactLearningPlaybookContent_dedupesAndDropsNoise(t *testing.T) {
-	raw := `# Evolution learnings (playbook)
+	raw := `# Evolution learnings
 
 ## 2026-05-20T15:05:05
 
@@ -64,7 +64,7 @@ func TestCompactLongMemory_archivesBulk(t *testing.T) {
 	write("consolidated-2026-06-30-160757.md", "# archive me\n")
 	write("2026-07-10-summary.md", "## summary\n\n- fact\n")
 	write("workflow_sop.md", "## sop\n")
-	write("learnings.md", "# Evolution learnings (playbook)\n\n## 2026-07-01\n\n- 用户要求保留星星优先级格式输出\n")
+	write("learnings.md", "# Evolution learnings\n\n## 2026-07-01\n\n- 用户要求保留星星优先级格式输出\n")
 	if err := os.MkdirAll(filepath.Dir(ws.MemoryIndexPath()), 0755); err != nil {
 		t.Fatal(err)
 	}

@@ -43,12 +43,8 @@
 ├── workspace.link                  # 可选：id → home 格
 ├── persona.local.md                # 项目说明（evolve 维护）
 ├── modes/
-│   ├── _default/
-│   │   ├── persona.md
-│   │   ├── behavior.md
-│   │   ├── constraints.md
-│   │   └── capabilities.yaml
-│   └── <mode-id>/
+│   ├── _default/                   # 默认前台 mode
+│   └── <mode-id>/                  # 仅项目演化/结晶或用户自建，不预种演示岗
 └── skills/<id>/
     ├── SKILL.md
     ├── manifest.yaml

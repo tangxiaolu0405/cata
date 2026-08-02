@@ -11,24 +11,25 @@ import (
 	"cata/internal/cata/clock"
 )
 
-// Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
+	// Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
 type Snapshot struct {
-	ObservedAt            string   `json:"observed_at"`
-	WorkspaceID           string   `json:"workspace_id,omitempty"`
-	FocusPath             string   `json:"focus_path,omitempty"`
-	WorkspaceName         string   `json:"workspace_name,omitempty"`
-	HotModTime            string   `json:"hot_mod_time,omitempty"`
-	PersonaBytes          int64    `json:"persona_bytes,omitempty"`
-	PersonaLocalBytes     int64    `json:"persona_local_bytes,omitempty"`
-	ShortTermModTime      string   `json:"short_term_mod_time,omitempty"`
-	ShortTermBytes        int64    `json:"short_term_bytes"`
-	LongTermFileCount     int      `json:"long_term_file_count"`
-	ArchiveFileCount      int      `json:"archive_file_count"`
-	LastEvolutionAt       string   `json:"last_evolution_at,omitempty"`
-	LastEvolutionAction   string   `json:"last_evolution_action,omitempty"`
-	RecentLogSummary      string   `json:"recent_log_summary,omitempty"`
-	Triggers              []string `json:"triggers,omitempty"`
-	SkillIDs              []string `json:"skill_ids,omitempty"`
+	ObservedAt          string            `json:"observed_at"`
+	WorkspaceID         string            `json:"workspace_id,omitempty"`
+	FocusPath           string            `json:"focus_path,omitempty"`
+	WorkspaceName       string            `json:"workspace_name,omitempty"`
+	HotModTime          string            `json:"hot_mod_time,omitempty"`
+	PersonaBytes        int64             `json:"persona_bytes,omitempty"`
+	PersonaLocalBytes   int64             `json:"persona_local_bytes,omitempty"`
+	ShortTermModTime    string            `json:"short_term_mod_time,omitempty"`
+	ShortTermBytes      int64             `json:"short_term_bytes"`
+	LongTermFileCount   int               `json:"long_term_file_count"`
+	ArchiveFileCount    int               `json:"archive_file_count"`
+	LastEvolutionAt     string            `json:"last_evolution_at,omitempty"`
+	LastEvolutionAction string            `json:"last_evolution_action,omitempty"`
+	RecentLogSummary    string            `json:"recent_log_summary,omitempty"`
+	Triggers            []string          `json:"triggers,omitempty"`
+	SkillIDs            []string          `json:"skill_ids,omitempty"`
+	ModeBuckets         []ModeBucketStats `json:"mode_buckets,omitempty"`
 }
 
 // Fingerprint 仅跟踪演进「输入」信号（不含 hot：hot 由演进写出，不应作为触发依据）。
@@ -91,12 +92,13 @@ func Observe(ws *brain.Workspace) (*Snapshot, error) {
 
 	loadLastEvolutionMeta(s, ws.EvolutionLogPath())
 	s.RecentLogSummary = summarizeRecentLog(ws.EvolutionLogPath(), 2, 80)
-	if ids, err := brain.ListWorkspaceSkillIDs(ws); err == nil {
-		s.SkillIDs = ids
+		if ids, err := brain.ListWorkspaceSkillIDs(ws); err == nil {
+			s.SkillIDs = ids
+		}
+		computeTriggers(s, ws)
+		observeModeBuckets(s, ws)
+		return s, nil
 	}
-	computeTriggers(s, ws)
-	return s, nil
-}
 
 func loadLastEvolutionMeta(s *Snapshot, logPath string) {
 	data, err := os.ReadFile(logPath)

@@ -7,27 +7,30 @@ import (
 	"strings"
 )
 
-// NormalizeModeID 规范化 mode 目录名；空或 "default"（LLM/配置常见笔误）→ "_default"。
+// NormalizeModeID 规范化 mode 目录名；空 / default / _orchestrator → _default。
 func NormalizeModeID(id string) string {
 	id = strings.TrimSpace(id)
-	if id == "" || strings.EqualFold(id, "default") {
+	if id == "" || strings.EqualFold(id, "default") || id == ModeAliasOrchestratorID {
 		return ModeDefaultID
 	}
 	return id
 }
 
-// normalizeModePathRel 将 updates 路径中的 modes/default/ 纠正为 modes/_default/。
+// normalizeModePathRel 将 updates 路径中的 modes/default|_orchestrator/ 纠正为 modes/_default/。
 func normalizeModePathRel(rel string) string {
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
-	if len(parts) >= 2 && parts[0] == DirModes && strings.EqualFold(parts[1], "default") {
-		parts[1] = ModeDefaultID
-		return strings.Join(parts, "/")
+	if len(parts) >= 2 && parts[0] == DirModes {
+		m := parts[1]
+		if strings.EqualFold(m, "default") || m == ModeAliasOrchestratorID {
+			parts[1] = ModeDefaultID
+			return strings.Join(parts, "/")
+		}
 	}
 	return rel
 }
 
-// migrateDefaultModeAlias 合并误建的 modes/default/ 到 modes/_default/ 并删除前者。
+// migrateDefaultModeAlias 合并误建的 modes/default/ 到当前默认 mode 并删除前者。
 func (w *Workspace) migrateDefaultModeAlias() error {
 	wrong := filepath.Join(w.ProjectCataRoot(), DirModes, "default")
 	right := w.ModeDir(ModeDefaultID)

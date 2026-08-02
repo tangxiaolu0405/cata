@@ -51,10 +51,13 @@ func TestBuildWorkerToolsIncludesReadSkillAndRunCommand(t *testing.T) {
 			t.Fatalf("worker tools missing %q: %v", want, names)
 		}
 	}
-	for _, excluded := range []string{"ask_user", "delegate_task", "delegate_wait"} {
+	for _, excluded := range []string{"ask_user", "delegate_task", "delegate_wait", "delegate_mode", "list_modes"} {
 		if names[excluded] {
 			t.Fatalf("worker tools must not include %q", excluded)
 		}
+	}
+	if !names["case_artifact"] {
+		t.Fatalf("worker tools missing case_artifact")
 	}
 }
 

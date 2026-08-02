@@ -40,10 +40,12 @@
     "cycle_interval": 300,
     "context_compress_ratio": 0.85,
     "session_compress_turns": 12,
-    "decision_max_tokens": 4096
+    "decision_max_tokens": 4096,
+    "short_term_trigger_bytes": 16384,
+    "short_term_activity_bytes": 512
   },
   "evolution_config_help": {
-    "_comment": "evolution.decision_max_tokens：自主演进 LLM 决策 JSON 的 max_tokens。省略或 0=不限制（由模型/API 默认输出上限）；正整数=限制生成长度。JSON 被截断时可设为 4096–8192。可通过 cata config set evolution.decision_max_tokens 4096 修改。"
+    "_comment": "evolution.short_term_trigger_bytes：short-term 达到此字节触发 consolidate 级演进（省略或 0=默认 16384）。evolution.short_term_activity_bytes：有活动即可尝试演进的下限（0=默认 512）。evolution.decision_max_tokens：决策 JSON max_tokens；0=不限制。可用 cata config set evolution.short_term_trigger_bytes 32768 修改。"
   },
   "exec": {
     "enabled": true,

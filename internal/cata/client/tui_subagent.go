@@ -172,6 +172,9 @@ func (m *model) upsertSubagent(id, task, model, profile, status string) bool {
 
 func (m *model) logSubagentStart(id, task string) {
 	line := subagentTaskOneLine(task)
+	if rec := m.findSubagent(id); rec != nil && strings.HasPrefix(rec.Profile, "mode:") {
+		line = "[" + strings.TrimPrefix(rec.Profile, "mode:") + "] " + line
+	}
 	m.appendLog(styleSubagent.Render(fmt.Sprintf("▸ %s  %s\n", id, line)), true)
 }
 

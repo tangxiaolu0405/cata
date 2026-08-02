@@ -64,7 +64,7 @@ func printUsage() {
 	fmt.Println("  cata-gateway init         Create ~/.cata/gateway.json from template")
 	fmt.Println("  cata-gateway version      Print version")
 	fmt.Println()
-	fmt.Println("Local Web UI (default http://127.0.0.1:8787):")
+	fmt.Println("Web UI (default http://0.0.0.0:8787, phone: http://<本机局域网IP>:8787):")
 	fmt.Println("  Multi-project chat (cwd = real project path); channels panel is read-only")
 	fmt.Println("  ui_listen in gateway.json; CATA_GATEWAY_UI=0 / off disables UI")
 	fmt.Println("  UI-only works without Telegram/QQ credentials")
@@ -118,8 +118,8 @@ func runInit(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Gateway config: %s\n", path)
-	fmt.Println("Local UI defaults to http://127.0.0.1:8787 (ui_listen / CATA_GATEWAY_UI).")
-	fmt.Println("Add projects in the UI or gateway.json projects[]. Edit channel tokens as needed, then: cata-gateway")
+	fmt.Println("Local UI defaults to http://0.0.0.0:8787 (ui_listen / CATA_GATEWAY_UI).")
+	fmt.Println("On phone use http://<this-machine-LAN-IP>:8787. Add projects in the UI or gateway.json projects[]. Edit channel tokens as needed, then: cata-gateway")
 }
 
 func channelTelegramReady(cfg gateway.Config) bool {

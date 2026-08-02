@@ -7,40 +7,40 @@ import (
 	"cata/internal/llm"
 )
 
-func TestInferToolTierLightPureQuestion(t *testing.T) {
-	if got := InferToolTier(1, nil, "这段代码是做什么的？"); got != ToolTierLight {
+func TestInferContextTierLightPureQuestion(t *testing.T) {
+	if got := InferContextTier(1, nil, "这段代码是做什么的？"); got != ContextTierLight {
 		t.Fatalf("got %v", got)
 	}
 }
 
-func TestInferToolTierStandardDefault(t *testing.T) {
+func TestInferContextTierStandardDefault(t *testing.T) {
 	// 无路径/问号，但是真实任务 — 应默认 standard，不能误判 light
-	if got := InferToolTier(1, nil, "帮我把 handler 抽出来"); got != ToolTierStandard {
+	if got := InferContextTier(1, nil, "帮我把 handler 抽出来"); got != ContextTierStandard {
 		t.Fatalf("got %v", got)
 	}
 }
 
-func TestInferToolTierStandardByFileExt(t *testing.T) {
-	if got := InferToolTier(1, nil, "请修改 main.go 里的函数"); got != ToolTierStandard {
+func TestInferContextTierStandardByFileExt(t *testing.T) {
+	if got := InferContextTier(1, nil, "请修改 main.go 里的函数"); got != ContextTierStandard {
 		t.Fatalf("got %v", got)
 	}
 }
 
-func TestInferToolTierFullAfterTools(t *testing.T) {
+func TestInferContextTierFullAfterTools(t *testing.T) {
 	hist := []llm.Message{{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Type: "function", Function: llm.ToolCallFunction{Name: "read_file"}}}}}
-	if got := InferToolTier(2, hist, "继续"); got != ToolTierFull {
+	if got := InferContextTier(2, hist, "继续"); got != ContextTierFull {
 		t.Fatalf("got %v", got)
 	}
 }
 
-func TestPromptProfileForTierNeverMinimalOnMainChat(t *testing.T) {
-	for _, tier := range []ToolTier{ToolTierLight, ToolTierStandard, ToolTierFull} {
-		if p := PromptProfileForTier(tier); p == brain.PromptProfileMinimal {
+func TestContextTierPromptProfileNeverMinimalOnMainChat(t *testing.T) {
+	for _, tier := range []ContextTier{ContextTierLight, ContextTierStandard, ContextTierFull} {
+		if p := tier.PromptProfile(); p == brain.PromptProfileMinimal {
 			t.Fatalf("tier %v mapped to minimal", tier)
 		}
 	}
-	if PromptProfileForTier(ToolTierLight) != brain.PromptProfileTask {
-		t.Fatal("light tools should use task profile")
+	if ContextTierLight.PromptProfile() != brain.PromptProfileTask {
+		t.Fatal("light context should use task profile")
 	}
 }
 

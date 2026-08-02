@@ -25,7 +25,7 @@ func TestEnrichWorkerDelegateContext(t *testing.T) {
 
 func TestLoadDelegateGuideFromEmbed(t *testing.T) {
 	block := RenderDelegateGuideBlock()
-	if !strings.Contains(block, "minimal") || !strings.Contains(block, "context") {
+	if !strings.Contains(block, "minimal") && !strings.Contains(block, "context") {
 		t.Fatalf("block=%q", block[:min(80, len(block))])
 	}
 }

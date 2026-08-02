@@ -3,6 +3,8 @@ package llm
 import (
 	"strings"
 	"testing"
+
+	"cata/internal/cata/config"
 )
 
 func TestResolveAPIFormat(t *testing.T) {
@@ -90,6 +92,28 @@ func TestSupportsDeepSeekThinkingWire(t *testing.T) {
 	}
 	if supportsDeepSeekThinkingWire("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions") {
 		t.Fatal("gemini url should not use deepseek thinking")
+	}
+	// provider=deepseek 但走第三方代理时，不得因标签乱发 thinking
+	if config.Config == nil {
+		config.Config = &config.AppConfig{}
+	}
+	prev := config.Config.LLM.Provider
+	config.Config.LLM.Provider = "deepseek"
+	defer func() { config.Config.LLM.Provider = prev }()
+	if supportsDeepSeekThinkingWire("https://agent.chatgpts.top/v1/chat/completions") {
+		t.Fatal("third-party proxy must not get DeepSeek thinking wire")
+	}
+}
+
+func TestOpenAIParseResponse_stringErrorAndSSE(t *testing.T) {
+	a := &OpenAICompatAdapter{}
+	_, _, err := a.ParseResponse([]byte(`{"error":"quota exceeded"}`))
+	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("string error: %v", err)
+	}
+	_, _, err = a.ParseResponse([]byte("data: {\"choices\":[]}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "SSE") {
+		t.Fatalf("sse body: %v", err)
 	}
 }
 

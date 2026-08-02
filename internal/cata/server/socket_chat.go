@@ -78,7 +78,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
-	if len(ss.buildTerminalChatToolsForTier(ToolTierLight)) == 0 {
+	if len(ss.buildTerminalChatToolsForTier(ContextTierLight)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
@@ -120,8 +120,8 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		if brk := guard.checkBudget(round); brk != nil {
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
-		tier := InferToolTier(round, *history, text)
-		roundProfile := PromptProfileForTier(tier)
+		tier := InferContextTier(round, *history, text)
+		roundProfile := tier.PromptProfile()
 		if promptPeak != nil {
 			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)
 			brain.SetPromptProfile(*promptPeak)
@@ -190,7 +190,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				_ = ss.emitStreamLine(conn, map[string]interface{}{
 					"type": "progress", "message": fmt.Sprintf("executing %d tool(s) from model output", len(parsed)),
 				})
-			} else if strings.Contains(strings.ToLower(asst), "<tool") || strings.Contains(asst, "[tool_call") {
+				} else if lower := strings.ToLower(asst); strings.Contains(lower, "<tool") || strings.Contains(lower, "<function") || strings.Contains(asst, "[tool_call") {
 				hint := "模型返回了 tool 标记但未解析成功；大文件请分块 append_file。/exit 后重进以加载新 server。"
 				log.Printf("embedded tool parse failed, content prefix: %.200q", asst)
 				_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": hint})
@@ -269,13 +269,6 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		}
 		if brk := guard.observe(results); brk != nil {
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
-		}
-		if chatWS != nil && task != nil {
-			lastTool := ""
-			if len(results) > 0 {
-				lastTool = results[len(results)-1].name
-			}
-			_ = brain.SyncTaskGuardCounters(chatWS, task, round, guard.consecutiveFailures, guard.staleRounds, lastTool, guard.lastFingerprint)
 		}
 		brain.ClearPromptProfile()
 	}
@@ -356,23 +349,6 @@ func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, 
 	}
 	budget := int(float64(window) * historyBudgetAfterCompressRatio)
 	*history = trimHistoryToTokenBudget(client, *history, tools, budget)
-}
-
-func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
-	key := ss.chatToolsCacheKey()
-	if key == ss.chatToolsKey && len(ss.chatToolsCache) > 0 {
-		out := make([]llm.Tool, len(ss.chatToolsCache))
-		copy(out, ss.chatToolsCache)
-		return out
-	}
-	_ = config.InitBrainPath()
-	out := ss.tools.Schemas()
-	if mgr := mcp.Global(); mgr != nil {
-		out = append(out, mgr.Tools()...)
-	}
-	ss.chatToolsKey = key
-	ss.chatToolsCache = out
-	return out
 }
 
 func (ss *SocketServer) chatToolsCacheKey() string {
@@ -581,6 +557,8 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 	if w != nil {
 		ev["workspace_id"] = w.ID
 		ev["focus_path"] = w.RootPath
+		ev["project_cata"] = w.ProjectCataRoot()
+		ev["cata_home"] = brain.CataHome()
 		ev["active_mode"] = w.ActiveMode
 	}
 	if outCwd := brain.OutputCwd(); outCwd != "" {

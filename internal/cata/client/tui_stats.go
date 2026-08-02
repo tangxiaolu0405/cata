@@ -55,6 +55,12 @@ func (m *model) applyStats(ev map[string]any) {
 	if s, ok := ev["focus_path"].(string); ok && s != "" {
 		m.stats.focusPath = s
 	}
+	if s, ok := ev["project_cata"].(string); ok && s != "" {
+		m.stats.projectCata = s
+	}
+	if s, ok := ev["cata_home"].(string); ok && s != "" {
+		m.stats.cataHome = s
+	}
 	if s, ok := ev["output_cwd"].(string); ok && s != "" {
 		m.stats.outputCwd = s
 	}
@@ -232,12 +238,18 @@ func sidebarFormatTokens(n int) string {
 
 func (m *model) appendContextSidebarSections(lines []string, innerW int) []string {
 	var body []string
+	if home := sidebarShortPath(m.stats.cataHome); home != "" {
+		body = append(body, "home "+home)
+	}
+	if pc := sidebarShortPath(m.stats.projectCata); pc != "" {
+		body = append(body, ".cata "+pc)
+	}
 	path := sidebarShortPath(m.stats.focusPath)
 	if path == "" {
 		path = sidebarShortPath(m.stats.outputCwd)
 	}
 	if path != "" {
-		body = append(body, path)
+		body = append(body, "focus "+path)
 	}
 	if out := sidebarShortPath(m.stats.outputCwd); out != "" && out != path {
 		body = append(body, "产出 "+out)
@@ -251,7 +263,7 @@ func (m *model) appendContextSidebarSections(lines []string, innerW int) []strin
 	if len(body) == 0 {
 		return lines
 	}
-	return appendSidebarSection(lines, innerW, sidebarSection{"上下文", body}, true)
+	return appendSidebarSection(lines, innerW, sidebarSection{"三根/上下文", body}, true)
 }
 
 func (m *model) appendActivitySidebarSections(lines []string, innerW int) []string {

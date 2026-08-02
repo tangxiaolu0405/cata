@@ -1,5 +1,5 @@
 {
-  "description": "Delegate a bounded sub-task to a **minimal-brain worker** (cheap model, parallel). Worker has NO persona/memory/skills—YOU must supply everything in task+context. Parent plans and explores; worker only executes. Do NOT paste large data in task—save to file and pass path in context. Use native/relative paths for output_cwd. Returns sub-id immediately; use delegate_wait for results.",
+  "description": "Delegate a bounded sub-task. Without mode_id: cheap minimal-brain worker (no persona). With mode_id (+ case_id): specialist modes/<id> worker on a Case (same as former delegate_mode). Parent plans; worker executes. Do NOT paste large data—save to file and pass path in context. Returns sub-id; use delegate_wait for results.",
   "parameters": {
     "type": "object",
     "properties": {
@@ -11,10 +11,28 @@
         "type": "string",
         "description": "Facts parent already knows: data file paths, schema/columns, decisions, format—so worker does not re-explore. Strongly recommended."
       },
+      "mode_id": {
+        "type": "string",
+        "description": "Optional specialist mode under focus_path/.cata/modes/<id>/. When set, case_id is required."
+      },
+      "case_id": {
+        "type": "string",
+        "description": "Required with mode_id: Case folder cases/<case_id>/ for artifacts"
+      },
+      "read_artifacts": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "With mode_id: artifact names to read"
+      },
+      "write_artifacts": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "With mode_id: artifact names to write"
+      },
       "tools": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Tool whitelist e.g. read_file, create_file, run_command"
+        "description": "Tool whitelist e.g. read_file, search_replace, create_file, run_command"
       },
       "max_rounds": {
         "type": "integer",
