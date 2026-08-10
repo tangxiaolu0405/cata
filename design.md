@@ -115,15 +115,15 @@ Server（`internal/cata/server/socket_chat.go`）→ Client（`tui.go` / `stream
 
 **注意**：`reasoning_content` 只进 LLM history，**不**发 `thinking` 事件。
 
-#### 规划中的分级显示（未接线）
+#### 分级显示（已落地 v0.1.16）
 
-Server 尚未发 `display`；TUI 尚未做 silent/normal/verbose 分级。目标矩阵：
+Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` / `normal` / `verbose`），由工具名 + 结果判定：read/list 成功 → `silent`；常规编辑/委派 → `normal`；`run_command`、出错 → `verbose`。TUI 按 `displayMode` 渲染：
 
-| 级别 | 含义 | 适用工具 |
-|------|------|----------|
-| `silent` | 不显示输出内容 | `read_file` 成功时 |
-| `normal` | 摘要/截断 | `search_replace`、`run_skill` |
-| `verbose` | 完整输出 | `run_command`、出错时 |
+| CLI | displayMode | 行为 |
+|-----|-------------|------|
+| （默认） | auto | 按事件 `level`：silent 不显示正文、normal 摘要 400 字、verbose 完整 2000 字 |
+| `--quiet` / `-q` | quiet | 工具输出全部静默，只看结论与 token 流 |
+| `--verbose` / `-v` | verbose | 所有工具结果完整显示 |
 
 ```
 # 正常模式（默认）

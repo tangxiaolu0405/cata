@@ -189,7 +189,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config`。
 
-**预留**（server 未发或未接）：`thinking`、`file_written`、`diff`、`display` 分级。
+**预留**（server 未发或未接）：`thinking`、`file_written`、`diff`。`display` 分级已落地（tool_start/tool_result 带 `level`；TUI `--quiet`/`--verbose`）。
 
 ### 推理/思考内容
 

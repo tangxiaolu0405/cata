@@ -91,13 +91,28 @@ func trunc(s string, max int) string {
 	return s[:max] + "…"
 }
 
-func formatToolResultLine(kind string, ev map[string]any) string {
+// formatToolResultLine 按 displayMode 与事件 level 生成工具结果行。
+//   - verbose → 完整输出（截断 2000）
+//   - auto（mode=""）→ silent 不显示 / normal 摘要 400 / verbose 完整
+//   - quiet 由调用方过滤，此处不处理
+func formatToolResultLine(kind string, ev map[string]any, displayMode string) string {
 	switch kind {
 	case "tool_result":
 		name := str(ev["name"])
 		out := str(ev["output"])
 		if out == "" {
 			return "  (" + name + " done)"
+		}
+		level := str(ev["level"])
+		if displayMode == "verbose" {
+			return fmt.Sprintf("  %s: %s", name, trunc(out, 2000))
+		}
+		// auto：silent 级输出不显示正文；normal 摘要；verbose/未知 400 截断。
+		if level == "silent" {
+			return ""
+		}
+		if level == "verbose" {
+			return fmt.Sprintf("  %s: %s", name, trunc(out, 2000))
 		}
 		return fmt.Sprintf("  %s: %s", name, trunc(out, 400))
 	case "exec_done":

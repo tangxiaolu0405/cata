@@ -31,7 +31,7 @@ func main() {
 	}
 
 	if len(args) == 0 {
-		client.RunChat(nil)
+		client.RunChat(client.ChatOptions{})
 		return
 	}
 
@@ -39,7 +39,7 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	case "chat":
-		client.RunChat(client.ParseOutputDirs(args[1:]))
+		client.RunChat(client.ParseChatOptions(args[1:]))
 	case "init":
 		runInit()
 	case "initconfig":
@@ -62,7 +62,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  cata                    Start chat (default, TUI)")
-	fmt.Println("  cata chat [--dir <path>]  Start chat at output dir")
+	fmt.Println("  cata chat [--dir <path>] [--quiet|-q] [--verbose|-v]  Start chat at output dir")
 	fmt.Println("  cata run                Start server (one per machine; foreground)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
 	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")
@@ -74,6 +74,8 @@ func printUsage() {
 	fmt.Println("  cata")
 	fmt.Println("  cata chat --dir ~/project")
 	fmt.Println("  cata chat --dir ~/a --dir ~/b")
+	fmt.Println("  cata chat --quiet          # 工具输出静默，只看结论")
+	fmt.Println("  cata chat --verbose        # 工具输出完整显示")
 	fmt.Println("  cata update")
 	fmt.Println("  cata update --check")
 	fmt.Println()

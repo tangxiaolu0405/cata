@@ -107,6 +107,9 @@ type model struct {
 	quitting bool
 	errLine  string
 
+	// displayMode：""=auto（按事件 level）/ quiet（隐藏工具输出）/ verbose（完整输出）。
+	displayMode string
+
 	composeSendSeq uint64 // 当前挂起的 Enter 发送代号，0 表示无
 	slashList      *list.Model
 	hoverPane      hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
@@ -162,7 +165,7 @@ func newModel(s *session, cwd string) model {
 	return m
 }
 
-func RunChat(dirs []string) {
+func RunChat(opts ChatOptions) {
 	if err := config.InitBrainPath(); err != nil {
 		fatal(err)
 	}
@@ -170,8 +173,8 @@ func RunChat(dirs []string) {
 	if err != nil {
 		fatal(err)
 	}
-	if len(dirs) > 0 {
-		cwd = dirs[0]
+	if d := opts.firstDir(); d != "" {
+		cwd = d
 		if err := os.Chdir(cwd); err != nil {
 			fatal(err)
 		}
@@ -193,6 +196,7 @@ func RunChat(dirs []string) {
 
 	bindStats(cwd)
 	m := newModel(s, cwd)
+	m.displayMode = opts.displayMode()
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
@@ -557,10 +561,20 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		if n := str(ev.raw["name"]); n != "" {
 			m.stats.lastTool = n
 			m.stats.state = n
+			if m.displayMode == "quiet" {
+				break
+			}
+			// silent 级工具（read/list）在 auto 模式下只进侧栏状态，不刷主区。
+			if m.displayMode == "" && str(ev.raw["level"]) == "silent" {
+				break
+			}
 			m.appendLog(styleTool.Render("\n▸ "+n)+"\n", true)
 		}
 	case "tool_result":
-		if line := formatToolResultLine("tool_result", ev.raw); line != "" {
+		if m.displayMode == "quiet" {
+			break
+		}
+		if line := formatToolResultLine("tool_result", ev.raw, m.displayMode); line != "" {
 			m.appendLog(styleDim.Render(line)+"\n", true)
 		}
 	case "subagent_start", "subagent_queued", "subagent_progress", "subagent_tool", "subagent_done":
@@ -573,7 +587,9 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	case "exec_done":
 		m.sess.lastExecCmd = execLine(ev.raw)
 		m.sess.lastExecCwd = str(ev.raw["cwd"])
-		m.appendLog(formatToolResultLine("exec_done", ev.raw)+"\n", true)
+		if m.displayMode != "quiet" {
+			m.appendLog(formatToolResultLine("exec_done", ev.raw, m.displayMode)+"\n", true)
+		}
 	case "error":
 		m.appendLog(styleErr.Render("! "+str(ev.raw["message"]))+"\n", true)
 	case "user_choice":
