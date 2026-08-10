@@ -11,12 +11,12 @@ var embedded embed.FS
 
 // 路径常量（相对 prompt/ 根，编译时 embed）。
 const (
-	FileEvolveSystem               = "evolve/system.md"
-	FileEvolveSessionCompressExtra = "evolve/session_compress_extra.md"
-	FileEvolveCrystallize          = "evolve/crystallize.md"
-	FileEvolveDecisionScope        = "evolve/decision_scope.md"
-	FileEvolveDecisionFooter       = "evolve/decision_footer.md"
-	FileEvolvePatchModes           = "evolve/patch_modes.md"
+	FileEvolveSystem                = "evolve/system.md"
+	FileEvolveSessionCompressExtra  = "evolve/session_compress_extra.md"
+	FileEvolveCrystallize           = "evolve/crystallize.md"
+	FileEvolveDecisionScope         = "evolve/decision_scope.md"
+	FileEvolveDecisionFooter        = "evolve/decision_footer.md"
+	FileEvolvePatchModes            = "evolve/patch_modes.md"
 	FileEvolveProjectContentRouting = "evolve/project_content_routing.md"
 )
 

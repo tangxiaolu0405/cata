@@ -46,9 +46,9 @@ func (c *Client) GetMe(ctx context.Context) (username string, err error) {
 
 // Client 最小 Telegram Bot API 客户端（stdlib only）。
 type Client struct {
-	token  string
-	http   *http.Client
-	base   string
+	token string
+	http  *http.Client
+	base  string
 }
 
 // NewClient 创建客户端。
@@ -62,9 +62,9 @@ func NewClient(token string) *Client {
 
 // Update Telegram update。
 type Update struct {
-	UpdateID      int64           `json:"update_id"`
-	Message       *Message        `json:"message"`
-	CallbackQuery *CallbackQuery  `json:"callback_query"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
 }
 
 // Message 入站消息。

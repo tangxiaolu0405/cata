@@ -22,13 +22,14 @@ type Server struct {
 	evolve    *evolve.Engine
 	ctx       context.Context
 	cancel    context.CancelFunc
-	managed   bool // true：由 cata chat 自动拉起，最后一个客户端断开后退出
+	managed   bool      // true：由 cata chat 自动拉起，最后一个客户端断开后退出
+	startedAt time.Time // 进程启动时间（首次消息诊断展示，便于区分新旧 server）
 }
 
 // NewServer 创建服务器实例。managed 为 true 时无客户端连接后自动停止。
 func NewServer(managed bool) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{ctx: ctx, cancel: cancel, managed: managed}, nil
+	return &Server{ctx: ctx, cancel: cancel, managed: managed, startedAt: time.Now()}, nil
 }
 
 // ClientDisconnected 在 socket 客户端断开时调用。

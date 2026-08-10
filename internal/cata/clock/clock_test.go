@@ -3,6 +3,7 @@ package clock
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // 回归：Location 在 loc==nil 时不得再次 Lock（曾导致子 Agent 测试永久阻塞）。
@@ -27,7 +28,7 @@ func TestLocationConcurrentInit(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-t.Context().Done():
+	case <-time.After(5 * time.Second):
 		t.Fatal("deadlock in clock.Location/Now")
 	}
 }

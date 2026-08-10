@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	maxLearningBulletRunes   = 280
+	maxLearningBulletRunes     = 280
 	maxLearningPlaybookBullets = 80
-	minLearningBulletRunes   = 12
-	longMemoryBulkArchiveDir = "long-bulk"
+	minLearningBulletRunes     = 12
+	longMemoryBulkArchiveDir   = "long-bulk"
 )
 
 var learningNoiseSubstrings = []string{

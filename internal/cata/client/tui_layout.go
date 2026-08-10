@@ -18,12 +18,12 @@ const (
 )
 
 type paneLayout struct {
-	mainW      int
-	chatH      int // bordered chat block (viewport + border)
-	inputH     int
-	leftBodyH  int
-	sidebarX   int
-	sidebarW   int
+	mainW     int
+	chatH     int // bordered chat block (viewport + border)
+	inputH    int
+	leftBodyH int
+	sidebarX  int
+	sidebarW  int
 }
 
 func (m *model) paneLayout() paneLayout {

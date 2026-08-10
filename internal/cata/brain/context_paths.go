@@ -13,7 +13,7 @@ import (
 const TerminalPathsSystemPrefix = "【Cata 路径：脑子与产出区】"
 
 var (
-	outputMu       sync.RWMutex
+	outputMu        sync.RWMutex
 	activeOutputCwd string
 )
 
@@ -222,4 +222,3 @@ func MCPToolNames() []string {
 	}
 	return MCPToolNamesProvider()
 }
-

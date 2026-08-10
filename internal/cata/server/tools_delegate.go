@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 
 	"cata/internal/cata/brain"
-	"cata/internal/cata/config"
 	"cata/internal/cata/clock"
+	"cata/internal/cata/config"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -33,23 +33,23 @@ func defaultDelegateMaxRounds() int {
 }
 
 var workerBuiltinToolNames = map[string]bool{
-	"read_file":       true,
-	"list_files":      true,
-	"read_skill":      true,
-	"run_command":     true,
-	"search_replace":  true,
-	"append_file":     true,
-	"create_file":     true,
-	"run_skill":       true,
-	"case_artifact":   true,
+	"read_file":      true,
+	"list_files":     true,
+	"read_skill":     true,
+	"run_command":    true,
+	"search_replace": true,
+	"append_file":    true,
+	"create_file":    true,
+	"run_skill":      true,
+	"case_artifact":  true,
 }
 
 var workerExcludedBuiltinTools = map[string]bool{
-	"ask_user":          true,
-	"delegate_task":     true,
-	"delegate_wait":     true,
-	"delegate_mode":     true,
-	"list_modes":        true,
+	"ask_user":      true,
+	"delegate_task": true,
+	"delegate_wait": true,
+	"delegate_mode": true,
+	"list_modes":    true,
 	// case_artifact allowed for mode workers writing drafts
 }
 
@@ -211,7 +211,7 @@ func (t *delegateWaitTool) Name() string { return "delegate_wait" }
 
 func (t *delegateWaitTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name: "delegate_wait",
+		Name:        "delegate_wait",
 		Description: "Block until sub-agent(s) finish and return summaries. `ids` fetches specific tasks (including already finished in this chat). Omit ids + `all:true` for every task in session; omit both to wait only still-running.",
 		Parameters: json.RawMessage(`{
 			"type":"object",

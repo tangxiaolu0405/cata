@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 
 	"cata/internal/cata/brain"
-	"cata/internal/cata/config"
 	"cata/internal/cata/clock"
+	"cata/internal/cata/config"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -44,16 +44,16 @@ type subagentResult struct {
 }
 
 type subagentTask struct {
-	id        string
-	task      string
-	context   string
-	model     string
-	maxRounds int
-	tools     []llm.Tool
-	toolNames string
-	startedAt string
-	outputCwd string
-	sessionID string
+	id            string
+	task          string
+	context       string
+	model         string
+	maxRounds     int
+	tools         []llm.Tool
+	toolNames     string
+	startedAt     string
+	outputCwd     string
+	sessionID     string
 	delegateIndex uint64
 
 	// mode 委托（空 = 普通 delegate_task）
@@ -70,7 +70,6 @@ type subagentTask struct {
 	result subagentResult
 	done   chan struct{}
 }
-
 
 func (t *subagentTask) finish(r subagentResult) {
 	t.mu.Lock()
@@ -144,7 +143,6 @@ func (t *subagentTask) complete(ss *SocketServer, conn net.Conn, r subagentResul
 	_ = ss.emitStreamLine(conn, ev)
 }
 
-
 func (t *subagentTask) abortIfCancelled(ss *SocketServer, conn net.Conn, rounds int) error {
 	if t.ctx.Err() == nil {
 		return nil
@@ -159,7 +157,7 @@ type subagentPool struct {
 	ss   *SocketServer
 	conn net.Conn
 
-	sessionID  string
+	sessionID   string
 	delegateSeq uint64
 
 	mu    sync.Mutex
@@ -310,7 +308,6 @@ func (p *subagentPool) start(parentCtx context.Context, opts subagentStartOpts) 
 	}
 	return id, formatDelegateStarted(id, client.ModelName(), p.ss.subagentSem.capacity(), len(tools), st.outputCwd), nil
 }
-
 
 func (p *subagentPool) Wait(ctx context.Context, ids []string, all bool) (string, error) {
 	waitList, err := p.resolveWaitList(ids, all)
@@ -500,7 +497,6 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 	st.complete(ss, conn, subagentResult{success: false, summary: summary, rounds: st.maxRounds})
 }
 
-
 func (p *subagentPool) RunningCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -524,7 +520,6 @@ func formatDelegateModeStarted(id, modeID, caseID, model string, maxConcurrent, 
 		"cases under %s/%s/ — call delegate_wait with ids=[%q].",
 		id, modeID, caseID, model, toolCount, maxConcurrent, brain.DirCases, caseID, id)
 }
-
 
 func formatDelegateWaitResults(tasks []*subagentTask) string {
 	var b strings.Builder
@@ -565,17 +560,17 @@ func (t *subagentTask) persistRunCSV(r subagentResult) {
 		SessionID:     t.sessionID,
 		DelegateIndex: int(t.delegateIndex),
 		StartedAt:     t.startedAt,
-		FinishedAt: brain.SubagentRunFinishedAt(),
-		ID:         t.id,
-		Workspace:  brain.SubagentWorkspaceLabel(),
-		OutputCwd:  t.outputCwd,
-		Model:      t.model,
-		Status:     subagentRunStatus(r),
-		Rounds:     r.rounds,
-		Tools:      t.toolNames,
-		Task:       t.task,
-		Context:    t.context,
-		Summary:    r.summary,
+		FinishedAt:    brain.SubagentRunFinishedAt(),
+		ID:            t.id,
+		Workspace:     brain.SubagentWorkspaceLabel(),
+		OutputCwd:     t.outputCwd,
+		Model:         t.model,
+		Status:        subagentRunStatus(r),
+		Rounds:        r.rounds,
+		Tools:         t.toolNames,
+		Task:          t.task,
+		Context:       t.context,
+		Summary:       r.summary,
 	}
 	if err := brain.AppendSubagentRunCSV(rec); err != nil {
 		log.Printf("subagent csv: %v", err)

@@ -20,9 +20,9 @@ type Bot struct {
 	sessions *gateway.SessionManager
 	locks    *gateway.ProcessLock
 
-	mu          sync.Mutex
-	pendingExec map[string]chan bool
-	pendingPick map[string]chan []string
+	mu           sync.Mutex
+	pendingExec  map[string]chan bool
+	pendingPick  map[string]chan []string
 	progressOnce map[string]bool // eventMsgID
 }
 

@@ -8,27 +8,27 @@ import (
 )
 
 func TestInferContextTierLightPureQuestion(t *testing.T) {
-	if got := InferContextTier(1, nil, "这段代码是做什么的？"); got != ContextTierLight {
+	if got := InferContextTier(nil, 1, nil, "这段代码是做什么的？"); got != ContextTierLight {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestInferContextTierStandardDefault(t *testing.T) {
 	// 无路径/问号，但是真实任务 — 应默认 standard，不能误判 light
-	if got := InferContextTier(1, nil, "帮我把 handler 抽出来"); got != ContextTierStandard {
+	if got := InferContextTier(nil, 1, nil, "帮我把 handler 抽出来"); got != ContextTierStandard {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestInferContextTierStandardByFileExt(t *testing.T) {
-	if got := InferContextTier(1, nil, "请修改 main.go 里的函数"); got != ContextTierStandard {
+	if got := InferContextTier(nil, 1, nil, "请修改 main.go 里的函数"); got != ContextTierStandard {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestInferContextTierFullAfterTools(t *testing.T) {
 	hist := []llm.Message{{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Type: "function", Function: llm.ToolCallFunction{Name: "read_file"}}}}}
-	if got := InferContextTier(2, hist, "继续"); got != ContextTierFull {
+	if got := InferContextTier(nil, 2, hist, "继续"); got != ContextTierFull {
 		t.Fatalf("got %v", got)
 	}
 }

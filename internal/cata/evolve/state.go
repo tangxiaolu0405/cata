@@ -11,7 +11,7 @@ import (
 	"cata/internal/cata/clock"
 )
 
-	// Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
+// Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
 type Snapshot struct {
 	ObservedAt          string            `json:"observed_at"`
 	WorkspaceID         string            `json:"workspace_id,omitempty"`
@@ -92,13 +92,13 @@ func Observe(ws *brain.Workspace) (*Snapshot, error) {
 
 	loadLastEvolutionMeta(s, ws.EvolutionLogPath())
 	s.RecentLogSummary = summarizeRecentLog(ws.EvolutionLogPath(), 2, 80)
-		if ids, err := brain.ListWorkspaceSkillIDs(ws); err == nil {
-			s.SkillIDs = ids
-		}
-		computeTriggers(s, ws)
-		observeModeBuckets(s, ws)
-		return s, nil
+	if ids, err := brain.ListWorkspaceSkillIDs(ws); err == nil {
+		s.SkillIDs = ids
 	}
+	computeTriggers(s, ws)
+	observeModeBuckets(s, ws)
+	return s, nil
+}
 
 func loadLastEvolutionMeta(s *Snapshot, logPath string) {
 	data, err := os.ReadFile(logPath)

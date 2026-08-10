@@ -6,7 +6,7 @@ import (
 
 const (
 	crystallizeMinShortBytes = 512
-	browserToolRepeatMin      = 3
+	browserToolRepeatMin     = 3
 )
 
 // appendCrystallizeTriggers 根据 short-term 启发式追加固化触发器。

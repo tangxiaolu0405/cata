@@ -49,13 +49,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
-		mux.HandleFunc("/api/projects", s.handleProjects)
-		mux.HandleFunc("/api/projects/", s.handleProjectAction)
-		mux.HandleFunc("/api/channels", s.handleChannels)
-		mux.HandleFunc("/api/channels/", s.handleChannelMessages)
-		mux.HandleFunc("/api/events", s.handleEventsSSE)
-		mux.HandleFunc("/api/settings/app", s.handleSettingsApp)
-		mux.HandleFunc("/api/settings/gateway", s.handleSettingsGateway)
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("/api/projects/", s.handleProjectAction)
+	mux.HandleFunc("/api/channels", s.handleChannels)
+	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
+	mux.HandleFunc("/api/events", s.handleEventsSSE)
+	mux.HandleFunc("/api/settings/app", s.handleSettingsApp)
+	mux.HandleFunc("/api/settings/gateway", s.handleSettingsGateway)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -149,11 +149,11 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type row struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Path    string `json:"path"`
-		Kind    string `json:"kind,omitempty"`
-		HomeDir string `json:"home_dir,omitempty"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		Kind     string `json:"kind,omitempty"`
+		HomeDir  string `json:"home_dir,omitempty"`
 		LastSeen string `json:"last_seen_at,omitempty"`
 	}
 	out := make([]row, 0, len(list))

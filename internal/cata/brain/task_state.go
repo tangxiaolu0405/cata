@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,27 +25,27 @@ const (
 // TaskState 可恢复任务状态（home 脑子格 tasks/current.json）。
 // Acceptance 与终止限额均由 LLM/用户按任务指定；系统不套统一业务标准。
 type TaskState struct {
-	ID                      string   `json:"id"`
-	Status                  string   `json:"status"`
-	Goal                    string   `json:"goal,omitempty"`
-	Acceptance              []string `json:"acceptance,omitempty"`
-	Steps                   []string `json:"steps,omitempty"`
+	ID         string   `json:"id"`
+	Status     string   `json:"status"`
+	Goal       string   `json:"goal,omitempty"`
+	Acceptance []string `json:"acceptance,omitempty"`
+	Steps      []string `json:"steps,omitempty"`
 	// 终止条件（按任务）；0 = 未声明，该维度不熔断（轮次仍受全局 hard ceiling 约束）。
-	MaxToolRounds          int `json:"max_tool_rounds,omitempty"`
-	MaxConsecutiveFailures int `json:"max_consecutive_failures,omitempty"`
-	MaxStaleRounds         int `json:"max_stale_rounds,omitempty"`
-	Round                   int      `json:"round"`
-	ConsecutiveFailures     int      `json:"consecutive_failures"`
-	StaleRounds             int      `json:"stale_rounds"`
-	LastTool                string   `json:"last_tool,omitempty"`
-	LastError               string   `json:"last_error,omitempty"`
-	LastProgressFingerprint string   `json:"last_progress_fingerprint,omitempty"`
-	FailCode                string   `json:"fail_code,omitempty"`
-	FailReason              string   `json:"fail_reason,omitempty"`
-	OutputCwd               string   `json:"output_cwd,omitempty"`
-	FocusPath               string   `json:"focus_path,omitempty"`
-	CreatedAt               string   `json:"created_at"`
-	UpdatedAt               string   `json:"updated_at"`
+	MaxToolRounds           int    `json:"max_tool_rounds,omitempty"`
+	MaxConsecutiveFailures  int    `json:"max_consecutive_failures,omitempty"`
+	MaxStaleRounds          int    `json:"max_stale_rounds,omitempty"`
+	Round                   int    `json:"round"`
+	ConsecutiveFailures     int    `json:"consecutive_failures"`
+	StaleRounds             int    `json:"stale_rounds"`
+	LastTool                string `json:"last_tool,omitempty"`
+	LastError               string `json:"last_error,omitempty"`
+	LastProgressFingerprint string `json:"last_progress_fingerprint,omitempty"`
+	FailCode                string `json:"fail_code,omitempty"`
+	FailReason              string `json:"fail_reason,omitempty"`
+	OutputCwd               string `json:"output_cwd,omitempty"`
+	FocusPath               string `json:"focus_path,omitempty"`
+	CreatedAt               string `json:"created_at"`
+	UpdatedAt               string `json:"updated_at"`
 }
 
 // TaskContract 声明/更新任务契约的入参。
@@ -286,7 +287,22 @@ func isContinueUtterance(s string) bool {
 
 func newTaskID() string {
 	now := clock.Now()
-	return fmt.Sprintf("t%s%03d", now.Format("20060102-150405"), now.Nanosecond()/1e6)
+	// 追加随机后缀：同一毫秒内并发创建任务时避免 ID 碰撞（covered by test）。
+	return fmt.Sprintf("t%s%03d-%s", now.Format("20060102-150405"), now.Nanosecond()/1e6, randHex(6))
+}
+
+// randHex 返回 n 个十六进制字符（crypto/rand，失败时回退时间戳+计数器）。
+func randHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err == nil {
+		const hexDigits = "0123456789abcdef"
+		for i, b := range buf {
+			buf[i] = hexDigits[int(b)%16]
+		}
+		return string(buf)
+	}
+	// crypto/rand 失败几乎不可能；兜底避免阻塞任务创建。
+	return fmt.Sprintf("%x", time.Now().UnixNano())[:n]
 }
 
 func firstNonEmpty(a, b string) string {

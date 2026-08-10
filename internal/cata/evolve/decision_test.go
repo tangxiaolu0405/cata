@@ -15,13 +15,13 @@ func TestParseDecision(t *testing.T) {
 			wantAct: "idle",
 		},
 		{
-			name: "markdown fence",
-			raw: "```json\n{\"action\":\"consolidate\",\"reason\":\"x\",\"learning\":\"y\",\"updates\":[]}\n```",
+			name:    "markdown fence",
+			raw:     "```json\n{\"action\":\"consolidate\",\"reason\":\"x\",\"learning\":\"y\",\"updates\":[]}\n```",
 			wantAct: "consolidate",
 		},
 		{
-			name: "prose prefix",
-			raw:  "Here is the decision:\n{\"action\":\"idle\",\"reason\":\"noop\",\"updates\":[]}",
+			name:    "prose prefix",
+			raw:     "Here is the decision:\n{\"action\":\"idle\",\"reason\":\"noop\",\"updates\":[]}",
 			wantAct: "idle",
 		},
 		{
@@ -40,8 +40,8 @@ func TestParseDecision(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "nested incomplete must not parse",
-			raw: `{"action":"update","updates":[{"path":"a.md","content":"x"}`,
+			name:    "nested incomplete must not parse",
+			raw:     `{"action":"update","updates":[{"path":"a.md","content":"x"}`,
 			wantErr: true,
 		},
 	}

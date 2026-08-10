@@ -22,13 +22,13 @@ const (
 
 // RegistryEntry 注册表中的一条工作区记录。
 type RegistryEntry struct {
-	ID          string        `json:"id"`
-	RootPath    string        `json:"root_path"`
-	Kind        WorkspaceKind `json:"kind"`
-	Name        string        `json:"name,omitempty"`
-	CreatedAt   string        `json:"created_at"`
-	LastSeenAt  string        `json:"last_seen_at"`
-	ActiveMode  string        `json:"active_mode"`
+	ID         string        `json:"id"`
+	RootPath   string        `json:"root_path"`
+	Kind       WorkspaceKind `json:"kind"`
+	Name       string        `json:"name,omitempty"`
+	CreatedAt  string        `json:"created_at"`
+	LastSeenAt string        `json:"last_seen_at"`
+	ActiveMode string        `json:"active_mode"`
 }
 
 type workspacesRegistryData struct {

@@ -272,7 +272,7 @@ func (t *declareTaskTool) Schema() llm.Tool {
 	}}
 }
 
-func (t *declareTaskTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+func (t *declareTaskTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
 	var p struct {
 		Goal                   string   `json:"goal"`
 		Acceptance             []string `json:"acceptance"`
@@ -284,7 +284,7 @@ func (t *declareTaskTool) Execute(_ context.Context, _ net.Conn, argsJSON string
 	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("declare_task args: %w", err)
 	}
-	w := brain.Active()
+	w := chatWorkspaceFrom(ctx)
 	if w == nil {
 		return "", fmt.Errorf("declare_task: no active workspace")
 	}

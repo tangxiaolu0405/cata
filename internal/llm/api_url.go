@@ -4,7 +4,7 @@ import "strings"
 
 const (
 	openAIChatCompletionsPath = "/chat/completions"
-	anthropicMessagesPath       = "/v1/messages"
+	anthropicMessagesPath     = "/v1/messages"
 )
 
 // AppendAPIFormatPath 按 api_format 为 base URL 拼接默认路径（用于候选探测，不强制写回配置）。

@@ -30,14 +30,14 @@ type MemoryIndex struct {
 
 // IndexEntry 单条索引（供 LLM 扫描后按需展开原文）。
 type IndexEntry struct {
-	ID               string   `json:"id"`
-	Source           string   `json:"source"`
-	Summary          string   `json:"summary"`
-	Keywords         []string `json:"keywords,omitempty"`
-	Category         string   `json:"category"`
-	Priority         int      `json:"priority"`
-	DisclosureLevel  string   `json:"disclosure_level,omitempty"`
-	UpdatedAt        string   `json:"updated_at,omitempty"`
+	ID              string   `json:"id"`
+	Source          string   `json:"source"`
+	Summary         string   `json:"summary"`
+	Keywords        []string `json:"keywords,omitempty"`
+	Category        string   `json:"category"`
+	Priority        int      `json:"priority"`
+	DisclosureLevel string   `json:"disclosure_level,omitempty"`
+	UpdatedAt       string   `json:"updated_at,omitempty"`
 }
 
 // LoadMemoryIndex 读取当前 workspace 的 index.json（兼容旧版 `[]`）。

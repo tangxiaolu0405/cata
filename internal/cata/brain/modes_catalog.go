@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	ModesCatalogPrefix     = "【Cata 专职 Modes】"
-	maxModesCatalogBytes   = 1400
-	LongMemoryHotPrefix    = "【Cata 长期记忆节选】"
-	maxLongMemoryHotBytes  = 1800
-	maxLearningHotBullets  = 12
-	maxLearningHotRunes    = 900
+	ModesCatalogPrefix    = "【Cata 专职 Modes】"
+	maxModesCatalogBytes  = 1400
+	LongMemoryHotPrefix   = "【Cata 长期记忆节选】"
+	maxLongMemoryHotBytes = 1800
+	maxLearningHotBullets = 12
+	maxLearningHotRunes   = 900
 )
 
 // HasSpecialistModes 项目是否有除 _default 外的专职 mode。

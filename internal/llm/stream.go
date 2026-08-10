@@ -100,9 +100,9 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 			if ch.Message.Content != "" && d.Content == "" {
 				contentBuf.WriteString(ch.Message.Content)
 				if onDelta != nil {
-				if e := onDelta(ch.Message.Content); e != nil {
-					return "", "", nil, "", usage, e
-				}
+					if e := onDelta(ch.Message.Content); e != nil {
+						return "", "", nil, "", usage, e
+					}
 				}
 			}
 		}
@@ -318,81 +318,81 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	if resp == nil {
 		return "", "", nil, "", usage, fmt.Errorf("stream request: no response")
 	}
-		defer resp.Body.Close()
+	defer resp.Body.Close()
 
-		ct := resp.Header.Get("Content-Type")
-		if !strings.Contains(ct, "text/event-stream") && !strings.Contains(ct, "application/x-ndjson") {
-			body, _ := io.ReadAll(resp.Body)
-			// 部分代理仍返回 SSE 正文但 Content-Type 标成 application/json。
-			if looksLikeSSEChatBody(body) {
-				assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, "text/event-stream", bytes.NewReader(body), onDelta)
-				if err != nil {
-					log.Printf("LLM: mislabeled SSE parse failed (Content-Type=%s): %v; falling back to non-stream", ct, err)
-					return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
-						fmt.Sprintf("mislabeled SSE (Content-Type=%s)", ct))
-				}
-			} else {
-				var perr error
-				assistant, toolCalls, perr = c.adapter.ParseResponse(body)
-				if perr != nil {
-					log.Printf("LLM: stream got non-SSE JSON parse error (Content-Type=%s): %v; falling back to non-stream; body=%s",
-						ct, perr, truncateForErr(body, 200))
-					return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
-						fmt.Sprintf("non-SSE Content-Type=%s", ct))
-				}
-				finishReason = "stop"
-				if rawReasoning := extractReasoningFromChatJSON(body); rawReasoning != "" {
-					reasoning = rawReasoning
-				}
-			}
-			if emptyLLMResult(assistant, reasoning, toolCalls) {
-				log.Printf("LLM: stream endpoint returned empty non-SSE body (Content-Type=%s); falling back to non-stream; body=%s",
-					ct, truncateForErr(body, 200))
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/event-stream") && !strings.Contains(ct, "application/x-ndjson") {
+		body, _ := io.ReadAll(resp.Body)
+		// 部分代理仍返回 SSE 正文但 Content-Type 标成 application/json。
+		if looksLikeSSEChatBody(body) {
+			assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, "text/event-stream", bytes.NewReader(body), onDelta)
+			if err != nil {
+				log.Printf("LLM: mislabeled SSE parse failed (Content-Type=%s): %v; falling back to non-stream", ct, err)
 				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
-					"empty non-SSE body")
+					fmt.Sprintf("mislabeled SSE (Content-Type=%s)", ct))
 			}
-			if onDelta != nil {
-				if text := assistantText(assistant, reasoning); text != "" {
-					_ = onDelta(text)
-				}
+		} else {
+			var perr error
+			assistant, toolCalls, perr = c.adapter.ParseResponse(body)
+			if perr != nil {
+				log.Printf("LLM: stream got non-SSE JSON parse error (Content-Type=%s): %v; falling back to non-stream; body=%s",
+					ct, perr, truncateForErr(body, 200))
+				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
+					fmt.Sprintf("non-SSE Content-Type=%s", ct))
 			}
-			c.appendLLMLog(req, tools, toolChoice, assistantText(assistant, reasoning), toolCalls, body)
-			return assistantText(assistant, reasoning), reasoning, toolCalls, finishReason, usage, nil
-		}
-
-		assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta)
-		if err != nil {
-			log.Printf("LLM: SSE read failed: %v; falling back to non-stream", err)
-			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "SSE read error")
-		}
-
-		// 正文里嵌入的 [tool_call …] / <tool_call> 也可补救（部分端 finish_reason=tool_calls 但 delta 为空）
-		if len(toolCalls) == 0 && len(tools) > 0 {
-			if embedded, stripped := ParseEmbeddedToolCalls(assistant); len(embedded) > 0 {
-				toolCalls = embedded
-				assistant = stripped
-				if finishReason == "" {
-					finishReason = "tool_calls"
-				}
+			finishReason = "stop"
+			if rawReasoning := extractReasoningFromChatJSON(body); rawReasoning != "" {
+				reasoning = rawReasoning
 			}
 		}
-
-		// 若干 OpenAI 兼容端在 SSE 下 finish_reason=tool_calls 但 delta 未携带可合并的 tool_calls；
-		// 再发一次非流式请求拿到完整 tool_calls，才能进入服务端多轮工具循环。
-		if (strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use")) && len(toolCalls) == 0 && len(tools) > 0 {
-			log.Printf("LLM: stream finish_reason=tool_calls but 0 parsed tool_calls; retrying non-stream once")
-			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty tool_calls")
-		}
-
 		if emptyLLMResult(assistant, reasoning, toolCalls) {
-			log.Printf("LLM: SSE finished with empty content/tools; falling back to non-stream (slow proxy / thinking models)")
-			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty SSE")
+			log.Printf("LLM: stream endpoint returned empty non-SSE body (Content-Type=%s); falling back to non-stream; body=%s",
+				ct, truncateForErr(body, 200))
+			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
+				"empty non-SSE body")
 		}
-
-		out := assistantText(assistant, reasoning)
-		c.appendLLMLog(req, tools, toolChoice, out, toolCalls, nil)
-		return out, reasoning, toolCalls, finishReason, usage, nil
+		if onDelta != nil {
+			if text := assistantText(assistant, reasoning); text != "" {
+				_ = onDelta(text)
+			}
+		}
+		c.appendLLMLog(req, tools, toolChoice, assistantText(assistant, reasoning), toolCalls, body)
+		return assistantText(assistant, reasoning), reasoning, toolCalls, finishReason, usage, nil
 	}
+
+	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta)
+	if err != nil {
+		log.Printf("LLM: SSE read failed: %v; falling back to non-stream", err)
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "SSE read error")
+	}
+
+	// 正文里嵌入的 [tool_call …] / <tool_call> 也可补救（部分端 finish_reason=tool_calls 但 delta 为空）
+	if len(toolCalls) == 0 && len(tools) > 0 {
+		if embedded, stripped := ParseEmbeddedToolCalls(assistant); len(embedded) > 0 {
+			toolCalls = embedded
+			assistant = stripped
+			if finishReason == "" {
+				finishReason = "tool_calls"
+			}
+		}
+	}
+
+	// 若干 OpenAI 兼容端在 SSE 下 finish_reason=tool_calls 但 delta 未携带可合并的 tool_calls；
+	// 再发一次非流式请求拿到完整 tool_calls，才能进入服务端多轮工具循环。
+	if (strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use")) && len(toolCalls) == 0 && len(tools) > 0 {
+		log.Printf("LLM: stream finish_reason=tool_calls but 0 parsed tool_calls; retrying non-stream once")
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty tool_calls")
+	}
+
+	if emptyLLMResult(assistant, reasoning, toolCalls) {
+		log.Printf("LLM: SSE finished with empty content/tools; falling back to non-stream (slow proxy / thinking models)")
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty SSE")
+	}
+
+	out := assistantText(assistant, reasoning)
+	c.appendLLMLog(req, tools, toolChoice, out, toolCalls, nil)
+	return out, reasoning, toolCalls, finishReason, usage, nil
+}
 
 func emptyLLMResult(content, reasoning string, toolCalls []ToolCall) bool {
 	return strings.TrimSpace(content) == "" && strings.TrimSpace(reasoning) == "" && len(toolCalls) == 0
@@ -427,7 +427,7 @@ func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message,
 		SubagentID:      flags.subagentID,
 		SessionID:       flags.sessionID,
 	}
-	cr, tc, err := c.chat(nreq, tools, toolChoice, true)
+	cr, tc, err := c.chatWithContext(ctx, nreq, tools, toolChoice, true)
 	if err != nil {
 		return "", "", nil, "", outUsage, fmt.Errorf("stream unusable (%s); non-stream fallback failed: %w", why, err)
 	}

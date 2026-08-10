@@ -29,10 +29,10 @@ func TestCompactMarkdown_dedupeParagraphs(t *testing.T) {
 
 func TestIsProjectContentRel(t *testing.T) {
 	cases := map[string]bool{
-		"persona.local.md":              true,
-		"modes/_default/persona.md":     true,
-		"modes/foo/behavior.md":         true,
-		"memory/long/x.md":              false,
+		"persona.local.md":                 true,
+		"modes/_default/persona.md":        true,
+		"modes/foo/behavior.md":            true,
+		"memory/long/x.md":                 false,
 		"modes/_default/capabilities.yaml": false,
 	}
 	for rel, want := range cases {

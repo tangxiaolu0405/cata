@@ -52,11 +52,11 @@ var (
 const readOnlyQAMaxRunes = 200
 
 var (
-	reCodeFence   = regexp.MustCompile("```")
-	reURL         = regexp.MustCompile(`https?://[^\s\]\)>"']+`)
-	reFileExt     = regexp.MustCompile(`(?i)(?:^|[\s"'(\[{])([\w./\\@-]+)\.(go|ts|tsx|js|jsx|py|rs|java|cs|cpp|c|h|hpp|md|json|yaml|yml|toml|xml|html|css|sh|bash|bat|ps1|sql|vue|svelte)\b`)
-	rePathSep     = regexp.MustCompile(`(?:^|[\s"'(\[{])([\w.-]+[/\\]){1,}[\w.-]+`)
-	reShellMeta   = regexp.MustCompile(`&&|\|\||\$\(|(?:^|[\s;])(?:sudo|npm|pnpm|yarn|cargo|make|cmake|docker|kubectl|git)\b`)
+	reCodeFence = regexp.MustCompile("```")
+	reURL       = regexp.MustCompile(`https?://[^\s\]\)>"']+`)
+	reFileExt   = regexp.MustCompile(`(?i)(?:^|[\s"'(\[{])([\w./\\@-]+)\.(go|ts|tsx|js|jsx|py|rs|java|cs|cpp|c|h|hpp|md|json|yaml|yml|toml|xml|html|css|sh|bash|bat|ps1|sql|vue|svelte)\b`)
+	rePathSep   = regexp.MustCompile(`(?:^|[\s"'(\[{])([\w.-]+[/\\]){1,}[\w.-]+`)
+	reShellMeta = regexp.MustCompile(`&&|\|\||\$\(|(?:^|[\s;])(?:sudo|npm|pnpm|yarn|cargo|make|cmake|docker|kubectl|git)\b`)
 )
 
 // InferContextTier 选择主 chat 上下文档位（工具集 + system 节选）。
@@ -67,14 +67,14 @@ var (
 //   - 首轮默认 standard（读写+命令+delegate）
 //   - 仅极高置信「纯问句、无结构信号、无专职 mode」→ light
 //   - MCP 已启用且用户给出 URL → full（可能需要 browser）
-func InferContextTier(round int, history []llm.Message, userText string) ContextTier {
+func InferContextTier(ws *brain.Workspace, round int, history []llm.Message, userText string) ContextTier {
 	if round > 1 || historyHasToolActivity(history) {
 		return ContextTierFull
 	}
 	if mcpEnabled() && reURL.MatchString(userText) {
 		return ContextTierFull
 	}
-	if brain.HasSpecialistModes(brain.Active()) {
+	if brain.HasSpecialistModes(ws) {
 		return ContextTierStandard
 	}
 	if isHighConfidenceReadOnlyQA(userText) {

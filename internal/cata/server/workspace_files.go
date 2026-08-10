@@ -125,10 +125,10 @@ func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
 
 func toolSearchReplace(argsJSON string) (string, error) {
 	var p struct {
-		Path        string `json:"path"`
-		OldString   string `json:"old_string"`
-		NewString   string `json:"new_string"`
-		ReplaceAll  bool   `json:"replace_all"`
+		Path       string `json:"path"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
 	}
 	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("search_replace args: %w", err)

@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
 )
 
 // Tool 定义给 LLM 暴露的「工具」（兼容 OpenAI tools/function calling）。
@@ -69,12 +70,16 @@ type APIAdapter interface {
 var (
 	openAIAdapter    APIAdapter = &OpenAICompatAdapter{}
 	anthropicAdapter APIAdapter = &AnthropicCompatAdapter{}
+	customAdaptersMu sync.RWMutex
 	customAdapters   = make(map[string]APIAdapter)
 )
 
 // GetAPIAdapter 按 api_format 返回协议适配器（兜底方案）。
 func GetAPIAdapter(apiFormat string) APIAdapter {
-	if custom, ok := customAdapters[ResolveAPIFormat(apiFormat, "", "")]; ok {
+	customAdaptersMu.RLock()
+	custom, ok := customAdapters[ResolveAPIFormat(apiFormat, "", "")]
+	customAdaptersMu.RUnlock()
+	if ok {
 		return custom
 	}
 	switch ResolveAPIFormat(apiFormat, "", "") {
@@ -90,5 +95,7 @@ func RegisterCustomAdapter(apiFormat string, adapter APIAdapter) {
 	if adapter == nil {
 		return
 	}
+	customAdaptersMu.Lock()
 	customAdapters[ResolveAPIFormat(apiFormat, "", "")] = adapter
+	customAdaptersMu.Unlock()
 }

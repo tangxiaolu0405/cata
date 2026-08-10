@@ -18,8 +18,8 @@ const (
 
 // legacy paths kept for migration / backward-compatible fallbacks
 const (
-	RelPathHot               = "hot.md" // migrated → modes/_default/persona.md
-	RelPathShortTermCurrent  = "memory/short-term/current_session.md"
+	RelPathHot              = "hot.md" // migrated → modes/_default/persona.md
+	RelPathShortTermCurrent = "memory/short-term/current_session.md"
 	RelPathLongTerm         = "memory/long-term"
 	RelPathArchive          = "archive"
 )

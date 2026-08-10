@@ -19,11 +19,11 @@ func newSlashCmdDelegate() slashCmdDelegate {
 	return slashCmdDelegate{styles: list.NewDefaultItemStyles()}
 }
 
-func (d slashCmdDelegate) Height() int     { return 1 }
-func (d slashCmdDelegate) Spacing() int    { return 0 }
+func (d slashCmdDelegate) Height() int                         { return 1 }
+func (d slashCmdDelegate) Spacing() int                        { return 0 }
 func (d slashCmdDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-func (d slashCmdDelegate) ShortHelp() []key.Binding              { return nil }
-func (d slashCmdDelegate) FullHelp() [][]key.Binding             { return nil }
+func (d slashCmdDelegate) ShortHelp() []key.Binding            { return nil }
+func (d slashCmdDelegate) FullHelp() [][]key.Binding           { return nil }
 
 func (d slashCmdDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	pi, ok := item.(pickItem)

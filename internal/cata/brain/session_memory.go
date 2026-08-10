@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	maxTurnUserRunes       = 600
-	maxTurnAssistantRunes  = 2000
-	maxShortTermFileBytes  = 96 * 1024
-	shortTermFileHeader    = "# Current session (short-term)\n\n> Appended by cata after each chat turn. Consolidated into persona by autonomous evolution.\n\n"
+	maxTurnUserRunes      = 600
+	maxTurnAssistantRunes = 2000
+	maxShortTermFileBytes = 96 * 1024
+	shortTermFileHeader   = "# Current session (short-term)\n\n> Appended by cata after each chat turn. Consolidated into persona by autonomous evolution.\n\n"
 	// DefaultKeepRecentAfterConsolidate 演进归档后保留在 short-term 的尾部字节（最近几轮对话）。
 	DefaultKeepRecentAfterConsolidate = 2048
 )

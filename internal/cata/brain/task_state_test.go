@@ -3,6 +3,7 @@ package brain
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -57,12 +58,12 @@ func TestUpdateTaskContractAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := UpdateTaskContract(w, TaskContract{
-		Goal:          "ship feature",
-		Acceptance:    []string{"tests green"},
-		Steps:         []string{"write", "test"},
-		SetAcceptance: true,
-		SetSteps:      true,
-		MaxToolRounds: intPtr(12),
+		Goal:           "ship feature",
+		Acceptance:     []string{"tests green"},
+		Steps:          []string{"write", "test"},
+		SetAcceptance:  true,
+		SetSteps:       true,
+		MaxToolRounds:  intPtr(12),
 		MaxStaleRounds: intPtr(3),
 	})
 	if err != nil {
@@ -84,3 +85,38 @@ func TestUpdateTaskContractAndClear(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// 回归：同一毫秒内并发创建任务不得产生重复 ID（曾因时间+毫秒后缀碰撞导致 flaky）。
+func TestNewTaskIDUniqueConcurrent(t *testing.T) {
+	const n = 200
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i] = newTaskID()
+		}(i)
+	}
+	wg.Wait()
+	seen := make(map[string]struct{}, n)
+	for _, id := range ids {
+		if id == "" {
+			t.Fatal("empty task id")
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate task id: %s", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+// randHex 输出指定长度的十六进制字符。
+func TestRandHexLength(t *testing.T) {
+	if got := randHex(4); len(got) != 4 {
+		t.Fatalf("randHex(4) = %q, want length 4", got)
+	}
+	if got := randHex(6); len(got) != 6 {
+		t.Fatalf("randHex(6) = %q, want length 6", got)
+	}
+}

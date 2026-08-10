@@ -65,10 +65,10 @@ func EnsureCase(outputCwd, caseID string) (root string, err error) {
 type ArtifactStatus string
 
 const (
-	ArtifactDraft     ArtifactStatus = "draft"
-	ArtifactInReview  ArtifactStatus = "in_review"
-	ArtifactAccepted  ArtifactStatus = "accepted"
-	ArtifactRejected  ArtifactStatus = "rejected"
+	ArtifactDraft    ArtifactStatus = "draft"
+	ArtifactInReview ArtifactStatus = "in_review"
+	ArtifactAccepted ArtifactStatus = "accepted"
+	ArtifactRejected ArtifactStatus = "rejected"
 )
 
 type artifactMeta struct {
@@ -208,15 +208,15 @@ func ReadCaseArtifact(outputCwd, caseID, name string, version int, acceptedOnly 
 
 // ModeRunLog 一条专职 mode 委托记录。
 type ModeRunLog struct {
-	ModeID      string
-	CaseID      string
-	SubagentID  string
-	Task        string
-	Status      string
-	Summary     string
-	ArtifactsIn []string
+	ModeID       string
+	CaseID       string
+	SubagentID   string
+	Task         string
+	Status       string
+	Summary      string
+	ArtifactsIn  []string
 	ArtifactsOut []string
-	Rounds      int
+	Rounds       int
 }
 
 // AppendModeRunLog 写入 cases/.../mode_runs/<mode>/<ts>.md

@@ -18,16 +18,16 @@ type wireThinking struct {
 }
 
 type wireChatRequest struct {
-	Model            string                   `json:"model"`
-	Messages         []map[string]interface{} `json:"messages,omitempty"`
-	Input            []map[string]interface{} `json:"input,omitempty"` // Responses API
-	MaxTokens        int                      `json:"max_tokens,omitempty"`
-	MaxOutputTokens  int                      `json:"max_output_tokens,omitempty"` // Responses API
-	Temperature      float64                  `json:"temperature,omitempty"`
-	Tools            []Tool                   `json:"tools,omitempty"`
-	ToolChoice       interface{}              `json:"tool_choice,omitempty"`
-	Stream           bool                     `json:"stream,omitempty"`
-	Thinking         *wireThinking            `json:"thinking,omitempty"`
+	Model           string                   `json:"model"`
+	Messages        []map[string]interface{} `json:"messages,omitempty"`
+	Input           []map[string]interface{} `json:"input,omitempty"` // Responses API
+	MaxTokens       int                      `json:"max_tokens,omitempty"`
+	MaxOutputTokens int                      `json:"max_output_tokens,omitempty"` // Responses API
+	Temperature     float64                  `json:"temperature,omitempty"`
+	Tools           []Tool                   `json:"tools,omitempty"`
+	ToolChoice      interface{}              `json:"tool_choice,omitempty"`
+	Stream          bool                     `json:"stream,omitempty"`
+	Thinking        *wireThinking            `json:"thinking,omitempty"`
 }
 
 func (OpenAICompatAdapter) Format() string { return APIFormatOpenAI }

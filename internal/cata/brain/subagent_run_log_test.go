@@ -33,15 +33,15 @@ func TestAppendSubagentRunCSVPerOutputCwd(t *testing.T) {
 	rec := SubagentRunRecord{
 		SessionID:     "cs-test",
 		DelegateIndex: 1,
-		StartedAt:  "2026-06-07T10:00:00+08:00",
-		FinishedAt: "2026-06-07T10:01:00+08:00",
-		ID:         "sub-1",
-		OutputCwd:  "/tmp/my-project",
-		Model:      "worker-model",
-		Status:     "ok",
-		Rounds:     1,
-		Task:       "t",
-		Summary:    "ok",
+		StartedAt:     "2026-06-07T10:00:00+08:00",
+		FinishedAt:    "2026-06-07T10:01:00+08:00",
+		ID:            "sub-1",
+		OutputCwd:     "/tmp/my-project",
+		Model:         "worker-model",
+		Status:        "ok",
+		Rounds:        1,
+		Task:          "t",
+		Summary:       "ok",
 	}
 	if err := AppendSubagentRunCSV(rec); err != nil {
 		t.Fatal(err)

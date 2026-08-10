@@ -76,6 +76,10 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		return err
 	}
 
+	// 会话首条消息（含 chat_reset 后的新会话）输出诊断，便于定位「cata 没处理 / 无响应」。
+	if len(*history) == 0 {
+		ss.emitFirstMessageDiagnostics(conn, client, chatWS, text)
+	}
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
 	if len(ss.buildTerminalChatToolsForTier(ContextTierLight)) == 0 {
@@ -90,6 +94,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 	ctx = withChatConnReader(ctx, lr)
 	pool := newSubagentPool(ctx, ss, conn)
 	ctx = withChatSubagentPool(ctx, pool)
+	ctx = withChatWorkspace(ctx, chatWS)
 
 	var task *brain.TaskState
 	if chatWS != nil {
@@ -120,7 +125,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		if brk := guard.checkBudget(round); brk != nil {
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
-		tier := InferContextTier(round, *history, text)
+		tier := InferContextTier(chatWS, round, *history, text)
 		roundProfile := tier.PromptProfile()
 		if promptPeak != nil {
 			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)
@@ -190,7 +195,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				_ = ss.emitStreamLine(conn, map[string]interface{}{
 					"type": "progress", "message": fmt.Sprintf("executing %d tool(s) from model output", len(parsed)),
 				})
-				} else if lower := strings.ToLower(asst); strings.Contains(lower, "<tool") || strings.Contains(lower, "<function") || strings.Contains(asst, "[tool_call") {
+			} else if lower := strings.ToLower(asst); strings.Contains(lower, "<tool") || strings.Contains(lower, "<function") || strings.Contains(asst, "[tool_call") {
 				hint := "模型返回了 tool 标记但未解析成功；大文件请分块 append_file。/exit 后重进以加载新 server。"
 				log.Printf("embedded tool parse failed, content prefix: %.200q", asst)
 				_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": hint})
@@ -551,9 +556,6 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		"prompt_profile":     string(brain.ActivePromptProfile()),
 	}
 	w := chatWS
-	if w == nil {
-		w = brain.Active()
-	}
 	if w != nil {
 		ev["workspace_id"] = w.ID
 		ev["focus_path"] = w.RootPath

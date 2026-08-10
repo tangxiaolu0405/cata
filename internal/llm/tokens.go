@@ -34,6 +34,7 @@ func DefaultContextWindow(model string) int {
 		return contextWindow1M
 	}
 }
+
 // ContextWindowTokens 返回当前客户端使用的上下文上限。
 func (c *Client) ContextWindowTokens() int {
 	if config.Config != nil && config.Config.LLM.ContextWindow > 0 {
@@ -58,6 +59,7 @@ func ContextCompressThreshold(window int) int {
 	}
 	return int(float64(window) * ContextCompressRatioValue())
 }
+
 // EstimatedChatInputTokens 估算发往 API 前的输入 token（含 boot-leader + brain 节选注入）。
 func (c *Client) EstimatedChatInputTokens(messages []Message, tools []Tool) int {
 	wired := withBootLeaderSystemMessage(messages)

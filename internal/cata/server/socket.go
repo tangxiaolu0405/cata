@@ -56,15 +56,15 @@ type Request struct {
 
 // Response 服务器响应
 type Response struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success bool        `json:"success"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
 // NewSocketServer 创建 socket 服务器
 func NewSocketServer(srv *Server) (*SocketServer, error) {
 	socketPath := getSocketPath()
-	
+
 	// 确保目录存在
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create socket directory: %w", err)
@@ -86,9 +86,9 @@ func NewSocketServer(srv *Server) (*SocketServer, error) {
 
 	reg := NewToolRegistry()
 	ss := &SocketServer{
-		server: srv,
-		ln:     ln,
-		tools:  reg,
+		server:      srv,
+		ln:          ln,
+		tools:       reg,
 		subagentSem: newSubagentLimiter(config.MaxSubagentConcurrent()),
 	}
 	ss.RegisterBuiltinTools(reg)
@@ -106,7 +106,7 @@ func getSocketPath() string {
 // Start 启动 socket 服务器
 func (ss *SocketServer) Start() {
 	log.Printf("Socket server listening on: %s", ss.ln.Addr().String())
-	
+
 	go func() {
 		for {
 			conn, err := ss.ln.Accept()
@@ -120,7 +120,7 @@ func (ss *SocketServer) Start() {
 					continue
 				}
 			}
-			
+
 			// 处理每个连接
 			go ss.handleConnection(guardConn(conn))
 		}
@@ -154,6 +154,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 
 	var chatHistory []llm.Message
 	var chatPromptPeak brain.PromptProfile
+	var connWS *brain.Workspace // 本连接最近一次 chat 解析出的脑子分区（chat_reset 复用，勿用全局 Active）
 
 	br := bufio.NewReaderSize(conn, 64*1024)
 
@@ -200,6 +201,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if err != nil {
 				log.Printf("resolve brain: %v", err)
 			}
+			connWS = ws
 			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text, ws, &chatPromptPeak); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
@@ -211,7 +213,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if err := brain.AppendSessionBoundary(); err != nil {
 				log.Printf("short-term session boundary: %v", err)
 			}
-			if w := brain.Active(); w != nil {
+			if w := connWS; w != nil {
 				if err := brain.ClearCurrentTask(w); err != nil {
 					log.Printf("clear task state: %v", err)
 				}

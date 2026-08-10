@@ -21,11 +21,11 @@ func TestNormalizeModeID(t *testing.T) {
 
 func TestNormalizeModePathRel(t *testing.T) {
 	cases := map[string]string{
-		"modes/default/persona.md":          "modes/_default/persona.md",
-		"modes/Default/constraints.md":      "modes/_default/constraints.md",
-		"modes/_default/persona.md":         "modes/_default/persona.md",
-		"modes/_orchestrator/persona.md":    "modes/_default/persona.md",
-		"modes/work/persona.md":             "modes/work/persona.md",
+		"modes/default/persona.md":       "modes/_default/persona.md",
+		"modes/Default/constraints.md":   "modes/_default/constraints.md",
+		"modes/_default/persona.md":      "modes/_default/persona.md",
+		"modes/_orchestrator/persona.md": "modes/_default/persona.md",
+		"modes/work/persona.md":          "modes/work/persona.md",
 	}
 	for in, want := range cases {
 		if got := normalizeModePathRel(in); got != want {

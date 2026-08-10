@@ -253,7 +253,7 @@ func (t *caseArtifactTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	cwd := brain.OutputCwd()
 	by := strings.TrimSpace(p.ByMode)
 	if by == "" {
-		if w := brain.Active(); w != nil {
+		if w := chatWorkspaceFrom(ctx); w != nil {
 			by = brain.NormalizeModeID(w.ActiveMode)
 		}
 	}

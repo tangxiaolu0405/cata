@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	maxEventsGlobal   = 500
-	maxEventsPerKey   = 100
-	maxTextStore      = 2000
+	maxEventsGlobal = 500
+	maxEventsPerKey = 100
+	maxTextStore    = 2000
 )
 
 // ChannelEvent 渠道只读事件（不可由 UI 回写）。
@@ -25,11 +25,11 @@ type ChannelEvent struct {
 
 // Hub 内存环形缓冲 + 订阅者广播。
 type Hub struct {
-	mu      sync.RWMutex
-	seq     int64
-	events  []ChannelEvent
-	byKey   map[string][]ChannelEvent
-	subs    map[chan ChannelEvent]struct{}
+	mu     sync.RWMutex
+	seq    int64
+	events []ChannelEvent
+	byKey  map[string][]ChannelEvent
+	subs   map[chan ChannelEvent]struct{}
 }
 
 // DefaultHub 全局渠道只读事件中心。

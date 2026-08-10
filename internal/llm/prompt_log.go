@@ -18,8 +18,8 @@ const (
 )
 
 const (
-	llmLogPreviewRunes   = 240
-	llmLogFullTailMsgs   = 3 // 非 verbose 时，conversation 末尾几条保留全文
+	llmLogPreviewRunes = 240
+	llmLogFullTailMsgs = 3 // 非 verbose 时，conversation 末尾几条保留全文
 )
 
 func llmLogVerbose() bool {

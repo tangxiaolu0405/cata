@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	learningPlaybookHeader = "# Evolution learnings\n\n> 滚动账本（仅 long-term）：每轮 evolve 的 learning 审计摘要。可复用事实须经 updates[] 写入 persona/behavior/persona.local 或定向 memory/long/*.md——勿指望本文件当 SOP。\n"
+	learningPlaybookHeader   = "# Evolution learnings\n\n> 滚动账本（仅 long-term）：每轮 evolve 的 learning 审计摘要。可复用事实须经 updates[] 写入 persona/behavior/persona.local 或定向 memory/long/*.md——勿指望本文件当 SOP。\n"
 	maxLearningPlaybookBytes = 96 * 1024
 )
 

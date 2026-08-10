@@ -59,7 +59,7 @@ type Config struct {
 	QQSandbox          bool             `json:"qq_sandbox,omitempty"`
 	WorkerRoot         string           `json:"worker_root,omitempty"`
 	SocketPath         string           `json:"socket_path,omitempty"`
-	CataURL            string           `json:"cata_url,omitempty"` // 模式二/三预留
+	CataURL            string           `json:"cata_url,omitempty"`  // 模式二/三预留
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	Projects           []Project        `json:"projects,omitempty"`
 }
