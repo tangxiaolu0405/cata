@@ -22,19 +22,19 @@ const (
 	sidebarWidth         = 42
 	sidebarActivateWidth = 96 // 主区 + 侧栏最小总宽（见 agents.md）
 	minMainWidth         = 48
-	inputMinLines    = 3
-	inputMaxLines    = 8
-	inputLinesBorder = 2
+	inputMinLines        = 3
+	inputMaxLines        = 8
+	inputLinesBorder     = 2
 	// 粘贴多行时终端常在行间注入 Enter；短延迟可区分「粘贴」与「 intentional 发送」。
 	composeSendDelay = 80 * time.Millisecond
 )
 
 var (
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	styleUser    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	styleTool    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	styleErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	styleBorder  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238"))
+	styleDim          = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	styleUser         = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	styleTool         = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	styleErr          = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	styleBorder       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238"))
 	styleSidebar      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
 	styleSidebarLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 )
@@ -50,11 +50,11 @@ const (
 )
 
 type overlayState struct {
-	mode      overlayMode
-	list      list.Model
-	confirmID string
-	choiceID  string
-	multi     bool
+	mode       overlayMode
+	list       list.Model
+	confirmID  string
+	choiceID   string
+	multi      bool
 	subagentID string
 	subagentVP viewport.Model
 }
@@ -91,11 +91,11 @@ type model struct {
 	width  int
 	height int
 
-	vp     viewport.Model
+	vp        viewport.Model
 	sidebarVP viewport.Model
-	input  textarea.Model
-	log    string
-	lastIn string
+	input     textarea.Model
+	log       string
+	lastIn    string
 
 	streaming bool
 	overlay   *overlayState
@@ -147,11 +147,11 @@ func newModel(s *session, cwd string) model {
 		vp:        vp,
 		sidebarVP: newSidebarViewport(),
 		input:     ti,
-		log:     welcome,
-		stats:   paneStats{state: "ready", outputCwd: cwd},
-		runtime: brain.DetectRuntimeEnvFromProcess(),
-		width:   100,
-		height:  24,
+		log:       welcome,
+		stats:     paneStats{state: "ready", outputCwd: cwd},
+		runtime:   brain.DetectRuntimeEnvFromProcess(),
+		width:     100,
+		height:    24,
 	}
 	if w := brain.Active(); w != nil {
 		m.stats.wsID = w.ID
@@ -451,7 +451,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		case "clear", "reset":
 			r, err := m.sess.call(req{Command: "chat_reset"})
 			if err != nil {
-				m.appendLog(styleErr.Render("! "+err.Error()) + "\n", true)
+				m.appendLog(styleErr.Render("! "+err.Error())+"\n", true)
 				return m, nil
 			}
 			if !r.Success {
@@ -875,7 +875,10 @@ func matchSlash(line string) (string, bool) {
 	if cmd == "" {
 		return "", true
 	}
-	for _, c := range []struct{ n string; a []string }{
+	for _, c := range []struct {
+		n string
+		a []string
+	}{
 		{"exit", []string{"quit", "q"}},
 		{"clear", []string{"reset"}},
 		{"help", nil}, {"status", nil}, {"retry", nil}, {"config", nil}, {"cls", nil},
