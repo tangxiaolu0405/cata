@@ -167,6 +167,7 @@ func (m *model) sidebarText() string {
 	lines = append(lines, styleDim.Render("cata"))
 
 	lines = m.appendContextSidebarSections(lines, innerW)
+	lines = m.appendRunSidebarSection(lines, innerW)
 	lines = m.appendAgentsSidebarSection(lines, innerW)
 	lines = m.appendActivitySidebarSections(lines, innerW)
 
@@ -264,6 +265,21 @@ func (m *model) appendContextSidebarSections(lines []string, innerW int) []strin
 		return lines
 	}
 	return appendSidebarSection(lines, innerW, sidebarSection{"三根/上下文", body}, true)
+}
+
+// appendRunSidebarSection 侧栏「运行」区：一行概要 + 一行运行状态（随任务变化）。
+// 点击「状态」行会打开运行详情 overlay（见 tui_status.go）。
+func (m *model) appendRunSidebarSection(lines []string, innerW int) []string {
+	show := m.streaming || m.stats.round > 0 || strings.TrimSpace(m.stats.runSummary) != ""
+	if !show {
+		return lines
+	}
+	var body []string
+	if s := m.runSummaryLine(); s != "" {
+		body = append(body, "概要 "+s)
+	}
+	body = append(body, "状态 "+m.statusOneLine())
+	return appendSidebarSection(lines, innerW, sidebarSection{label: "运行", lines: body}, true)
 }
 
 func (m *model) appendActivitySidebarSections(lines []string, innerW int) []string {

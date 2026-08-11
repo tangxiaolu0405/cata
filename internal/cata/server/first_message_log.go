@@ -28,8 +28,46 @@ func (ss *SocketServer) emitFirstMessageDiagnosticsWithOutCwd(conn net.Conn, cli
 	_ = ss.emitStreamLine(conn, map[string]interface{}{
 		"type":    "log",
 		"level":   "info",
+		"summary": "[boot] 诊断 ws=" + wsIDLabel(ws) + " m=" + modelLabel(client) + " key=" + keyLabel(client),
 		"message": "[boot] 首次消息诊断（排障用，真实日志见 cata-server.log）\n" + diag,
 	})
+}
+
+// wsIDLabel 诊断概要用工作区短标签。
+func wsIDLabel(ws *brain.Workspace) string {
+	if ws == nil {
+		return "?"
+	}
+	if ws.ID != "" {
+		return ws.ID
+	}
+	return "?"
+}
+
+// modelLabel 诊断概要用模型名（截断避免侧栏换行）。
+func modelLabel(client *llm.Client) string {
+	if client == nil {
+		return "?"
+	}
+	m := strings.TrimSpace(client.ModelName())
+	if len(m) > 18 {
+		m = m[:16] + "…"
+	}
+	if m == "" {
+		return "?"
+	}
+	return m
+}
+
+// keyLabel 诊断概要用密钥状态。
+func keyLabel(client *llm.Client) string {
+	if client == nil {
+		return "?"
+	}
+	if client.APIKeyPresent() {
+		return "✓"
+	}
+	return "✗"
 }
 
 // firstMessageSnapshot 是诊断所需的全部快照字段（纯数据，便于单测 render）。

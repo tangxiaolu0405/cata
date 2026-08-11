@@ -175,7 +175,7 @@ func (m *model) logSubagentStart(id, task string) {
 	if rec := m.findSubagent(id); rec != nil && strings.HasPrefix(rec.Profile, "mode:") {
 		line = "[" + strings.TrimPrefix(rec.Profile, "mode:") + "] " + line
 	}
-	m.appendLog(styleSubagent.Render(fmt.Sprintf("▸ %s  %s\n", id, line)), true)
+	m.appendLog(styledLogLine(styleSubagent, fmt.Sprintf("▸ %s  %s", id, line)), true)
 }
 
 func (m *model) removeSubagent(id string) {
@@ -220,7 +220,7 @@ func (m *model) finishSubagent(id string, success bool, summary string) {
 	if !success {
 		mark = "✗"
 	}
-	m.appendLog(styleSubagent.Render(fmt.Sprintf("  %s %s  %s\n", mark, id, short)), true)
+	m.appendLog(styledLogLine(styleSubagent, fmt.Sprintf("  %s %s  %s", mark, id, short)), true)
 	m.removeSubagent(id)
 	m.syncSidebarViewport()
 }
@@ -237,7 +237,7 @@ func (m *model) handleSubagentStream(kind string, raw map[string]any) {
 	case "subagent_queued":
 		if m.upsertSubagent(id, str(raw["task"]), "", profile, "queued") {
 			m.logSubagentStart(id, str(raw["task"]))
-			m.appendLog(styleDim.Render(fmt.Sprintf("  %s  排队\n", id)), false)
+			m.appendLog(styledLogLine(styleDim, fmt.Sprintf("  %s  排队", id)), false)
 		}
 		m.syncSidebarViewport()
 	case "subagent_progress":
@@ -368,12 +368,20 @@ func (m *model) handleSidebarClick(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) 
 		nm, cmd := m.openSubagentView(id)
 		return nm, cmd, true
 	}
+	// 点击「运行」区的状态行 → 打开运行详情。
+	if m.statusLineAtSidebarLine(lineIdx) {
+		nm, cmd := m.openStatusView()
+		return nm, cmd, true
+	}
 	return m, nil, true
 }
 
 func (m *model) renderSubagentOverlay() string {
 	if m.overlay == nil {
 		return ""
+	}
+	if m.overlay.mode == overlayStatusView {
+		return m.renderStatusOverlay()
 	}
 	switch m.overlay.mode {
 	case overlaySubagentPick:

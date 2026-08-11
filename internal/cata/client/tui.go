@@ -47,6 +47,7 @@ const (
 	overlayChoice
 	overlaySubagentPick
 	overlaySubagentView
+	overlayStatusView
 )
 
 type overlayState struct {
@@ -57,6 +58,7 @@ type overlayState struct {
 	multi      bool
 	subagentID string
 	subagentVP viewport.Model
+	statusVP   viewport.Model
 }
 
 type paneStats struct {
@@ -75,6 +77,11 @@ type paneStats struct {
 	promptProfile       string
 	subagentRunning     int
 	subagentMax         int
+
+	// runSummary 一行概要：最近一条 log 事件摘要（服务端诊断等），不刷主区。
+	runSummary string
+	// runDetails 运行细节环形缓冲：log / progress / tool_start 等，供点击状态查看。
+	runDetails []string
 }
 
 type pickItem struct {
@@ -216,7 +223,7 @@ func (m *model) handleQuitKey() (tea.Model, tea.Cmd) {
 	if m.streaming {
 		if m.cancelRequested {
 			m.quitting = true
-			m.appendLog(styleDim.Render("\n— quit\n"), true)
+			m.appendLog(styledLogLine(styleDim, "\n— quit"), true)
 			return m, tea.Quit
 		}
 		m.cancelRequested = true
@@ -225,7 +232,7 @@ func (m *model) handleQuitKey() (tea.Model, tea.Cmd) {
 			m.overlay = nil
 		}
 		_ = m.sess.write(req{Command: "chat_cancel"})
-		m.appendLog(styleDim.Render("\n— cancel requested (ctrl+c again to quit)\n"), true)
+		m.appendLog(styledLogLine(styleDim, "\n— cancel requested (ctrl+c again to quit)"), true)
 		m.stats.state = "cancelling"
 		return m, waitStream(m.sess)
 	}
@@ -324,7 +331,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
-			m.appendLog(styleDim.Render("disconnected — try again\n"), true)
+			m.appendLog(styledLogLine(styleDim, "disconnected — try again"), true)
 			if err := EnsureServer(); err != nil {
 				m.appendLog(styleErr.Render("! server: "+err.Error())+"\n", true)
 			} else if ns, e := dial(); e == nil {
@@ -332,7 +339,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 					_ = old.conn.Close()
 				}
 				m.sess = ns
-				m.appendLog(styleDim.Render("reconnected\n"), true)
+				m.appendLog(styledLogLine(styleDim, "reconnected"), true)
 			}
 		}
 		return m, m.input.Focus()
@@ -352,15 +359,22 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.syncSidebarViewport()
 	case "progress":
 		m.stats.state = str(ev.raw["message"])
+		m.appendRunDetail("• " + str(ev.raw["message"]))
+		m.syncSidebarViewport()
 	case "log":
-		// 服务端诊断日志（如首次消息诊断），直接展示在主区。
-		if msg := str(ev.raw["message"]); msg != "" {
-			m.appendLog(styleDim.Render(msg)+"\n", true)
+		// 服务端诊断日志（如首次消息诊断）：全文进 cata-server.log，主区不再刷屏；
+		// 侧栏只保留一行概要，完整内容进运行细节，点击「状态」可查看。
+		msg := str(ev.raw["message"])
+		if msg != "" {
+			m.setRunSummary(str(ev.raw["summary"]), msg)
+			m.appendRunDetail(msg)
+			m.syncSidebarViewport()
 		}
 	case "tool_start":
 		if n := str(ev.raw["name"]); n != "" {
 			m.stats.lastTool = n
 			m.stats.state = n
+			m.appendRunDetail("▸ " + n)
 			if m.displayMode == "quiet" {
 				break
 			}
@@ -383,7 +397,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	case "exec_confirm_required":
 		return m.startConfirmOverlay(ev.raw)
 	case "exec_denied":
-		m.appendLog(styleDim.Render("— cancelled\n"), true)
+		m.appendLog(styledLogLine(styleDim, "— cancelled"), true)
 	case "exec_done":
 		m.sess.lastExecCmd = execLine(ev.raw)
 		m.sess.lastExecCwd = str(ev.raw["cwd"])
@@ -392,20 +406,26 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		}
 	case "error":
 		m.appendLog(styleErr.Render("! "+str(ev.raw["message"]))+"\n", true)
+		m.appendRunDetail("! " + str(ev.raw["message"]))
+		m.syncSidebarViewport()
 	case "user_choice":
 		return m.startChoiceOverlay(ev.raw)
 	case "done":
 		if ev.raw["cancelled"] == true {
-			m.appendLog(styleDim.Render("\n— stopped\n"), true)
+			m.appendLog(styledLogLine(styleDim, "\n— stopped"), true)
+			m.appendRunDetail("— stopped")
 		} else if ev.raw["success"] != true {
-			m.appendLog(styleErr.Render("\n! chat failed\n"), true)
+			m.appendLog(styledLogLine(styleErr, "\n! chat failed"), true)
+			m.appendRunDetail("! chat failed")
 		} else {
 			m.appendLog("\n", true)
+			m.appendRunDetail("✓ done")
 		}
 		m.stats.state = "ready"
 		m.streaming = false
 		m.cancelRequested = false
 		m.input.Focus()
+		m.syncSidebarViewport()
 		return m, m.input.Focus()
 	}
 
@@ -435,7 +455,7 @@ func (m *model) startConfirmOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 	l.SetFilteringEnabled(false)
 	m.overlay = &overlayState{mode: overlayConfirm, list: l, confirmID: id}
 	m.stats.state = "confirm run"
-	m.appendLog(styleTool.Render("\n▸ run_command 待确认 (↑↓ 选 Run/Cancel，Enter 确认，Esc 取消)\n"), true)
+	m.appendLog(styledLogLine(styleTool, "\n▸ run_command 待确认 (↑↓ 选 Run/Cancel，Enter 确认，Esc 取消)"), true)
 	return m, nil
 }
 
@@ -444,12 +464,12 @@ func (m *model) dismissOverlayWithCancel() {
 	case overlayConfirm:
 		if m.overlay.confirmID != "" {
 			_ = m.sess.write(req{Command: "exec_confirm", ConfirmID: m.overlay.confirmID, Approved: false})
-			m.appendLog(styleDim.Render("— command cancelled (Esc)\n"), true)
+			m.appendLog(styledLogLine(styleDim, "— command cancelled (Esc)"), true)
 		}
 	case overlayChoice:
 		if m.overlay.choiceID != "" {
 			_ = m.sess.writeChoice(m.overlay.choiceID, nil)
-			m.appendLog(styleDim.Render("— choice cancelled (Esc)\n"), true)
+			m.appendLog(styledLogLine(styleDim, "— choice cancelled (Esc)"), true)
 		}
 	}
 	m.overlay = nil
@@ -464,7 +484,7 @@ func (m *model) startChoiceOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 		items = append(items, pickItem{id: o.id, title: o.label, desc: o.desc})
 	}
 	if len(items) < 2 {
-		m.appendLog(styleErr.Render("! invalid user_choice\n"), true)
+		m.appendLog(styledLogLine(styleErr, "! invalid user_choice"), true)
 		return m, waitStream(m.sess)
 	}
 	l := list.New(items, list.NewDefaultDelegate(), 50, min(12, len(items)+2))
@@ -478,7 +498,7 @@ func (m *model) startChoiceOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
-		if m.overlay.mode == overlaySubagentView {
+		if m.overlay.mode == overlaySubagentView || m.overlay.mode == overlayStatusView {
 			m.overlay = nil
 			if m.streaming {
 				return m, waitStream(m.sess)
@@ -495,7 +515,7 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
-		if m.overlay.mode == overlaySubagentView {
+		if m.overlay.mode == overlaySubagentView || m.overlay.mode == overlayStatusView {
 			return m, nil
 		}
 		it, ok := m.overlay.list.SelectedItem().(pickItem)
@@ -507,7 +527,7 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			okRun := it.id == "run"
 			_ = m.sess.write(req{Command: "exec_confirm", ConfirmID: m.overlay.confirmID, Approved: okRun})
 			if !okRun {
-				m.appendLog(styleDim.Render("— command cancelled\n"), true)
+				m.appendLog(styledLogLine(styleDim, "— command cancelled"), true)
 			}
 			m.overlay = nil
 			return m, waitStream(m.sess)
@@ -525,14 +545,26 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openSubagentView(it.id)
 		}
 	}
-	if m.overlay.mode == overlaySubagentView {
+	if m.overlay.mode == overlaySubagentView || m.overlay.mode == overlayStatusView {
 		var cmd tea.Cmd
-		m.overlay.subagentVP, cmd = m.overlay.subagentVP.Update(key)
+		vp := &m.overlay.subagentVP
+		if m.overlay.mode == overlayStatusView {
+			vp = &m.overlay.statusVP
+		}
+		*vp, cmd = vp.Update(key)
 		return m, cmd
 	}
 	var cmd tea.Cmd
 	m.overlay.list, cmd = m.overlay.list.Update(key)
 	return m, cmd
+}
+
+// styledLogLine 渲染一行日志文本，并把行尾换行放在样式之外。
+// lipgloss 的 Render 会把多行文本的每一行补齐到最宽行；若文本以 \n 结尾，
+// 末尾空行会被补成空格，这些空格会与后续追加的内容合并，导致 TUI 输出整体右移。
+// 把 \n 移到样式外即可避免该问题。
+func styledLogLine(st lipgloss.Style, text string) string {
+	return st.Render(strings.TrimRight(text, "\n")) + "\n"
 }
 
 func (m *model) appendLog(s string, scroll bool) {
