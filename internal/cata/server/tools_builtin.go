@@ -45,6 +45,7 @@ func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
 	reg.Register(&scheduleTaskTool{})
 	reg.Register(&scheduleListTool{})
 	reg.Register(&scheduleRemoveTool{})
+	reg.Register(&scheduleCancelTool{})
 }
 
 // --- read_file ---

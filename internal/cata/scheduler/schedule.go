@@ -181,7 +181,7 @@ func Save(s *Schedule) error {
 	if s.CreatedAt == "" {
 		s.CreatedAt = clock.RFC3339()
 	}
-	if s.NextRun == "" {
+	if s.NextRun == "" && s.Enabled {
 		if next, err := s.NextFire(clock.Now()); err == nil {
 			s.NextRun = clock.FormatTime(next, time.RFC3339)
 		}

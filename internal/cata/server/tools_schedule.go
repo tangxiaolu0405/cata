@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"cata/internal/cata/brain"
@@ -22,6 +24,31 @@ var ensureSchedulerDaemon = func() error {
 	return err
 }
 
+// scheduleInScope 判断某条排程是否属于当前 chat 工作区（chat 管理不跨工作区）：
+//   - 项目级排程（project 非空）：只属于该项目根；
+//   - 机器级排程：属于创建它的工作区（ws_id 匹配；旧版无 ws_id 时按 cwd 归属判断）。
+func scheduleInScope(s *scheduler.Schedule, cc *brain.ChatContext) bool {
+	if s == nil || cc == nil {
+		return false
+	}
+	if strings.TrimSpace(s.Project) != "" {
+		return cc.WS != nil && cc.WS.RootPath == s.Project
+	}
+	if s.WSID != "" {
+		return cc.WS != nil && cc.WS.ID == s.WSID
+	}
+	root := ""
+	if cc.WS != nil {
+		root = cc.WS.RootPath
+	}
+	if root == "" {
+		root = cc.OutputCwd
+	}
+	root = strings.TrimRight(filepath.Clean(root), string(os.PathSeparator))
+	cwd := strings.TrimRight(filepath.Clean(s.Cwd), string(os.PathSeparator))
+	return cwd != "" && (cwd == root || strings.HasPrefix(cwd, root+string(os.PathSeparator)))
+}
+
 // --- schedule_task ---
 
 type scheduleTaskTool struct{}
@@ -31,7 +58,7 @@ func (t *scheduleTaskTool) Name() string { return "schedule_task" }
 func (t *scheduleTaskTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "schedule_task",
-		Description: "Create or update a self-hosted scheduled task. Exactly one of cron (5 fields: minute hour day month weekday, e.g. \"0 9 * * *\") or interval (e.g. \"24h\", \"30m\") is required. Stored in the current project .cata/schedules (machine ~/.cata/schedules for ephemeral dirs) and discovered by the cata schedule daemon. At trigger time the daemon acts as a real client and runs a full chat in the current workspace with browser MCP available; ask_user is auto-skipped and run_command requires allow_exec=true.",
+		Description: "Create or update a self-hosted scheduled task. Exactly one of cron (5 fields: minute hour day month weekday, e.g. \"0 9 * * *\") or interval (e.g. \"24h\", \"30m\") is required. Stored in the current project .cata/schedules (machine ~/.cata/schedules for ephemeral dirs) and discovered by the cata schedule daemon. The task is scoped to this workspace: schedule_list / schedule_remove / schedule_cancel only see tasks created here. At trigger time the daemon acts as a real client and runs a full chat in the task's workspace with browser MCP available; ask_user is auto-skipped and run_command requires allow_exec=true.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{
 			"name":{"type":"string","description":"Task name (stable id derived from it)"},
 			"prompt":{"type":"string","description":"Instruction executed when the task fires, e.g. daily product research on a marketplace"},
@@ -128,7 +155,7 @@ func (t *scheduleListTool) Name() string { return "schedule_list" }
 func (t *scheduleListTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "schedule_list",
-		Description: "List all scheduled tasks with id, cron/interval, enabled, next_run, and last run status.",
+		Description: "List scheduled tasks in the current workspace with id, cron/interval, enabled, next_run, and last run status (tasks never cross workspaces).",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{},"required":[]}`),
 	}}
 }
@@ -138,13 +165,20 @@ func (t *scheduleListTool) Execute(ctx context.Context, _ net.Conn, argsJSON str
 	if err != nil {
 		return "", fmt.Errorf("schedule_list: %w", err)
 	}
-	if len(all) == 0 {
-		return "No scheduled tasks. Use schedule_task to create one.", nil
+	cc := brain.ChatContextFrom(ctx)
+	var in []*scheduler.Schedule
+	for _, s := range all {
+		if scheduleInScope(s, cc) {
+			in = append(in, s)
+		}
+	}
+	if len(in) == 0 {
+		return "No scheduled tasks in this workspace. Use schedule_task to create one.", nil
 	}
 	var b strings.Builder
 	b.WriteString("| id | name | schedule | enabled | next_run | last_run |\n")
 	b.WriteString("|---|---|---|---|---|---|\n")
-	for _, s := range all {
+	for _, s := range in {
 		sched := s.Cron
 		if sched == "" {
 			sched = "every " + s.Interval
@@ -185,8 +219,63 @@ func (t *scheduleRemoveTool) Execute(ctx context.Context, _ net.Conn, argsJSON s
 	if strings.TrimSpace(p.ID) == "" {
 		return "", fmt.Errorf("schedule_remove: id required")
 	}
+	found, _, err := scheduler.Find(p.ID)
+	if err != nil {
+		return "", fmt.Errorf("schedule_remove: %w", err)
+	}
+	if found == nil {
+		return "", fmt.Errorf("schedule_remove: no scheduled task %q", p.ID)
+	}
+	if !scheduleInScope(found, brain.ChatContextFrom(ctx)) {
+		return "", fmt.Errorf("schedule_remove: no scheduled task %q in this workspace", p.ID)
+	}
 	if err := scheduler.Remove(p.ID); err != nil {
 		return "", fmt.Errorf("schedule_remove: %w", err)
 	}
 	return fmt.Sprintf("schedule_remove: removed %s", p.ID), nil
+}
+
+// --- schedule_cancel ---
+
+type scheduleCancelTool struct{}
+
+func (t *scheduleCancelTool) Name() string { return "schedule_cancel" }
+
+func (t *scheduleCancelTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{
+		Name:        "schedule_cancel",
+		Description: "Cancel a scheduled task in the current workspace: disable it so it no longer triggers. The definition is kept; re-enable later with schedule_task using the same name and enabled=true.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Task id (see schedule_list)"}},"required":["id"]}`),
+	}}
+}
+
+func (t *scheduleCancelTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("schedule_cancel args: %w", err)
+	}
+	if strings.TrimSpace(p.ID) == "" {
+		return "", fmt.Errorf("schedule_cancel: id required")
+	}
+	found, _, err := scheduler.Find(p.ID)
+	if err != nil {
+		return "", fmt.Errorf("schedule_cancel: %w", err)
+	}
+	if found == nil {
+		return "", fmt.Errorf("schedule_cancel: no scheduled task %q", p.ID)
+	}
+	if !scheduleInScope(found, brain.ChatContextFrom(ctx)) {
+		return "", fmt.Errorf("schedule_cancel: no scheduled task %q in this workspace", p.ID)
+	}
+	if !found.Enabled {
+		return fmt.Sprintf("schedule_cancel: %s already cancelled (enabled=false)", p.ID), nil
+	}
+	found.Enabled = false
+	found.NextRun = "" // Save 对 disabled 排程不再重算 next_run
+	if err := scheduler.Save(found); err != nil {
+		return "", fmt.Errorf("schedule_cancel: %w", err)
+	}
+	return fmt.Sprintf("schedule_cancel: %s cancelled (enabled=false, no longer triggers); re-enable with schedule_task name=%q enabled=true", p.ID, found.Name), nil
 }

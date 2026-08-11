@@ -162,7 +162,7 @@ func TestScheduleListAndRemove(t *testing.T) {
 	}
 
 	list := &scheduleListTool{}
-	out, err := list.Execute(context.Background(), nil, `{}`)
+	out, err := list.Execute(scheduleCtx(ws), nil, `{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,15 +171,15 @@ func TestScheduleListAndRemove(t *testing.T) {
 	}
 
 	rm := &scheduleRemoveTool{}
-	if _, err := rm.Execute(context.Background(), nil, `{"id":"task-a"}`); err != nil {
+	if _, err := rm.Execute(scheduleCtx(ws), nil, `{"id":"task-a"}`); err != nil {
 		t.Fatal(err)
 	}
 	if s, _ := scheduler.Load("task-a"); s != nil {
 		t.Fatalf("task-a should be removed, got %+v", s)
 	}
-	// 删除不存在的 → 不报错。
-	if _, err := rm.Execute(context.Background(), nil, `{"id":"nope"}`); err != nil {
-		t.Fatalf("remove missing should not error: %v", err)
+	// 删除不存在的 → 报错。
+	if _, err := rm.Execute(scheduleCtx(ws), nil, `{"id":"nope"}`); err == nil {
+		t.Fatal("remove missing should error")
 	}
 	// 空 id → 报错。
 	if _, err := rm.Execute(context.Background(), nil, `{"id":""}`); err == nil {
@@ -235,7 +235,7 @@ func TestScheduleTaskProjectLevelStorage(t *testing.T) {
 	if _, err := brain.ResolveWorkspace(ws.RootPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (&scheduleRemoveTool{}).Execute(context.Background(), nil, `{"id":"proj-task"}`); err != nil {
+	if _, err := (&scheduleRemoveTool{}).Execute(scheduleCtx(ws), nil, `{"id":"proj-task"}`); err != nil {
 		t.Fatal(err)
 	}
 	if fileExists(got) {
@@ -298,3 +298,173 @@ func TestScheduleTaskSkipsDaemonWhenSchedulesDisabled(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// scheduleCrossWorkspaceContext 构造两个已注册的 git 工作区（项目级排程依赖 registry 发现）。
+func scheduleCrossWorkspaceContext(t *testing.T) (*brain.Workspace, *brain.Workspace) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvCataHome, home)
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	for _, root := range []string{rootA, rootB} {
+		if _, err := brain.ResolveWorkspace(root); err != nil {
+			t.Fatalf("ResolveWorkspace(%s): %v", root, err)
+		}
+	}
+	wsA := &brain.Workspace{ID: "ws-a", RootPath: rootA, Kind: brain.KindGit, ActiveMode: brain.ModeDefaultID}
+	wsB := &brain.Workspace{ID: "ws-b", RootPath: rootB, Kind: brain.KindGit, ActiveMode: brain.ModeDefaultID}
+	for _, ws := range []*brain.Workspace{wsA, wsB} {
+		if err := os.MkdirAll(ws.ModeDir(brain.ModeDefaultID), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := ensureSchedulerDaemon
+	ensureSchedulerDaemon = func() error { return nil }
+	t.Cleanup(func() { ensureSchedulerDaemon = old })
+	return wsA, wsB
+}
+
+func TestScheduleListScopedToWorkspace(t *testing.T) {
+	wsA, wsB := scheduleCrossWorkspaceContext(t)
+	if _, err := (&scheduleTaskTool{}).Execute(scheduleCtx(wsA), nil, `{"name":"a-task","prompt":"a","interval":"1h"}`); err != nil {
+		t.Fatal(err)
+	}
+	list := &scheduleListTool{}
+	outA, err := list.Execute(scheduleCtx(wsA), nil, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(outA, "a-task") {
+		t.Fatalf("workspace A should see its own task:\n%s", outA)
+	}
+	outB, err := list.Execute(scheduleCtx(wsB), nil, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(outB, "a-task") {
+		t.Fatalf("workspace B must not see A's task (no cross-workspace):\n%s", outB)
+	}
+}
+
+func TestScheduleMachineLevelScopedToCreatingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvCataHome, home)
+	wsA := &brain.Workspace{ID: "ws-a", RootPath: t.TempDir(), ActiveMode: brain.ModeDefaultID}
+	wsB := &brain.Workspace{ID: "ws-b", RootPath: t.TempDir(), ActiveMode: brain.ModeDefaultID}
+	for _, ws := range []*brain.Workspace{wsA, wsB} {
+		if err := os.MkdirAll(ws.ModeDir(brain.ModeDefaultID), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := ensureSchedulerDaemon
+	ensureSchedulerDaemon = func() error { return nil }
+	t.Cleanup(func() { ensureSchedulerDaemon = old })
+
+	if _, err := (&scheduleTaskTool{}).Execute(scheduleCtx(wsA), nil, `{"name":"m-task","prompt":"p","interval":"1h"}`); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(config.CataHome(), "schedules", "m-task.json")
+	if !fileExists(path) {
+		t.Fatalf("machine-level schedule file missing at %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"ws_id": "ws-a"`) {
+		t.Fatalf("machine-level task should carry ws_id ws-a:\n%s", data)
+	}
+
+	list := &scheduleListTool{}
+	outA, err := list.Execute(scheduleCtx(wsA), nil, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(outA, "m-task") {
+		t.Fatalf("workspace A should see its own machine-level task:\n%s", outA)
+	}
+	outB, err := list.Execute(scheduleCtx(wsB), nil, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(outB, "m-task") {
+		t.Fatalf("workspace B must not see A's machine-level task:\n%s", outB)
+	}
+}
+
+func TestScheduleCancel(t *testing.T) {
+	ws := scheduleTestContext(t)
+	if _, err := (&scheduleTaskTool{}).Execute(scheduleCtx(ws), nil, `{"name":"cancel-me","prompt":"p","interval":"1h"}`); err != nil {
+		t.Fatal(err)
+	}
+	cancel := &scheduleCancelTool{}
+	out, err := cancel.Execute(scheduleCtx(ws), nil, `{"id":"cancel-me"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "cancel-me") || !strings.Contains(out, "enabled=false") {
+		t.Fatalf("cancel output: %s", out)
+	}
+	s, err := scheduler.Load("cancel-me")
+	if err != nil || s == nil {
+		t.Fatalf("Load = (%v, %v)", s, err)
+	}
+	if s.Enabled {
+		t.Fatal("task should be disabled after cancel")
+	}
+	if s.NextRun != "" {
+		t.Fatalf("next_run should be cleared after cancel, got %q", s.NextRun)
+	}
+
+	// 再次取消 → 幂等。
+	if _, err := cancel.Execute(scheduleCtx(ws), nil, `{"id":"cancel-me"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 跨工作区取消 → 拒绝。
+	wsB := &brain.Workspace{ID: "ws-b", RootPath: t.TempDir(), ActiveMode: brain.ModeDefaultID}
+	if err := os.MkdirAll(wsB.ModeDir(brain.ModeDefaultID), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cancel.Execute(scheduleCtx(wsB), nil, `{"id":"cancel-me"}`); err == nil {
+		t.Fatal("cross-workspace cancel should be refused")
+	}
+
+	// 重新启用：schedule_task 同名 + enabled=true → next_run 重算。
+	if _, err := (&scheduleTaskTool{}).Execute(scheduleCtx(ws), nil, `{"name":"cancel-me","prompt":"p","interval":"1h","enabled":true}`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := scheduler.Load("cancel-me")
+	if err != nil || s2 == nil {
+		t.Fatalf("Load after re-enable = (%v, %v)", s2, err)
+	}
+	if !s2.Enabled {
+		t.Fatal("re-enable should set enabled=true")
+	}
+	if s2.NextRun == "" {
+		t.Fatal("re-enabled task should have next_run")
+	}
+}
+
+func TestScheduleRemoveScopedToWorkspace(t *testing.T) {
+	wsA, wsB := scheduleCrossWorkspaceContext(t)
+	if _, err := (&scheduleTaskTool{}).Execute(scheduleCtx(wsA), nil, `{"name":"a-rm","prompt":"p","interval":"1h"}`); err != nil {
+		t.Fatal(err)
+	}
+	rm := &scheduleRemoveTool{}
+	// B 删除 A 的任务 → 拒绝（不泄露存在性）。
+	if _, err := rm.Execute(scheduleCtx(wsB), nil, `{"id":"a-rm"}`); err == nil {
+		t.Fatal("cross-workspace remove should be refused")
+	}
+	// A 删除自己的 → 成功。
+	if _, err := rm.Execute(scheduleCtx(wsA), nil, `{"id":"a-rm"}`); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(wsA.RootPath, brain.ProjectCataDir, "schedules", "a-rm.json")) {
+		t.Fatal("a-rm project schedule file should be removed")
+	}
+	// 已删除 → 再删报错。
+	if _, err := rm.Execute(scheduleCtx(wsA), nil, `{"id":"a-rm"}`); err == nil {
+		t.Fatal("removing missing should error")
+	}
+}

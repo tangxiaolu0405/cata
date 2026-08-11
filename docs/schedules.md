@@ -10,8 +10,9 @@ cata 支持「到点自动跑一轮完整 chat」的**自托管**入口：调度
 | 工具 | 作用 |
 |------|------|
 | `schedule_task` | 创建/更新一条排程：`name` + `prompt`，`cron`（5 字段）与 `interval`（如 `24h`/`30m`）二选一；可选 `output_dir` / `allow_exec` / `enabled` |
-| `schedule_list` | 列出全部排程（id、cron/interval、enabled、next_run、last_run） |
-| `schedule_remove` | 按 id 删除排程 |
+| `schedule_list` | 列出**当前工作区**的排程（id、cron/interval、enabled、next_run、last_run） |
+| `schedule_cancel` | 取消当前工作区的一条排程（置 `enabled=false` 不再触发，保留定义，可再用 `schedule_task` 同名 `enabled=true` 恢复） |
+| `schedule_remove` | 删除当前工作区的一条排程 |
 
 示例：
 
@@ -19,6 +20,8 @@ cata 支持「到点自动跑一轮完整 chat」的**自托管**入口：调度
 schedule_task name=每日选品 prompt="去跨境电商平台看今日热门商品，整理候选清单写报告" cron="0 9 * * *"
 schedule_task name=每小时巡检 prompt="检查本地服务状态并汇报" interval="1h" allow_exec=true
 schedule_list
+schedule_cancel id=每小时巡检     # 取消，不再触发（保留定义，可恢复）
+schedule_remove id=每日选品       # 删除
 ```
 
 ## 存储与发现（机器级 + 项目级）
@@ -35,6 +38,20 @@ schedule_list
 2. 每个**已注册工作区**（registry）的 `<root>/.cata/schedules/`（`--dir` 可额外注册项目根）。
 
 同 id 出现在多处时机器级优先（每任务一个定义）。`schedule_list` 也走同一发现（`ListAll`）。
+
+## 工作区边界（任务不跨工作区）
+
+排程**绑定创建它的工作区**，chat 内管理工具不跨工作区：
+
+- **项目级排程**（`project` 非空）只属于该项目根：在其它项目里 `schedule_list` 看不到、
+  `schedule_cancel` / `schedule_remove` 也拒绝操作。
+- **机器级排程**（临时目录创建）属于创建它的工作区：按 `ws_id` 归属（旧版无 `ws_id` 时按
+  `cwd` 是否落在当前工作区内判断）。
+- **执行也不跨**：每条排程记录创建时的 `cwd`/`ws_id`，到点后由守护以该工作区身份发起
+  （`run_as=scheduled`），报告/审计写回该工作区的 `.cata`，不会在别的产出区执行。
+
+调度守护的**环境发现**（`ListAll`）仍然是全环境的（机器级 + 所有已注册工作区的项目级）——
+发现谁、何时执行是框架职责；归属与管理边界是聊天工具职责。
 
 ## 调度框架（`cata schedule`）
 
