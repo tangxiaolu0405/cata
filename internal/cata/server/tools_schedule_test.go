@@ -13,6 +13,7 @@ import (
 )
 
 // scheduleTestContext 用临时 CATA_HOME + 临时 workspace 构造 schedule 工具测试环境。
+// 测试里把 ensureSchedulerDaemon 换成 no-op（避免真拉起调度守护/递归执行测试二进制）。
 func scheduleTestContext(t *testing.T) *brain.Workspace {
 	t.Helper()
 	home := t.TempDir()
@@ -23,6 +24,9 @@ func scheduleTestContext(t *testing.T) *brain.Workspace {
 	if err := os.MkdirAll(ws.ModeDir(brain.ModeDefaultID), 0755); err != nil {
 		t.Fatal(err)
 	}
+	old := ensureSchedulerDaemon
+	ensureSchedulerDaemon = func() error { return nil }
+	t.Cleanup(func() { ensureSchedulerDaemon = old })
 	return ws
 }
 
@@ -236,5 +240,33 @@ func TestScheduleTaskProjectLevelStorage(t *testing.T) {
 	}
 	if fileExists(got) {
 		t.Fatal("project schedule should be removed")
+	}
+}
+
+func TestScheduleTaskEnsuresDaemonWhenEnabled(t *testing.T) {
+	ws := scheduleTestContext(t)
+	called := 0
+	old := ensureSchedulerDaemon
+	ensureSchedulerDaemon = func() error { called++; return nil }
+	defer func() { ensureSchedulerDaemon = old }()
+
+	tool := &scheduleTaskTool{}
+	out, err := tool.Execute(scheduleCtx(ws), nil, `{"name":"daemon-check","prompt":"p","interval":"1h"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 {
+		t.Fatalf("ensureSchedulerDaemon called %d times, want 1 (enabled default true)", called)
+	}
+	if !strings.Contains(out, "调度守护已在后台运行") {
+		t.Fatalf("output should mention daemon running: %s", out)
+	}
+
+	// 显式 enabled=false 不拉起守护。
+	if _, err := tool.Execute(scheduleCtx(ws), nil, `{"name":"daemon-off","prompt":"p","interval":"1h","enabled":false}`); err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 {
+		t.Fatalf("disabled task should not ensure daemon, called=%d", called)
 	}
 }

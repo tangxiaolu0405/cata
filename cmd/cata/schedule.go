@@ -68,6 +68,45 @@ func runSchedule(args []string) {
 		tick = time.Duration(tickSec) * time.Second
 	}
 
+	// --once：不抢守护锁（可挂系统 cron），同步扫一轮到点任务后退出。
+	if once {
+		srv, err := ensureServer()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cata schedule: ensure server: %v\n", err)
+			os.Exit(1)
+		}
+		socketPath := config.ResolvedSocketPath()
+		engine := scheduler.NewEngine(tick, func(ctx context.Context, s *scheduler.Schedule) (scheduler.RunResult, error) {
+			if err := ensureServerRunning(); err != nil {
+				return scheduler.RunResult{}, err
+			}
+			return runner.Run(ctx, s, socketPath)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		n, err := engine.RunOnce(ctx)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cata schedule --once: %v\n", err)
+		}
+		log.Printf("cata schedule --once: executed %d due task(s)", n)
+		stopServer(srv)
+		return
+	}
+
+	// 守护模式：先抢进程级单例锁（~/.cata/schedules/daemon.sock），
+	// 避免多个守护并存重复触发同一任务；已有守护在跑则直接退出。
+	ln, acquired, err := scheduler.AcquireDaemonLock()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata schedule: acquire daemon lock: %v\n", err)
+		os.Exit(1)
+	}
+	if !acquired {
+		log.Println("cata schedule: scheduler daemon already running (single instance); exiting")
+		return
+	}
+	defer ln.Close()
+	defer os.Remove(scheduler.DaemonSocketPath())
+
 	// 自托管：如无 server 则本进程内置一个（cata run 语义）；已有则复用。
 	srv, err := ensureServer()
 	if err != nil {
@@ -82,18 +121,6 @@ func runSchedule(args []string) {
 		}
 		return runner.Run(ctx, s, socketPath)
 	})
-
-	if once {
-		ctx, cancel := context.WithCancel(context.Background())
-		n, err := engine.RunOnce(ctx)
-		cancel()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "cata schedule --once: %v\n", err)
-		}
-		log.Printf("cata schedule --once: executed %d due task(s)", n)
-		stopServer(srv)
-		return
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	engine.Start(ctx)

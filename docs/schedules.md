@@ -45,6 +45,13 @@ cata schedule --dir ~/proj # 额外注册项目根（供项目级排程发现）
 cata schedule --tick 15    # 扫描周期（秒；默认 config.schedules.tick_seconds=30）
 ```
 
+- **chat 里创建后不用管**：`schedule_task` 创建/启用任务时，server 会自动确保调度守护
+  在后台运行（`scheduler.EnsureDaemonRunning`：`setsid` 脱离会话拉起 `cata schedule`，
+  日志 `~/.cata/schedules/daemon.log`）。之后关掉 chat、managed server 退出也不影响——
+  守护自己内嵌 server，到点以真实客户端自发起执行。
+- **单例**：守护进程 bind `~/.cata/schedules/daemon.sock` 作为进程级单例锁；
+  已有守护在跑时再起 `cata schedule` 会直接退出（stale socket 自动清理）。
+  手动 `cata schedule` 与自动拉起二选一即可；有守护在跑时不需要再挂 `--once`。
 - 守护进程按 tick 周期扫描；到点（`next_run <= now`）且未在运行（防重入）即触发。
 - **触发即「客户端自发起」**：通过 `internal/cata/scheduler/runner` 拨号 server Unix socket，
   以真实 chat 客户端身份发一轮 chat（`run_as=scheduled`）；无 server 时本进程内嵌一个（`cata run` 语义），
@@ -73,6 +80,7 @@ cata schedule --tick 15    # 扫描周期（秒；默认 config.schedules.tick_s
 ```
 
 server 自身不再内嵌调度引擎（无 keep_alive 等保活配置）；排程执行完全由 `cata schedule` 守护进程承担。
+守护由 chat 内 `schedule_task` 首次创建/启用任务时自动拉起；手动 `cata schedule` 或系统 cron `--once` 仍可用。
 
 ## 已知限制
 

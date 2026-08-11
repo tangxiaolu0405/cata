@@ -110,7 +110,7 @@
 ## 定时任务（自托管调度框架）
 
 - **入口**：chat 内工具 `schedule_task` / `schedule_list` / `schedule_remove`（Standard/Full 档）；排程定义落在**机器级** `~/.cata/schedules/<id>.json` 或**项目级** `<project>/.cata/schedules/<id>.json`（git/workspace.yaml 工作区写项目级，随项目 `.cata` 分发），id 由名称稳定生成（保留中文/字母/数字）。
-- **调度框架**：`cata schedule` 守护进程**发现环境里的任务**（机器级 + 所有已注册工作区的项目级，`ListAll`），按 `schedules.tick_seconds`（默认 30s）扫描；到点且未在运行即触发（错过只补一次，无历史补跑队列）。`cata schedule --once` 可挂系统 cron。
+- **调度框架**：`cata schedule` 守护进程**发现环境里的任务**（机器级 + 所有已注册工作区的项目级，`ListAll`），按 `schedules.tick_seconds`（默认 30s）扫描；到点且未在运行即触发（错过只补一次，无历史补跑队列）。`schedule_task` 创建/启用任务时自动拉起守护（`EnsureDaemonRunning`，`setsid` + `~/.cata/schedules/daemon.sock` 单例锁，日志 `daemon.log`）——**chat 里指定后不用管，后台自动执行**；`cata schedule --once` 可挂系统 cron。
 - **执行**：到点后由 `internal/cata/scheduler/runner` **作为真实 socket 客户端自发起**一轮 chat（`run_as=scheduled`，与客户自己发起一致）；`ask_user` 自动跳过、`user_choice` 全空、`run_command` 需 `allow_exec=true`。产出：报告 `<project>/.cata/schedule-runs/<id>/<ts>.md`（可 `output_dir` 改绝对目录）+ 审计 `<存储目录>/runs/<id>/<ts>.jsonl`；chat 循环照常写短期记忆。
 - **server 不内嵌调度**：managed server 不再因排程保活；执行由独立 `cata schedule` 守护承担（无 server 时内嵌一个，已有则复用）。
 - **边界**：定时任务跳过任务状态机（不污染前台 `declare_task`）；与前台并行时复用 server 全局 Active 模式（同多 chat 并行行为）。详见 **`docs/schedules.md`**。

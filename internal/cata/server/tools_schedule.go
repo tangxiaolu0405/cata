@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 
@@ -11,6 +12,14 @@ import (
 	"cata/internal/cata/scheduler"
 	"cata/internal/llm"
 )
+
+// ensureSchedulerDaemon 创建/启用任务后确保调度守护进程在后台运行（可被测试替换为 no-op）。
+// 守护由 scheduler.EnsureDaemonRunning 拉起（单例 socket 锁 + setsid 后台进程），
+// 实现「chat 里指定、之后不用管、后台自动执行」。
+var ensureSchedulerDaemon = func() error {
+	_, err := scheduler.EnsureDaemonRunning()
+	return err
+}
 
 // --- schedule_task ---
 
@@ -96,7 +105,15 @@ func (t *scheduleTaskTool) Execute(ctx context.Context, _ net.Conn, argsJSON str
 	if err := scheduler.Save(s); err != nil {
 		return "", fmt.Errorf("schedule_task: %w", err)
 	}
-	return fmt.Sprintf("schedule_task: %s id=%s next_run=%s cwd=%s (allow_exec=%t)", s.Name, s.ID, s.NextRun, s.Cwd, s.AllowExec), nil
+	daemonNote := ""
+	if enabled {
+		if err := ensureSchedulerDaemon(); err != nil {
+			log.Printf("schedule_task: ensure scheduler daemon: %v", err)
+		} else {
+			daemonNote = "（调度守护已在后台运行）"
+		}
+	}
+	return fmt.Sprintf("schedule_task: %s id=%s next_run=%s cwd=%s (allow_exec=%t)%s", s.Name, s.ID, s.NextRun, s.Cwd, s.AllowExec, daemonNote), nil
 }
 
 // --- schedule_list ---
