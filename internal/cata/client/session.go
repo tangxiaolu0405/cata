@@ -31,7 +31,8 @@ type resp struct {
 type session struct {
 	conn        net.Conn
 	br          *bufio.Reader
-	mu          sync.Mutex
+	writeMu     sync.Mutex // 串行化客户端→服务器写入（chat / chat_cancel / exec_confirm / user_choice）
+	readMu      sync.Mutex // 串行化读取；与 writeMu 分离，避免流式读阻塞时 chat_cancel 写不出去
 	lastExecCmd string
 	lastExecCwd string
 }
@@ -48,8 +49,8 @@ func dial() (*session, error) {
 }
 
 func (s *session) write(v any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -59,8 +60,8 @@ func (s *session) write(v any) error {
 }
 
 func (s *session) readLine() ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
 	line, err := s.br.ReadBytes('\n')
 	if err != nil {
 		return nil, err
@@ -86,8 +87,8 @@ func (s *session) call(r req) (resp, error) {
 }
 
 func (s *session) writeChoice(choiceID string, selected []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	b, err := json.Marshal(map[string]any{
 		"command":   "user_choice",
 		"choice_id": choiceID,

@@ -75,6 +75,11 @@ func (r *connLineReader) pump() {
 		}
 		raw, err := r.readLine()
 		if err != nil {
+			// 连接断开/异常时也立即取消当前流（onCancel=ctx cancel），
+			// 避免后台 LLM 一直跑到结束才 cancel。
+			if r.onCancel != nil && !r.stopped() {
+				r.onCancel()
+			}
 			return
 		}
 		var hdr struct {

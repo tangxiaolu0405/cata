@@ -168,6 +168,10 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			if err == nil {
 				break
 			}
+			// Ctrl+C：ctx 已取消就立即收尾，不重试、不等待执行完。
+			if ctx.Err() != nil {
+				break
+			}
 			if !llm.IsRetryableChatError(err) || attempt == maxLLMAttempts {
 				break
 			}

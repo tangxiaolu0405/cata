@@ -352,6 +352,9 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		if looksLikeSSEChatBody(body) {
 			assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, "text/event-stream", bytes.NewReader(body), onDelta, onReasoning)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return "", "", nil, "", usage, ctxErr
+				}
 				log.Printf("LLM: mislabeled SSE parse failed (Content-Type=%s): %v; falling back to non-stream", ct, err)
 				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage,
 					fmt.Sprintf("mislabeled SSE (Content-Type=%s)", ct))
@@ -386,6 +389,9 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 
 	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta, onReasoning)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", "", nil, "", usage, ctxErr
+		}
 		log.Printf("LLM: SSE read failed: %v; falling back to non-stream", err)
 		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage, "SSE read error")
 	}
@@ -454,7 +460,10 @@ func sendAssistantDelta(onDelta, onReasoning func(string) error, assistant, reas
 
 // nonStreamFallbackRound 流式不可用/空响应时改走非流式（慢推理代理常见：假 SSE / 早回空 JSON）。
 func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error, onReasoning func(string) error, usage StreamUsage, why string) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, outUsage StreamUsage, err error) {
-	_ = ctx
+	// 用户已取消（Ctrl+C）：直接返回 ctx 错误，不再发起非流式重试。
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", "", nil, "", usage, ctxErr
+	}
 	outUsage = usage
 	log.Printf("LLM: non-stream fallback (%s)", why)
 	nreq := ChatRequest{
