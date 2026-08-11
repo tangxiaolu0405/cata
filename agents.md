@@ -54,9 +54,11 @@
 | **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
 | **`internal/cata/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
 | **`internal/cata/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
-| **`internal/cata/config`** | `~/.cata/config.json`：LLM、exec、`evolution.enabled` / `cycle_interval` / `short_term_trigger_bytes` |
+| **`internal/cata/scheduler`** | 自托管调度框架：排程（机器 `~/.cata/schedules/` + 项目 `<root>/.cata/schedules/`）、cron / interval、环境发现、到点触发（`cata schedule` 守护 + `--once`）；执行走 `scheduler/runner` 真实客户端自发起（见 `docs/schedules.md`） |
+| **`internal/cata/socketclient`** | 共享 socket 客户端协议（gateway 与调度框架共用；`ChatAs(…, runAs="scheduled")`） |
+| **`internal/cata/config`** | `~/.cata/config.json`：LLM、exec、`evolution.enabled` / `cycle_interval` / `short_term_trigger_bytes`、`schedules.enabled` / `tick_seconds` |
 
-**已移除**：`internal/memory`、`internal/evolution`（旧任务引擎）、`internal/scheduler`、`internal/git`、`skills/` 服务端加载。
+**已移除**：`internal/memory`、`internal/evolution`（旧任务引擎）、`internal/git`、`skills/` 服务端加载。
 
 ---
 
@@ -104,6 +106,14 @@
 - **run_skill**：执行项目 `.cata/skills/<id>/` 的 `manifest.yaml` + 脚本（cwd=产出区）；由演进 `crystallize_skill` 固化。
 - **crystallize_skill**：高 token / 重复 browser 任务后，evolve 写 `skills/<id>/` 到**项目 `.cata`** 并自动 append capabilities；下次 chat 生效。
 - **api_url**：可写 base 或完整路径；运行时会试「原样 / +默认路径」，成功后写入 `~/.cata/api_url_resolved.json` 记住。
+
+## 定时任务（自托管调度框架）
+
+- **入口**：chat 内工具 `schedule_task` / `schedule_list` / `schedule_remove`（Standard/Full 档）；排程定义落在**机器级** `~/.cata/schedules/<id>.json` 或**项目级** `<project>/.cata/schedules/<id>.json`（git/workspace.yaml 工作区写项目级，随项目 `.cata` 分发），id 由名称稳定生成（保留中文/字母/数字）。
+- **调度框架**：`cata schedule` 守护进程**发现环境里的任务**（机器级 + 所有已注册工作区的项目级，`ListAll`），按 `schedules.tick_seconds`（默认 30s）扫描；到点且未在运行即触发（错过只补一次，无历史补跑队列）。`cata schedule --once` 可挂系统 cron。
+- **执行**：到点后由 `internal/cata/scheduler/runner` **作为真实 socket 客户端自发起**一轮 chat（`run_as=scheduled`，与客户自己发起一致）；`ask_user` 自动跳过、`user_choice` 全空、`run_command` 需 `allow_exec=true`。产出：报告 `<project>/.cata/schedule-runs/<id>/<ts>.md`（可 `output_dir` 改绝对目录）+ 审计 `<存储目录>/runs/<id>/<ts>.jsonl`；chat 循环照常写短期记忆。
+- **server 不内嵌调度**：managed server 不再因排程保活；执行由独立 `cata schedule` 守护承担（无 server 时内嵌一个，已有则复用）。
+- **边界**：定时任务跳过任务状态机（不污染前台 `declare_task`）；与前台并行时复用 server 全局 Active 模式（同多 chat 并行行为）。详见 **`docs/schedules.md`**。
 
 ## 卫星客户端（非核心环）
 
@@ -201,7 +211,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 ## 刻意排除
 
 - **旧 `skills/` 服务端调度、`scripts/` 主线**：已废弃；仅保留 MD 提示词加载。
-- **手动演进命令、任务队列、MemoryManager 索引**：已废弃。
+- **手动演进命令、任务队列、MemoryManager 索引**：已废弃（注意：`internal/cata/scheduler` 是**定时触发引擎**，不是任务队列；其执行由 `cata schedule` 守护进程驱动，见上文「定时任务」）。
 
 ---
 

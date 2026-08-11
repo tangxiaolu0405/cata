@@ -48,6 +48,8 @@ func main() {
 		handleConfigCommand(args[1:])
 	case "run":
 		runServer(args[1:])
+	case "schedule":
+		runSchedule(args[1:])
 	case "update":
 		runUpdate(args[1:])
 	default:
@@ -64,6 +66,7 @@ func printUsage() {
 	fmt.Println("  cata                    Start chat (default, TUI)")
 	fmt.Println("  cata chat [--dir <path>] [--quiet|-q] [--verbose|-v] [--show-thinking]  Start chat at output dir")
 	fmt.Println("  cata run                Start server (one per machine; foreground)")
+	fmt.Println("  cata schedule           Self-hosted scheduler daemon (discovers tasks, fires as real client)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
 	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")
 	fmt.Println("  cata config             Manage configuration")

@@ -45,7 +45,8 @@ func (t ContextTier) PromptProfile() brain.PromptProfile {
 var (
 	contextTierLightNames = []string{"read_file", "list_files", "read_skill", "declare_task", "list_modes"}
 	contextTierStdExtra   = []string{"search_replace", "append_file", "create_file", "run_command", "run_skill", "ask_user",
-		"delegate_task", "delegate_mode", "case_artifact", "delegate_wait"}
+		"delegate_task", "delegate_mode", "case_artifact", "delegate_wait", "manage_mcp",
+		"schedule_task", "schedule_list", "schedule_remove"}
 	contextTierFullExtra = []string{}
 )
 

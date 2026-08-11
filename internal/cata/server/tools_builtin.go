@@ -41,6 +41,10 @@ func (ss *SocketServer) RegisterBuiltinTools(reg *ToolRegistry) {
 	reg.Register(&caseArtifactTool{})
 	reg.Register(&delegateTaskTool{ss: ss})
 	reg.Register(&delegateWaitTool{ss: ss})
+	reg.Register(&manageMCPTool{ss: ss})
+	reg.Register(&scheduleTaskTool{})
+	reg.Register(&scheduleListTool{})
+	reg.Register(&scheduleRemoveTool{})
 }
 
 // --- read_file ---

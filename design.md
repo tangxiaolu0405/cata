@@ -53,6 +53,7 @@
 |--------|------|
 | 用户消息 | `cata chat` 交互式对话 |
 | 定时演进 | `evolve.cycle_interval`（默认 600s）后台自主运行 |
+| 定时任务 | 自托管调度框架 `internal/cata/scheduler` + `cmd/cata/schedule.go`（`cata schedule` 守护）：发现环境任务（机器 + 项目 `.cata/schedules`），`schedules.tick_seconds`（默认 30s）扫描，到点**作为真实 socket 客户端自发起**一轮 chat（`scheduler/runner`）；chat 内 `schedule_task` / `schedule_list` / `schedule_remove` 管理，见 `docs/schedules.md` |
 
 ---
 
@@ -571,7 +572,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 ### 刻意排除
 
 - 无手动演进命令（纯后台自主运行）
-- 无任务队列、无 scheduler
+- 无任务队列（有轻量定时触发 `internal/cata/scheduler`，见 `docs/schedules.md`）；调度 CLI 仅 `cata schedule [--once] [--dir] [--tick]` 守护/一次性扫描（无任务编排）
 - 无内置 git 操作
 - 无 Web UI
 - 无多机分布式

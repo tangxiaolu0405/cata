@@ -86,6 +86,10 @@ func (s *Server) Start() error {
 		log.Println("- Autonomous evolution disabled")
 	}
 
+	// 定时任务由独立调度框架（cata schedule 守护进程）负责：发现环境任务、到点后
+	// 作为真实 socket 客户端自发起一轮 chat（internal/cata/scheduler/runner）。
+	// server 本身不再内嵌调度引擎。
+
 	s.setupSignalHandling()
 	if config.Config != nil && !config.Config.Exec.Enabled {
 		log.Println("WARNING: exec.enabled=false — terminal run_command disabled until config is updated")

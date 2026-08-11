@@ -97,8 +97,9 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	ctx = withChatSubagentPool(ctx, pool)
 	ctx = withChatWorkspace(ctx, chatWS)
 
+	scheduled := IsScheduledRun(ctx)
 	var task *brain.TaskState
-	if chatWS != nil {
+	if chatWS != nil && !scheduled {
 		var resumed bool
 		var terr error
 		task, resumed, terr = brain.BeginOrResumeTask(chatWS, text, cc.OutputCwd)
@@ -116,7 +117,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 		if ctx.Err() != nil {
 			return ss.emitChatCancelled(conn, lr)
 		}
-		if chatWS != nil {
+		if chatWS != nil && !scheduled {
 			if latest, _ := brain.LoadCurrentTask(chatWS); latest != nil {
 				task = latest
 				guard.applyTask(task)
@@ -126,6 +127,9 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
 		tier := InferContextTier(chatWS, round, *history, text)
+		if scheduled {
+			tier = ContextTierFull
+		}
 		roundProfile := tier.PromptProfile()
 		if promptPeak != nil {
 			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)

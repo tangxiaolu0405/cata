@@ -40,7 +40,7 @@ func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.sessions[key]; ok {
-		if c.cwd == cwd {
+		if c.Cwd() == cwd {
 			return c, nil
 		}
 		_ = c.Close()

@@ -96,7 +96,7 @@ func toolResultLevel(name string, out string, err error) string {
 	switch name {
 	case "read_file", "read_skill", "list_files", "list_modes", "list_playbooks", "playbook_status":
 		return displaySilent
-	case "search_replace", "append_file", "create_file", "run_skill", "declare_task", "case_artifact", "advance_playbook", "start_playbook", "delegate_task", "delegate_mode", "delegate_wait", "ask_user":
+	case "search_replace", "append_file", "create_file", "run_skill", "declare_task", "case_artifact", "advance_playbook", "start_playbook", "delegate_task", "delegate_mode", "delegate_wait", "ask_user", "manage_mcp":
 		return displayNormal
 	default:
 		return displayVerbose
@@ -107,7 +107,7 @@ func displayLevelByName(name string) string {
 	switch name {
 	case "read_file", "read_skill", "list_files", "list_modes", "list_playbooks", "playbook_status":
 		return displaySilent
-	case "search_replace", "append_file", "create_file", "run_skill", "declare_task", "case_artifact", "advance_playbook", "start_playbook", "delegate_task", "delegate_mode", "delegate_wait", "ask_user":
+	case "search_replace", "append_file", "create_file", "run_skill", "declare_task", "case_artifact", "advance_playbook", "start_playbook", "delegate_task", "delegate_mode", "delegate_wait", "ask_user", "manage_mcp":
 		return displayNormal
 	default:
 		return displayVerbose

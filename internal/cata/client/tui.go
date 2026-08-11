@@ -463,6 +463,10 @@ func (m *model) startConfirmOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 	cmd := execLine(ev)
 	cwd := str(ev["cwd"])
 	m.sess.lastExecCmd, m.sess.lastExecCwd = cmd, cwd
+	title := str(ev["title"])
+	if title == "" {
+		title = "run_command 待确认 (↑↓ 选 Run/Cancel，Enter 确认，Esc 取消)"
+	}
 	desc := cmd
 	if len(desc) > 240 {
 		desc = desc[:240] + "…"
@@ -476,7 +480,7 @@ func (m *model) startConfirmOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 	l.SetFilteringEnabled(false)
 	m.overlay = &overlayState{mode: overlayConfirm, list: l, confirmID: id}
 	m.stats.state = "confirm run"
-	m.appendLog(styledLogLine(styleTool, "\n▸ run_command 待确认 (↑↓ 选 Run/Cancel，Enter 确认，Esc 取消)"), true)
+	m.appendLog(styledLogLine(styleTool, "\n▸ "+title), true)
 	return m, nil
 }
 

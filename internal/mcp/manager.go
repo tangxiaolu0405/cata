@@ -355,3 +355,22 @@ func Shutdown() {
 	shutdownLocked()
 	lastMCPKey = ""
 }
+
+// Reload 强制按当前配置与指定 capabilities 重建 MCP（manage_mcp 改配置/capabilities 后调用，免重启）。
+func Reload(caps brain.Capabilities) {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if config.Config == nil || !config.Config.MCP.Enabled {
+		global = &Manager{clients: make(map[string]*stdioClient), routes: make(map[string]*toolRoute)}
+		lastMCPKey = ""
+		return
+	}
+	shutdownLocked()
+	Init(config.Config.MCP, caps)
+	lastMCPKey = CapsKey(caps)
+}
+
+// ForceInit 强制按当前活跃 capabilities 重建 MCP（配置变更后的兜底入口）。
+func ForceInit() {
+	Reload(brain.LoadActiveCapabilitiesCached())
+}

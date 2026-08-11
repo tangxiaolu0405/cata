@@ -55,6 +55,9 @@ type Request struct {
 	Runtime *brain.RuntimeEnv `json:"runtime,omitempty"`
 	// ShowThinking 为 true 时流式下发 thinking 事件（客户端 --show-thinking）
 	ShowThinking bool `json:"show_thinking,omitempty"`
+	// RunAs 会话类型标记："" 普通对话；"scheduled" 定时任务（调度框架自发起，
+	// 强制 full 工具档并跳过任务状态机，避免后台运行污染前台任务）。
+	RunAs string `json:"run_as,omitempty"`
 }
 
 // Response 服务器响应
@@ -216,6 +219,9 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 				Profile:   brain.PromptProfileTask,
 			}
 			chatCtx := brain.WithChatContext(context.Background(), cc)
+			if req.RunAs == "scheduled" {
+				chatCtx = WithScheduledRun(chatCtx)
+			}
 			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak, req.ShowThinking); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}

@@ -26,7 +26,7 @@ func IsRedactedSecret(s string) bool {
 func AppConfigKnownTopKeys() []string {
 	return []string{
 		"brain", "llm", "server", "evolution", "exec",
-		"workspace_files", "subagent", "chat", "mcp",
+		"workspace_files", "subagent", "chat", "mcp", "schedules",
 	}
 }
 

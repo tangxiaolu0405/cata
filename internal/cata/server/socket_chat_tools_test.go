@@ -49,3 +49,9 @@ func TestPartitionSingleParallelTool(t *testing.T) {
 		t.Fatalf("single read: %+v", batches)
 	}
 }
+
+func TestManageMCPToolSequential(t *testing.T) {
+	if chatToolParallelSafe("manage_mcp") {
+		t.Fatal("manage_mcp should be sequential (mutates config + reloads MCP)")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cata/internal/cata/clock"
 )
@@ -36,6 +37,18 @@ type AppConfig struct {
 	Subagent       SubagentConfig       `json:"subagent"`
 	Chat           ChatLoopConfig       `json:"chat"`
 	MCP            MCPConfig            `json:"mcp"`
+	Schedules      SchedulesConfig      `json:"schedules"`
+}
+
+// SchedulesConfig 定时任务（自托管周期执行）配置。
+// Enabled 用 *bool：nil 表示未配置，归一化为默认 true；显式 false 会被保留。
+// 执行由独立调度框架 cata schedule 守护进程负责（真实客户端自发起），
+// server 自身不再内嵌调度引擎，故无 keep_alive 等保活配置。
+type SchedulesConfig struct {
+	// Enabled 是否允许调度框架（cata schedule）运行（nil/缺省 = true）。
+	Enabled *bool `json:"enabled"`
+	// TickSeconds 引擎扫描周期（默认 30）。
+	TickSeconds int `json:"tick_seconds"`
 }
 
 // ChatLoopConfig 主 chat 防失控天花板（业务终止条件由 declare_task 按任务声明）。
@@ -315,6 +328,10 @@ func getDefaultConfig() *AppConfig {
 			ToolTimeoutSeconds: 300,
 			MaxOutputBytes:     256 * 1024,
 		},
+		Schedules: SchedulesConfig{
+			Enabled:     boolPtr(true),
+			TickSeconds: 30,
+		},
 	}
 }
 
@@ -448,6 +465,7 @@ func validateAndSetDefaults(config *AppConfig) error {
 	normalizeSubagentConfig(&config.Subagent)
 	normalizeChatLoopConfig(&config.Chat)
 	normalizeMCPConfig(&config.MCP)
+	normalizeSchedulesConfig(&config.Schedules)
 
 	if config.LLM.Enabled && !config.Exec.Enabled {
 		if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "0" || strings.EqualFold(v, "false") {
@@ -470,6 +488,37 @@ func validateAndSetDefaults(config *AppConfig) error {
 	ensureServerTimezone(config)
 
 	return nil
+}
+
+func normalizeSchedulesConfig(s *SchedulesConfig) {
+	if s == nil {
+		return
+	}
+	if s.Enabled == nil {
+		s.Enabled = boolPtr(true)
+	}
+	if s.TickSeconds <= 0 {
+		s.TickSeconds = 30
+	}
+}
+
+// boolPtr 返回指向 b 的指针（SchedulesConfig 缺省 true 用）。
+func boolPtr(b bool) *bool { return &b }
+
+// SchedulesTick 定时引擎扫描周期（默认 30s）。
+func SchedulesTick() time.Duration {
+	if Config != nil && Config.Schedules.TickSeconds > 0 {
+		return time.Duration(Config.Schedules.TickSeconds) * time.Second
+	}
+	return 30 * time.Second
+}
+
+// SchedulesEnabled 是否启动定时引擎（nil/缺省 = true；显式 false 保留）。
+func SchedulesEnabled() bool {
+	if Config == nil || Config.Schedules.Enabled == nil {
+		return true
+	}
+	return *Config.Schedules.Enabled
 }
 
 // ensureServerTimezone 在 validateAndSetDefaults / init 路径写入默认时区。
