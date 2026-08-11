@@ -75,8 +75,8 @@ func (t *searchReplaceTool) Schema() llm.Tool {
 	}}
 }
 
-func (t *searchReplaceTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
-	return toolSearchReplace(argsJSON)
+func (t *searchReplaceTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolSearchReplace(ctx, argsJSON)
 }
 
 // --- append_file ---
@@ -93,8 +93,8 @@ func (t *appendFileTool) Schema() llm.Tool {
 	}}
 }
 
-func (t *appendFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
-	return toolAppendFile(argsJSON)
+func (t *appendFileTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
+	return toolAppendFile(ctx, argsJSON)
 }
 
 // --- run_command ---
@@ -131,7 +131,7 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 		return "", err
 	}
 	ec := &config.Config.Exec
-	wd, err := resolveExecCwd()
+	wd, err := resolveExecCwd(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -431,7 +431,7 @@ func (t *createFileTool) Schema() llm.Tool {
 	}}
 }
 
-func (t *createFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string) (string, error) {
+func (t *createFileTool) Execute(ctx context.Context, _ net.Conn, argsJSON string) (string, error) {
 	var p struct {
 		Path      string `json:"path"`
 		Content   string `json:"content"`
@@ -443,7 +443,7 @@ func (t *createFileTool) Execute(_ context.Context, _ net.Conn, argsJSON string)
 	if strings.TrimSpace(p.Path) == "" {
 		return "", fmt.Errorf("create_file: path required")
 	}
-	full, err := resolveWorkspaceFile(p.Path)
+	full, err := resolveWorkspaceFile(ctx, p.Path)
 	if err != nil {
 		return "", err
 	}

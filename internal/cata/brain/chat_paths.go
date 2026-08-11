@@ -17,14 +17,18 @@ const (
 
 // ResolveChatFilePath 解析 chat 文件工具路径：产出区（默认）、brain/*、global/*。
 func ResolveChatFilePath(rel string) (abs string, err error) {
+	return ResolveChatFilePathFor(Active(), OutputCwd(), rel)
+}
+
+// ResolveChatFilePathFor 显式指定脑子分区与产出区的文件路径解析（多 chat 并行勿依赖全局 Active/OutputCwd）。
+func ResolveChatFilePathFor(w *Workspace, outCwd, rel string) (abs string, err error) {
 	rel = strings.TrimSpace(strings.ReplaceAll(rel, "\\", "/"))
 	if rel == "" || rel == "." {
-		return chatOutputBase()
+		return chatOutputBaseFor(outCwd)
 	}
 	rel = strings.TrimPrefix(rel, "./")
 
 	if rel == "brain" || strings.HasPrefix(rel, ChatBrainPrefix) {
-		w := Active()
 		if w == nil {
 			return "", fmt.Errorf("no active workspace brain")
 		}
@@ -54,7 +58,7 @@ func ResolveChatFilePath(rel string) (abs string, err error) {
 		return PathUnderBase(globalDir(), filepath.FromSlash(sub))
 	}
 
-	base, err := chatOutputBase()
+	base, err := chatOutputBaseFor(outCwd)
 	if err != nil {
 		return "", err
 	}
@@ -62,7 +66,11 @@ func ResolveChatFilePath(rel string) (abs string, err error) {
 }
 
 func chatOutputBase() (string, error) {
-	base := OutputCwd()
+	return chatOutputBaseFor(OutputCwd())
+}
+
+func chatOutputBaseFor(outCwd string) (string, error) {
+	base := outCwd
 	if base == "" {
 		base = config.GetBrainBaseDir()
 	}

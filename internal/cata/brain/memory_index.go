@@ -200,10 +200,18 @@ func MemoryIndexPromptBlock(maxBytes int) string {
 
 // MemoryIndexPromptBlockFor 按 profile 过滤索引：full 档跳过已在【项目内容】全文注入的 modes/persona.local。
 func MemoryIndexPromptBlockFor(p PromptProfile, maxBytes int) string {
+	return MemoryIndexPromptBlockForWorkspace(Active(), p, maxBytes)
+}
+
+// MemoryIndexPromptBlockForWorkspace 显式指定 workspace 的记忆索引块（多 chat 并行勿依赖全局 Active）。
+func MemoryIndexPromptBlockForWorkspace(w *Workspace, p PromptProfile, maxBytes int) string {
+	if w == nil {
+		return ""
+	}
 	if maxBytes <= 0 {
 		maxBytes = maxIndexPromptBytes
 	}
-	idx, err := LoadMemoryIndex()
+	idx, err := LoadMemoryIndexFor(w)
 	if err != nil || len(idx.Entries) == 0 {
 		return ""
 	}

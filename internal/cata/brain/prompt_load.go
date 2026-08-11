@@ -64,21 +64,31 @@ func LoadDelegateGuideBlock() string {
 		"### delegate_task\n\nWorker 为 minimal 脑子；task 须含目标/输入路径/输出验收；context 传数据路径与 schema。")
 }
 
-// RenderDelegateGuideBlock 渲染委派指南占位符后注入 full 档路径块。
+// RenderDelegateGuideBlock 渲染委派指南占位符后注入 full 档路径块（产出区用全局 OutputCwd）。
 func RenderDelegateGuideBlock() string {
+	return RenderDelegateGuideBlockFor(OutputCwd())
+}
+
+// RenderDelegateGuideBlockFor 显式指定产出区的委派指南（多 chat 并行勿依赖全局 OutputCwd）。
+func RenderDelegateGuideBlockFor(out string) string {
 	max := 4
 	if cfg := config.Config; cfg != nil && cfg.Subagent.MaxConcurrent > 0 {
 		max = cfg.Subagent.MaxConcurrent
 	}
 	body := LoadDelegateGuideBlock()
 	body = strings.ReplaceAll(body, "{{max_concurrent}}", strconv.Itoa(max))
-	body = strings.ReplaceAll(body, "{{csv_path}}", SubagentRunsCSVPathActive())
+	body = strings.ReplaceAll(body, "{{csv_path}}", SubagentRunsCSVPath(out))
 	return body
 }
 
 // SubagentDelegateGuideBlock 兼容旧调用。
 func SubagentDelegateGuideBlock() string {
 	return RenderDelegateGuideBlock()
+}
+
+// SubagentDelegateGuideBlockFor 显式指定产出区的委派指南（多 chat 并行勿依赖全局 OutputCwd）。
+func SubagentDelegateGuideBlockFor(out string) string {
+	return RenderDelegateGuideBlockFor(out)
 }
 
 // LoadWorkerContract worker 角色与 STATUS 格式（~/.cata/global/worker-contract.md）。
@@ -107,15 +117,20 @@ func LoadDelegateTaskToolSpec() (DelegateTaskToolSpec, error) {
 	return spec, nil
 }
 
-// EnrichWorkerDelegateContext 服务端补全 worker context（动态 cwd/平台 + 父 context）。
+// EnrichWorkerDelegateContext 服务端补全 worker context（动态 cwd/平台 + 父 context；全局回退）。
 func EnrichWorkerDelegateContext(parentContext string) string {
+	return EnrichWorkerDelegateContextFor(OutputCwd(), ActiveRuntimeEnv(), parentContext)
+}
+
+// EnrichWorkerDelegateContextFor 显式指定产出区与运行环境的 worker context 补全（多 chat 并行勿依赖全局）。
+func EnrichWorkerDelegateContextFor(out string, env *RuntimeEnv, parentContext string) string {
 	var b strings.Builder
-	if out := strings.TrimSpace(OutputCwd()); out != "" {
+	if out = strings.TrimSpace(out); out != "" {
 		b.WriteString("output_cwd: `")
 		b.WriteString(out)
 		b.WriteString("`\n")
 	}
-	if env := ActiveRuntimeEnv(); env != nil {
+	if env != nil {
 		b.WriteString(fmt.Sprintf("host/command: %s/%s  shell: %s\n", env.HostPlatform(), env.CommandPlatform(), env.Shell))
 		if !env.ShellSupportsUnixSyntax() {
 			b.WriteString("paths: use Windows-native or paths relative to output_cwd; avoid /mnt/d/ unless WSL.\n")

@@ -131,7 +131,12 @@ func capSubagentField(s string) string {
 }
 
 func SubagentWorkspaceLabel() string {
-	if w := Active(); w != nil {
+	return SubagentWorkspaceLabelFor(Active())
+}
+
+// SubagentWorkspaceLabelFor 显式指定 workspace 的子 Agent 归属标识（多 chat 并行勿依赖全局 Active）。
+func SubagentWorkspaceLabelFor(w *Workspace) string {
+	if w != nil {
 		return w.ID
 	}
 	return ""
@@ -141,15 +146,27 @@ func SubagentRunFinishedAt() string {
 	return clock.RFC3339()
 }
 
-// AppendDelegateWaitNote 将 delegate_wait 摘要写入 short-term（供 evolve 感知委派）。
+// AppendDelegateWaitNote 将 delegate_wait 摘要写入 short-term（全局 Active）。
 func AppendDelegateWaitNote(summary string) error {
-	summary = truncateRunes(strings.TrimSpace(summary), 1200)
-	if summary == "" {
-		return nil
-	}
 	w, err := MustActive()
 	if err != nil {
 		return err
+	}
+	return AppendDelegateWaitNoteFor(w, summary)
+}
+
+// AppendDelegateWaitNoteFor 显式指定 workspace 写入 delegate_wait 摘要（多 chat 并行勿依赖全局 Active）。
+func AppendDelegateWaitNoteFor(w *Workspace, summary string) error {
+	if w == nil {
+		var err error
+		w, err = MustActive()
+		if err != nil {
+			return err
+		}
+	}
+	summary = truncateRunes(strings.TrimSpace(summary), 1200)
+	if summary == "" {
+		return nil
 	}
 	block := fmt.Sprintf("\n\n## %s delegate_wait\n\n%s\n", clock.RFC3339(), summary)
 	return appendToShortTerm(w.ShortTermPath(), block)

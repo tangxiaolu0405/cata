@@ -16,7 +16,7 @@ func SetupProcessLogging(managed bool) {
 	}
 	path := brain.ServerLogPath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}

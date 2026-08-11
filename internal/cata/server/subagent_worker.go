@@ -10,15 +10,19 @@ import (
 )
 
 func buildWorkerSystemPrompt(task, parentContext string) string {
+	return buildWorkerSystemPromptFor(task, parentContext, brain.OutputCwd(), brain.ActiveRuntimeEnv())
+}
+
+// buildWorkerSystemPromptFor 显式指定产出区与运行环境（多 chat 并行勿依赖全局 OutputCwd/ActiveRuntimeEnv）。
+func buildWorkerSystemPromptFor(task, parentContext string, out string, env *brain.RuntimeEnv) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(brain.LoadWorkerContract()))
 	b.WriteString("\n\n")
-	if out := strings.TrimSpace(brain.OutputCwd()); out != "" {
+	if out = strings.TrimSpace(out); out != "" {
 		b.WriteString("## Output cwd\n\n`")
 		b.WriteString(out)
 		b.WriteString("`\n\n")
 		b.WriteString("- Use paths **relative to output_cwd** or native paths for the host shell.\n")
-		env := brain.ActiveRuntimeEnv()
 		if env != nil && !env.ShellSupportsUnixSyntax() {
 			b.WriteString("- **Do not** use `/mnt/d/...` WSL paths unless command platform is WSL.\n")
 		}

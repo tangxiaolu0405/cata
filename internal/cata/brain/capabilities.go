@@ -14,7 +14,11 @@ type Capabilities struct {
 
 // LoadActiveCapabilities 读取当前 workspace 活跃 mode 的 capabilities.yaml。
 func LoadActiveCapabilities() Capabilities {
-	w := Active()
+	return LoadCapabilitiesFor(Active())
+}
+
+// LoadCapabilitiesFor 显式指定 workspace 读取 capabilities.yaml（多 chat 并行勿依赖全局 Active）。
+func LoadCapabilitiesFor(w *Workspace) Capabilities {
 	if w == nil {
 		return Capabilities{MCP: []string{"browser"}}
 	}

@@ -38,11 +38,23 @@ func AppendChatTurnFor(w *Workspace, userText, assistantText string) error {
 	return appendToShortTerm(w.ShortTermPath(), block)
 }
 
-// AppendSessionBoundary 在 chat_reset 时写入会话边界。
+// AppendSessionBoundary 在 chat_reset 时写入会话边界（全局 Active）。
 func AppendSessionBoundary() error {
 	w, err := MustActive()
 	if err != nil {
 		return err
+	}
+	return AppendSessionBoundaryFor(w)
+}
+
+// AppendSessionBoundaryFor 显式指定 workspace 写入会话边界（多 chat 并行勿依赖全局 Active）。
+func AppendSessionBoundaryFor(w *Workspace) error {
+	if w == nil {
+		var err error
+		w, err = MustActive()
+		if err != nil {
+			return err
+		}
 	}
 	path := w.ShortTermPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

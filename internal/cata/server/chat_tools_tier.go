@@ -152,8 +152,14 @@ func tierToolNames(tier ContextTier) []string {
 	}
 }
 
-func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier) []llm.Tool {
+func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier, outCwd string, runtime *brain.RuntimeEnv) []llm.Tool {
 	key := ss.chatToolsCacheKey() + "|tier:" + tier.String()
+	if outCwd != "" {
+		key += "|out:" + outCwd
+	}
+	if runtime != nil {
+		key += "|env:" + runtime.OS + "/" + runtime.Shell
+	}
 	if key == ss.chatToolsKey && len(ss.chatToolsCache) > 0 {
 		out := make([]llm.Tool, len(ss.chatToolsCache))
 		copy(out, ss.chatToolsCache)
@@ -162,15 +168,19 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier) []llm.To
 	if tier == ContextTierFull {
 		mcp.EnsureInit()
 	}
-	allow := make(map[string]struct{}, len(tierToolNames(tier)))
-	for _, n := range tierToolNames(tier) {
-		allow[n] = struct{}{}
-	}
+	// 按 tier 顺序逐个取 schema：run_command 的说明依赖产出区/运行环境，必须用显式 out/env 重建，
+	// 不能走全局 RunCommandToolDescription()（多 chat 并行时全局 OutputCwd/RuntimeEnv 可能已被其它会话改写）。
 	var out []llm.Tool
-	for _, schema := range ss.tools.Schemas() {
-		if _, ok := allow[schema.Function.Name]; ok {
-			out = append(out, schema)
+	for _, name := range tierToolNames(tier) {
+		t, ok := ss.tools.Get(name)
+		if !ok {
+			continue
 		}
+		schema := t.Schema()
+		if name == "run_command" {
+			schema.Function.Description = brain.RunCommandToolDescriptionFor(runtime, outCwd)
+		}
+		out = append(out, schema)
 	}
 	if tier == ContextTierFull {
 		if mgr := mcp.Global(); mgr != nil {

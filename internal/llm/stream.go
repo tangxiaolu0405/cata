@@ -241,6 +241,7 @@ type streamRoundFlags struct {
 	logKind         string
 	subagentID      string
 	sessionID       string
+	logOutputCwd    string
 }
 
 // ChatStreamRound 单次流式 chat/completions 请求（主 chat：注入 brain）。
@@ -248,14 +249,28 @@ func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools 
 	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{}, onDelta)
 }
 
+// ChatStreamRoundFor 与 ChatStreamRound 相同，但显式指定 brain 注入档位与 LLM 日志产出区
+// （多 cata 并行时避免依赖全局 SetPromptProfile/OutputCwd）。
+func (c *Client) ChatStreamRoundFor(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, profile brain.PromptProfile, logOutputCwd string, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{
+		brainProfile: profile,
+		logOutputCwd: logOutputCwd,
+	}, onDelta)
+}
+
 // ChatWorkerStreamRound 子 Agent 流式轮次：minimal 脑子注入、低温度、禁用 thinking。
 func (c *Client) ChatWorkerStreamRound(ctx context.Context, messages []Message, tools []Tool, maxTokens int, meta WorkerRoundMeta, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+	logCwd := ""
+	if cc := brain.ChatContextFrom(ctx); cc != nil {
+		logCwd = cc.OutputCwd
+	}
 	return c.chatStreamRound(ctx, messages, tools, "auto", maxTokens, 0.2, streamRoundFlags{
 		brainProfile:    brain.PromptProfileMinimal,
 		disableThinking: true,
 		logKind:         "worker_round",
 		subagentID:      meta.SubagentID,
 		sessionID:       meta.SessionID,
+		logOutputCwd:    logCwd,
 	}, onDelta)
 }
 
@@ -277,6 +292,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		LogKind:         flags.logKind,
 		SubagentID:      flags.subagentID,
 		SessionID:       flags.sessionID,
+		LogOutputCwd:    flags.logOutputCwd,
 	}
 	hc := c.streamHTTPClient
 	if hc == nil {
@@ -426,6 +442,7 @@ func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message,
 		LogKind:         flags.logKind,
 		SubagentID:      flags.subagentID,
 		SessionID:       flags.sessionID,
+		LogOutputCwd:    flags.logOutputCwd,
 	}
 	cr, tc, err := c.chatWithContext(ctx, nreq, tools, toolChoice, true)
 	if err != nil {

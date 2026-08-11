@@ -24,9 +24,13 @@ func (t *listModesTool) Schema() llm.Tool {
 }
 
 func (t *listModesTool) Execute(ctx context.Context, conn net.Conn, argsJSON string) (string, error) {
-	w, err := brain.MustActive()
-	if err != nil {
-		return "", err
+	w := chatWorkspaceFrom(ctx)
+	if w == nil {
+		var err error
+		w, err = brain.MustActive()
+		if err != nil {
+			return "", err
+		}
 	}
 	modes, err := brain.ListProjectModes(w)
 	if err != nil {
@@ -86,14 +90,19 @@ func startModeDelegate(ctx context.Context, pool *subagentPool, p modeDelegateAr
 	if task == "" {
 		return "", fmt.Errorf("delegate: task required")
 	}
-	w, err := brain.MustActive()
-	if err != nil {
-		return "", err
+	w := chatWorkspaceFrom(ctx)
+	if w == nil {
+		var err error
+		w, err = brain.MustActive()
+		if err != nil {
+			return "", err
+		}
 	}
 	if !brain.ModeExists(w, modeID) {
 		return "", fmt.Errorf("delegate: mode %q not found (list_modes; create focus_path/.cata/modes/%s/)", modeID, modeID)
 	}
-	if _, err := brain.EnsureCase(brain.OutputCwd(), caseID); err != nil {
+	cc := brain.ChatContextFrom(ctx)
+	if _, err := brain.EnsureCase(cc.OutputCwd, caseID); err != nil {
 		return "", err
 	}
 
@@ -101,7 +110,7 @@ func startModeDelegate(ctx context.Context, pool *subagentPool, p modeDelegateAr
 	if err != nil {
 		return "", err
 	}
-	userPrompt := buildModeWorkerPrompt(modeID, caseID, task, p.Context, bundle, p.ReadArtifacts, p.WriteArtifacts)
+	userPrompt := buildModeWorkerPromptFor(modeID, caseID, task, p.Context, bundle, p.ReadArtifacts, p.WriteArtifacts, cc.OutputCwd)
 
 	id, started, err := pool.StartMode(ctx, subagentStartOpts{
 		Task:          task,
@@ -156,11 +165,16 @@ func (t *delegateModeTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 }
 
 func buildModeWorkerPrompt(modeID, caseID, task, parentContext, modeBundle string, readArts, writeArts []string) string {
+	return buildModeWorkerPromptFor(modeID, caseID, task, parentContext, modeBundle, readArts, writeArts, brain.OutputCwd())
+}
+
+// buildModeWorkerPromptFor 显式指定产出区（多 chat 并行勿依赖全局 OutputCwd）。
+func buildModeWorkerPromptFor(modeID, caseID, task, parentContext, modeBundle string, readArts, writeArts []string, outCwd string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(brain.LoadWorkerContract()))
 	b.WriteString("\n\n")
 	b.WriteString("You are running as a **specialist mode**, not the orchestrator. Follow the role card.\n\n")
-	if out := strings.TrimSpace(brain.OutputCwd()); out != "" {
+	if out := strings.TrimSpace(outCwd); out != "" {
 		fmt.Fprintf(&b, "## Output cwd\n\n`%s`\n\n", out)
 		fmt.Fprintf(&b, "## Case\n\n`cases/%s/` (artifacts/, mode_runs/)\n\n", caseID)
 	}
@@ -180,7 +194,7 @@ func buildModeWorkerPrompt(modeID, caseID, task, parentContext, modeBundle strin
 			if name == "" {
 				continue
 			}
-			body, meta, err := brain.ReadCaseArtifact(brain.OutputCwd(), caseID, name, 0, false)
+			body, meta, err := brain.ReadCaseArtifact(outCwd, caseID, name, 0, false)
 			if err != nil {
 				fmt.Fprintf(&b, "### %s\n\n(error: %v)\n\n", name, err)
 				continue
@@ -250,7 +264,7 @@ func (t *caseArtifactTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	if name == "" {
 		return "", fmt.Errorf("case_artifact: name required")
 	}
-	cwd := brain.OutputCwd()
+	cwd := brain.ChatContextFrom(ctx).OutputCwd
 	by := strings.TrimSpace(p.ByMode)
 	if by == "" {
 		if w := chatWorkspaceFrom(ctx); w != nil {

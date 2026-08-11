@@ -268,9 +268,14 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	if !req.NoBrainInject {
 		profile := req.BrainProfile
 		if profile == "" {
+			if cc := brain.ChatContextFrom(ctx); cc != nil && cc.Profile != "" {
+				profile = cc.Profile
+			}
+		}
+		if profile == "" {
 			profile = brain.ActivePromptProfile()
 		}
-		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessageFor(req.Messages, profile)))
+		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessageForCtx(ctx, req.Messages, profile)))
 	} else {
 		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
@@ -441,9 +446,16 @@ func inferPromptSources(msgs []Message) []string {
 // 日志路径由环境变量 LLM_LOG_FILE 控制，默认 llm.log。
 func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, content string, toolCalls []ToolCall, rawBody []byte) {
 	logPath := brain.LLMLogPath()
+	if out := strings.TrimSpace(req.LogOutputCwd); out != "" {
+		logPath = brain.LLMLogPathFor(out)
+	}
 
 	msgsCopy := append([]Message(nil), req.Messages...)
-	effectiveMessages := withBootLeaderSystemMessage(msgsCopy)
+	profile := req.BrainProfile
+	if profile == "" {
+		profile = brain.ActivePromptProfile()
+	}
+	effectiveMessages := withBootLeaderSystemMessageFor(msgsCopy, profile)
 
 	respLog := map[string]interface{}{
 		"content": content,

@@ -17,6 +17,22 @@ import (
 	"cata/internal/mcp"
 )
 
+// wsForNote 返回 ChatContext 中的脑子分区；nil 时返回 nil（由 brain 层回退全局 Active）。
+func wsForNote(cc *brain.ChatContext) *brain.Workspace {
+	if cc != nil {
+		return cc.WS
+	}
+	return nil
+}
+
+// runtimeFromCtx 返回 ChatContext 中的运行环境；nil 时返回 nil（回退全局 ActiveRuntimeEnv）。
+func runtimeFromCtx(cc *brain.ChatContext) *brain.RuntimeEnv {
+	if cc != nil {
+		return cc.Runtime
+	}
+	return nil
+}
+
 type chatSubagentPoolKey struct{}
 
 func withChatSubagentPool(ctx context.Context, p *subagentPool) context.Context {
@@ -65,6 +81,9 @@ type subagentTask struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// chatCtx 发起方 chat 的显式 ChatContext（脑子分区/产出区/运行环境），供 worker 工具与 LLM 日志路由。
+	chatCtx *brain.ChatContext
 
 	mu     sync.Mutex
 	result subagentResult
@@ -125,7 +144,7 @@ func (t *subagentTask) complete(ss *SocketServer, conn net.Conn, r subagentResul
 		} else {
 			_ = path
 		}
-		if err := brain.AppendDelegateModeNote(t.modeID, t.caseID, t.id, status, r.summary); err != nil {
+		if err := brain.AppendDelegateModeNoteFor(wsForNote(t.chatCtx), t.modeID, t.caseID, t.id, status, r.summary); err != nil {
 			log.Printf("delegate_mode short-term: %v", err)
 		}
 	}
@@ -217,11 +236,12 @@ type subagentStartOpts struct {
 }
 
 func (p *subagentPool) start(parentCtx context.Context, opts subagentStartOpts) (id string, msg string, err error) {
+	cc := brain.ChatContextFrom(parentCtx)
 	toolFilter := opts.ToolFilter
 	if len(toolFilter) == 0 {
 		toolFilter = config.DefaultSubagentTools()
 	}
-	allTools := p.ss.workerTools()
+	allTools := p.ss.workerToolsFor(cc.OutputCwd, cc.Runtime)
 	tools, err := filterWorkerTools(allTools, toolFilter)
 	if err != nil {
 		return "", "", err
@@ -261,13 +281,14 @@ func (p *subagentPool) start(parentCtx context.Context, opts subagentStartOpts) 
 	st := &subagentTask{
 		id:            id,
 		task:          opts.Task,
-		context:       brain.EnrichWorkerDelegateContext(opts.ParentContext),
+		context:       brain.EnrichWorkerDelegateContextFor(cc.OutputCwd, cc.Runtime, opts.ParentContext),
 		model:         client.ModelName(),
 		maxRounds:     opts.MaxRounds,
 		tools:         tools,
 		toolNames:     formatWorkerToolNames(tools),
 		startedAt:     clock.RFC3339(),
-		outputCwd:     brain.OutputCwd(),
+		outputCwd:     cc.OutputCwd,
+		chatCtx:       cc,
 		sessionID:     p.sessionID,
 		delegateIndex: idx,
 		modeID:        opts.ModeID,
@@ -400,9 +421,14 @@ func (p *subagentPool) run(st *subagentTask, client *llm.Client) {
 }
 
 func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *llm.Client) {
+	// worker 工具与 LLM 日志需要显式 ChatContext（产出区/运行环境），勿依赖全局 Active/OutputCwd。
+	workerCtx := st.ctx
+	if st.chatCtx != nil {
+		workerCtx = brain.WithChatContext(st.ctx, st.chatCtx)
+	}
 	userContent := st.userPrompt
 	if strings.TrimSpace(userContent) == "" {
-		userContent = buildWorkerSystemPrompt(st.task, st.context)
+		userContent = buildWorkerSystemPromptFor(st.task, st.context, st.outputCwd, runtimeFromCtx(st.chatCtx))
 	}
 	messages := []llm.Message{{Role: "user", Content: userContent}}
 	tools := st.tools
@@ -423,7 +449,7 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 			"prompt_profile": profile,
 		})
 
-		asst, _, toolCalls, _, _, err := client.ChatWorkerStreamRound(st.ctx, messages, tools, maxOut, llm.WorkerRoundMeta{
+		asst, _, toolCalls, _, _, err := client.ChatWorkerStreamRound(workerCtx, messages, tools, maxOut, llm.WorkerRoundMeta{
 			SubagentID: st.id,
 			SessionID:  st.sessionID,
 		}, nil)
@@ -461,7 +487,7 @@ func runSubagentLoop(st *subagentTask, conn net.Conn, ss *SocketServer, client *
 			if fatalBrowser && mcp.IsBrowserTool(name) {
 				out = "[browser error] skipped: browser crashed (see previous error)"
 			} else {
-				out, terr = ss.runTerminalTool(st.ctx, conn, tc)
+				out, terr = ss.runTerminalTool(workerCtx, conn, tc)
 			}
 			if !fatalBrowser && isFatalBrowserError(terr, out) {
 				fatalBrowser = true
@@ -562,7 +588,7 @@ func (t *subagentTask) persistRunCSV(r subagentResult) {
 		StartedAt:     t.startedAt,
 		FinishedAt:    brain.SubagentRunFinishedAt(),
 		ID:            t.id,
-		Workspace:     brain.SubagentWorkspaceLabel(),
+		Workspace:     brain.SubagentWorkspaceLabelFor(wsForNote(t.chatCtx)),
 		OutputCwd:     t.outputCwd,
 		Model:         t.model,
 		Status:        subagentRunStatus(r),

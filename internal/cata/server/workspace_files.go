@@ -25,8 +25,9 @@ func workspaceFileLimits() (maxRead, maxWrite int) {
 	return maxRead, maxWrite
 }
 
-func resolveWorkspaceFile(rel string) (string, error) {
-	return brain.ResolveChatFilePath(rel)
+func resolveWorkspaceFile(ctx context.Context, rel string) (string, error) {
+	cc := brain.ChatContextFrom(ctx)
+	return brain.ResolveChatFilePathFor(cc.WS, cc.OutputCwd, rel)
 }
 
 func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
@@ -44,7 +45,7 @@ func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
 	if strings.TrimSpace(p.Path) == "" {
 		return "", fmt.Errorf("read_file: path required")
 	}
-	full, err := resolveWorkspaceFile(p.Path)
+	full, err := resolveWorkspaceFile(ctx, p.Path)
 	if err != nil {
 		return "", err
 	}
@@ -89,7 +90,7 @@ func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
 	if rel == "" {
 		rel = "."
 	}
-	full, err := resolveWorkspaceFile(rel)
+	full, err := resolveWorkspaceFile(ctx, rel)
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +124,7 @@ func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
 	return b.String(), nil
 }
 
-func toolSearchReplace(argsJSON string) (string, error) {
+func toolSearchReplace(ctx context.Context, argsJSON string) (string, error) {
 	var p struct {
 		Path       string `json:"path"`
 		OldString  string `json:"old_string"`
@@ -139,7 +140,7 @@ func toolSearchReplace(argsJSON string) (string, error) {
 	if p.OldString == "" {
 		return "", fmt.Errorf("search_replace: old_string required")
 	}
-	full, err := resolveWorkspaceFile(p.Path)
+	full, err := resolveWorkspaceFile(ctx, p.Path)
 	if err != nil {
 		return "", err
 	}
@@ -174,7 +175,7 @@ func toolSearchReplace(argsJSON string) (string, error) {
 	return fmt.Sprintf("search_replace %s resolved=%s: %d replacement(s), %d -> %d bytes", p.Path, full, n, len(content), len(newContent)), nil
 }
 
-func toolAppendFile(argsJSON string) (string, error) {
+func toolAppendFile(ctx context.Context, argsJSON string) (string, error) {
 	var p struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -185,7 +186,7 @@ func toolAppendFile(argsJSON string) (string, error) {
 	if strings.TrimSpace(p.Path) == "" {
 		return "", fmt.Errorf("append_file: path required")
 	}
-	full, err := resolveWorkspaceFile(p.Path)
+	full, err := resolveWorkspaceFile(ctx, p.Path)
 	if err != nil {
 		return "", err
 	}

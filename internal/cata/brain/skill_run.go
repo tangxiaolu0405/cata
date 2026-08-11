@@ -30,11 +30,16 @@ type RunSkillArgs struct {
 
 // ResolveSkillDir 项目 .cata/skills 优先，其次 ~/.cata/skills/（全局回退）。
 func ResolveSkillDir(skillID string) (dir string, err error) {
+	return ResolveSkillDirFor(Active(), skillID)
+}
+
+// ResolveSkillDirFor 显式指定 workspace 解析 skill 目录（多 chat 并行勿依赖全局 Active）。
+func ResolveSkillDirFor(w *Workspace, skillID string) (dir string, err error) {
 	skillID = strings.TrimSpace(skillID)
 	if skillID == "" {
 		return "", fmt.Errorf("skill name required")
 	}
-	if w := Active(); w != nil {
+	if w != nil {
 		p := w.SkillDir(skillID)
 		if _, e := os.Stat(filepath.Join(p, FileSkillManifest)); e == nil {
 			return p, nil
@@ -95,7 +100,8 @@ func LoadSkillManifest(dir string) (*SkillManifest, error) {
 
 // RunSkill 在产出区 cwd 执行脑子内脚本。
 func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
-	dir, err := ResolveSkillDir(args.Skill)
+	cc := ChatContextFrom(ctx)
+	dir, err := ResolveSkillDirFor(cc.WS, args.Skill)
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +113,7 @@ func RunSkill(ctx context.Context, args RunSkillArgs) (string, error) {
 	if _, err := os.Stat(entry); err != nil {
 		return "", fmt.Errorf("entry %s: %w", manifest.Entry, err)
 	}
-	wd, err := ExecWorkingDir()
+	wd, err := ExecWorkingDirFor(cc.OutputCwd)
 	if err != nil {
 		return "", err
 	}

@@ -26,7 +26,12 @@ var (
 
 // SkillsIndexBlockCached 返回 skill 索引块（带 mtime 缓存）。
 func SkillsIndexBlockCached(skillNames []string) string {
-	key := buildSkillsIndexCacheKey(skillNames)
+	return SkillsIndexBlockCachedFor(Active(), skillNames)
+}
+
+// SkillsIndexBlockCachedFor 显式指定 workspace 的 skill 索引块（多 chat 并行勿依赖全局 Active）。
+func SkillsIndexBlockCachedFor(w *Workspace, skillNames []string) string {
+	key := buildSkillsIndexCacheKeyFor(w, skillNames)
 	skillsIndexCacheMu.RLock()
 	if skillsIndexCacheKey == key && skillsIndexCacheBlock != "" {
 		b := skillsIndexCacheBlock
@@ -35,7 +40,7 @@ func SkillsIndexBlockCached(skillNames []string) string {
 	}
 	skillsIndexCacheMu.RUnlock()
 
-	block := skillsIndexBlock(skillNames)
+	block := skillsIndexBlockFor(w, skillNames)
 	skillsIndexCacheMu.Lock()
 	skillsIndexCacheKey = key
 	skillsIndexCacheBlock = block
@@ -49,6 +54,10 @@ func SkillsPromptBlock(skillNames []string) string {
 }
 
 func skillsIndexBlock(skillNames []string) string {
+	return skillsIndexBlockFor(Active(), skillNames)
+}
+
+func skillsIndexBlockFor(w *Workspace, skillNames []string) string {
 	if len(skillNames) == 0 {
 		return ""
 	}
@@ -62,7 +71,7 @@ func skillsIndexBlock(skillNames []string) string {
 		if name == "" {
 			continue
 		}
-		path, summary, err := loadSkillIndexEntry(name)
+		path, summary, err := loadSkillIndexEntryFor(w, name)
 		if err != nil {
 			log.Printf("skills index: %q: %v", name, err)
 			continue
@@ -82,7 +91,11 @@ func skillsIndexBlock(skillNames []string) string {
 }
 
 func loadSkillIndexEntry(name string) (path, summary string, err error) {
-	body, from, err := loadSkillMarkdown(name)
+	return loadSkillIndexEntryFor(Active(), name)
+}
+
+func loadSkillIndexEntryFor(w *Workspace, name string) (path, summary string, err error) {
+	body, from, err := loadSkillMarkdownFor(w, name)
 	if err != nil {
 		return "", "", err
 	}
@@ -123,7 +136,11 @@ func skillSummary(body string) string {
 }
 
 func loadSkillMarkdown(name string) (body, from string, err error) {
-	for _, p := range skillSearchPaths(name) {
+	return loadSkillMarkdownFor(Active(), name)
+}
+
+func loadSkillMarkdownFor(w *Workspace, name string) (body, from string, err error) {
+	for _, p := range skillSearchPathsFor(w, name) {
 		data, e := os.ReadFile(p)
 		if e == nil {
 			return CompactExcessiveNewlines(strings.TrimSpace(string(data))), p, nil
@@ -139,8 +156,12 @@ func loadSkillMarkdown(name string) (body, from string, err error) {
 }
 
 func skillSearchPaths(name string) []string {
+	return skillSearchPathsFor(Active(), name)
+}
+
+func skillSearchPathsFor(w *Workspace, name string) []string {
 	var paths []string
-	if w := Active(); w != nil {
+	if w != nil {
 		paths = append(paths, w.SkillMarkdownPath(name))
 	}
 	paths = append(paths, GlobalSkillMarkdownPath(name))
@@ -151,21 +172,29 @@ func skillSearchPaths(name string) []string {
 }
 
 func buildSkillsIndexCacheKey(skillNames []string) string {
+	return buildSkillsIndexCacheKeyFor(Active(), skillNames)
+}
+
+func buildSkillsIndexCacheKeyFor(w *Workspace, skillNames []string) string {
 	var parts []string
-	if w := Active(); w != nil {
+	if w != nil {
 		parts = append(parts, w.ID, w.modeID())
 	}
 	names := append([]string(nil), skillNames...)
 	sort.Strings(names)
 	parts = append(parts, strings.Join(names, ","))
 	for _, name := range names {
-		parts = append(parts, name+":"+strconv.FormatInt(skillFileModTimeNano(name), 10))
+		parts = append(parts, name+":"+strconv.FormatInt(skillFileModTimeNanoFor(w, name), 10))
 	}
 	return strings.Join(parts, "|")
 }
 
 func skillFileModTimeNano(name string) int64 {
-	for _, p := range skillSearchPaths(name) {
+	return skillFileModTimeNanoFor(Active(), name)
+}
+
+func skillFileModTimeNanoFor(w *Workspace, name string) int64 {
+	for _, p := range skillSearchPathsFor(w, name) {
 		if mt := fileModTimeNano(p); mt > 0 {
 			return mt
 		}

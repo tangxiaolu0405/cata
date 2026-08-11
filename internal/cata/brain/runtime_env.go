@@ -63,7 +63,11 @@ func ActiveRuntimeEnv() *RuntimeEnv {
 }
 
 func (e *RuntimeEnv) runCommandHints() string {
-	out := OutputCwd()
+	return runCommandHintsFor(e, OutputCwd())
+}
+
+// runCommandHintsFor 显式指定产出区的命令提示（多 chat 并行勿依赖全局 OutputCwd）。
+func runCommandHintsFor(e *RuntimeEnv, out string) string {
 	var b strings.Builder
 
 	switch {
@@ -97,11 +101,15 @@ func (e *RuntimeEnv) runCommandHints() string {
 
 // ShellLineToArgv 将模型给出的一行 shell 命令转为 argv（与当前 RuntimeEnv 一致）。
 func ShellLineToArgv(line string) []string {
+	return ShellLineToArgvFor(ActiveRuntimeEnv(), OutputCwd(), line)
+}
+
+// ShellLineToArgvFor 显式指定环境与产出区的命令行转换（多 chat 并行勿依赖全局）。
+func ShellLineToArgvFor(e *RuntimeEnv, out, line string) []string {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil
 	}
-	e := ActiveRuntimeEnv()
 	if e == nil {
 		return []string{"cmd.exe", "/c", line}
 	}
@@ -136,7 +144,14 @@ func ShellLineToArgv(line string) []string {
 
 // RunCommandToolDescription 根据运行环境生成 run_command 工具说明。
 func RunCommandToolDescription() string {
-	e := ActiveRuntimeEnv()
+	return RunCommandToolDescriptionFor(ActiveRuntimeEnv(), OutputCwd())
+}
+
+// RunCommandToolDescriptionFor 显式指定环境与产出区的 run_command 工具说明。
+func RunCommandToolDescriptionFor(e *RuntimeEnv, out string) string {
+	if e == nil {
+		e = &RuntimeEnv{}
+	}
 	verb := "cmd.exe /c"
 	if e.IsWSL() || e.Shell == "bash" && e.OS == "linux" {
 		verb = "bash -lc"
@@ -149,7 +164,7 @@ func RunCommandToolDescription() string {
 		"Run in output cwd (NOT ~/.cata). LLM-facing os=%s host_os=%s shell=%s terminal=%s. "+
 			"Use API tool_calls argv[]; typical wrapper: %s. Blacklist hits need confirm. %s",
 		e.OS, e.HostOS, e.Shell, e.Terminal, verb,
-		strings.ReplaceAll(e.runCommandHints(), "\n", " "),
+		strings.ReplaceAll(runCommandHintsFor(e, out), "\n", " "),
 	)
 }
 

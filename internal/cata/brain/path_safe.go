@@ -39,10 +39,15 @@ func PathUnderBase(base, rel string) (string, error) {
 
 // ExecWorkingDir returns run_command / run_skill cwd under the output area.
 func ExecWorkingDir() (string, error) {
+	return ExecWorkingDirFor(OutputCwd())
+}
+
+// ExecWorkingDirFor 显式指定产出区的 run_command / run_skill cwd（多 chat 并行勿依赖全局 OutputCwd）。
+func ExecWorkingDirFor(outCwd string) (string, error) {
 	if config.Config == nil {
 		return "", fmt.Errorf("config not loaded")
 	}
-	base := OutputCwd()
+	base := outCwd
 	if base == "" {
 		base = config.GetBrainBaseDir()
 	}

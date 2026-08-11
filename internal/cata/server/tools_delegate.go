@@ -54,19 +54,31 @@ var workerExcludedBuiltinTools = map[string]bool{
 }
 
 func (ss *SocketServer) buildWorkerTools() []llm.Tool {
-	var out []llm.Tool
+	return ss.buildWorkerToolsFor(brain.OutputCwd(), brain.ActiveRuntimeEnv())
+}
+
+// buildWorkerToolsFor 显式指定产出区/运行环境的 worker 工具集（多 chat 并行勿依赖全局 OutputCwd/RuntimeEnv）。
+// run_command 的说明内嵌产出区与 shell 提示，必须按本轮 chat 重建，不能复用全局 Schema()。
+func (ss *SocketServer) buildWorkerToolsFor(out string, env *brain.RuntimeEnv) []llm.Tool {
+	var outTools []llm.Tool
 	for _, t := range ss.tools.Schemas() {
 		name := t.Function.Name
 		if workerExcludedBuiltinTools[name] || !workerBuiltinToolNames[name] {
 			continue
 		}
-		out = append(out, t)
+		if name == "run_command" {
+			schema := t
+			schema.Function.Description = brain.RunCommandToolDescriptionFor(env, out)
+			outTools = append(outTools, schema)
+			continue
+		}
+		outTools = append(outTools, t)
 	}
 	mcp.EnsureInit()
 	if mgr := mcp.Global(); mgr != nil {
-		out = append(out, mgr.Tools()...)
+		outTools = append(outTools, mgr.Tools()...)
 	}
-	return out
+	return outTools
 }
 
 func (ss *SocketServer) workerToolsCacheKey() string {
@@ -86,16 +98,27 @@ func (ss *SocketServer) workerToolsCacheKey() string {
 }
 
 func (ss *SocketServer) workerTools() []llm.Tool {
+	return ss.workerToolsFor(brain.OutputCwd(), brain.ActiveRuntimeEnv())
+}
+
+// workerToolsFor 显式指定产出区/运行环境的 worker 工具集（带缓存；key 含 out/env）。
+func (ss *SocketServer) workerToolsFor(out string, env *brain.RuntimeEnv) []llm.Tool {
 	key := ss.workerToolsCacheKey()
-	if key == ss.workerToolsKey && len(ss.workerToolsCache) > 0 {
-		out := make([]llm.Tool, len(ss.workerToolsCache))
-		copy(out, ss.workerToolsCache)
-		return out
+	if out != "" {
+		key += "|out:" + out
 	}
-	out := ss.buildWorkerTools()
+	if env != nil {
+		key += "|env:" + env.OS + "/" + env.Shell
+	}
+	if key == ss.workerToolsKey && len(ss.workerToolsCache) > 0 {
+		outTools := make([]llm.Tool, len(ss.workerToolsCache))
+		copy(outTools, ss.workerToolsCache)
+		return outTools
+	}
+	outTools := ss.buildWorkerToolsFor(out, env)
 	ss.workerToolsKey = key
-	ss.workerToolsCache = out
-	return out
+	ss.workerToolsCache = outTools
+	return outTools
 }
 
 type delegateTaskTool struct {
@@ -161,7 +184,7 @@ func (t *delegateTaskTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	if err != nil {
 		return "", err
 	}
-	started = maybeAppendDelegateHints(started, task, p.Context)
+	started = maybeAppendDelegateHintsFor(ctx, started, task, p.Context)
 	if !p.Wait {
 		return started, nil
 	}
@@ -169,7 +192,10 @@ func (t *delegateTaskTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	if err != nil {
 		return "", err
 	}
-	_ = brain.AppendDelegateWaitNote(out)
+	cc := brain.ChatContextFrom(ctx)
+	if err := brain.AppendDelegateWaitNoteFor(cc.WS, out); err != nil {
+		log.Printf("delegate_wait short-term: %v", err)
+	}
 	return out, nil
 }
 
@@ -185,6 +211,11 @@ func clampDelegateRounds(n int) int {
 
 // maybeAppendDelegateHints 父 Agent 委派后附简短提示（minimal worker 依赖 task/context）。
 func maybeAppendDelegateHints(started, task, parentContext string) string {
+	return maybeAppendDelegateHintsFor(context.Background(), started, task, parentContext)
+}
+
+// maybeAppendDelegateHintsFor 显式从 ctx 取运行环境（多 chat 并行勿依赖全局 ActiveRuntimeEnv）。
+func maybeAppendDelegateHintsFor(ctx context.Context, started, task, parentContext string) string {
 	var hints []string
 	if strings.TrimSpace(parentContext) == "" {
 		hints = append(hints, "hint: context empty—minimal worker needs file paths, schema, and decisions in context")
@@ -193,7 +224,8 @@ func maybeAppendDelegateHints(started, task, parentContext string) string {
 		hints = append(hints, "hint: task is very long—save data to files and reference paths in context")
 	}
 	if strings.Contains(task, "/mnt/") {
-		if env := brain.ActiveRuntimeEnv(); env != nil && !env.ShellSupportsUnixSyntax() {
+		cc := brain.ChatContextFrom(ctx)
+		if env := cc.Runtime; env != nil && !env.ShellSupportsUnixSyntax() {
 			hints = append(hints, "hint: task uses /mnt/ paths on non-WSL shell—use output_cwd-relative or native Windows paths")
 		}
 	}
@@ -241,7 +273,8 @@ func (t *delegateWaitTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	if err != nil {
 		return "", err
 	}
-	if err := brain.AppendDelegateWaitNote(out); err != nil {
+	cc := brain.ChatContextFrom(ctx)
+	if err := brain.AppendDelegateWaitNoteFor(cc.WS, out); err != nil {
 		log.Printf("delegate_wait short-term: %v", err)
 	}
 	return out, nil

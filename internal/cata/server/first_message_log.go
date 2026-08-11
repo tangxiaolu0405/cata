@@ -18,7 +18,12 @@ import (
 //  1. 写入 server 日志（managed 模式落在 cata-server.log）；
 //  2. 向客户端发 type=log 事件，TUI 直接展示。
 func (ss *SocketServer) emitFirstMessageDiagnostics(conn net.Conn, client *llm.Client, ws *brain.Workspace, userText string) {
-	diag := ss.buildFirstMessageDiagnostics(client, ws, userText)
+	ss.emitFirstMessageDiagnosticsWithOutCwd(conn, client, ws, brain.OutputCwd(), userText)
+}
+
+// emitFirstMessageDiagnosticsWithOutCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
+func (ss *SocketServer) emitFirstMessageDiagnosticsWithOutCwd(conn net.Conn, client *llm.Client, ws *brain.Workspace, outCwd, userText string) {
+	diag := ss.buildFirstMessageDiagnosticsWithOutCwd(client, ws, outCwd, userText)
 	log.Printf("first message diagnostics:\n%s", diag)
 	_ = ss.emitStreamLine(conn, map[string]interface{}{
 		"type":    "log",
@@ -78,6 +83,11 @@ func (s firstMessageSnapshot) render() string {
 
 // buildFirstMessageDiagnostics 收集首条消息处理链路的状态快照并渲染。
 func (ss *SocketServer) buildFirstMessageDiagnostics(client *llm.Client, ws *brain.Workspace, userText string) string {
+	return ss.buildFirstMessageDiagnosticsWithOutCwd(client, ws, brain.OutputCwd(), userText)
+}
+
+// buildFirstMessageDiagnosticsWithOutCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
+func (ss *SocketServer) buildFirstMessageDiagnosticsWithOutCwd(client *llm.Client, ws *brain.Workspace, outCwd, userText string) string {
 	snap := firstMessageSnapshot{}
 	if ss.server != nil && !ss.server.startedAt.IsZero() {
 		snap.serverStart = ss.server.startedAt.In(clock.Location()).Format("2006-01-02 15:04:05")
@@ -89,8 +99,8 @@ func (ss *SocketServer) buildFirstMessageDiagnostics(client *llm.Client, ws *bra
 		snap.focusPath = ws.RootPath
 		snap.activeMode = ws.ActiveMode
 	}
-	if out := brain.OutputCwd(); out != "" {
-		snap.outputCwd = out
+	if outCwd != "" {
+		snap.outputCwd = outCwd
 	}
 	if client != nil {
 		snap.model = client.ModelName()

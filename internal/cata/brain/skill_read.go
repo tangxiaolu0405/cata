@@ -33,7 +33,8 @@ func ReadSkill(ctx context.Context, args ReadSkillArgs) (string, error) {
 	if skill == "" {
 		return "", fmt.Errorf("read_skill: skill required")
 	}
-	body, path, err := loadSkillMarkdown(skill)
+	cc := ChatContextFrom(ctx)
+	body, path, err := loadSkillMarkdownFor(cc.WS, skill)
 	if err != nil {
 		return "", err
 	}

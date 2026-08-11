@@ -42,9 +42,10 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
 // chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
 // promptPeak 为本连接会话内已达最高 prompt 档位（sticky，chat_reset 清零）。
-func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile) (err error) {
+func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
+	cc := brain.ChatContextFrom(ctx)
 	var lr *connLineReader
 	defer func() {
 		if r := recover(); r != nil {
@@ -78,17 +79,17 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 	// 会话首条消息（含 chat_reset 后的新会话）输出诊断，便于定位「cata 没处理 / 无响应」。
 	if len(*history) == 0 {
-		ss.emitFirstMessageDiagnostics(conn, client, chatWS, text)
+		ss.emitFirstMessageDiagnosticsWithOutCwd(conn, client, chatWS, cc.OutputCwd, text)
 	}
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
-	if len(ss.buildTerminalChatToolsForTier(ContextTierLight)) == 0 {
+	if len(ss.buildTerminalChatToolsForTier(ContextTierLight, cc.OutputCwd, cc.Runtime)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 		return fmt.Errorf("no terminal tools enabled")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lr = newConnLineReader(br, conn, cancel)
 	ctx = withChatConnReader(ctx, lr)
@@ -100,7 +101,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 	if chatWS != nil {
 		var resumed bool
 		var terr error
-		task, resumed, terr = brain.BeginOrResumeTask(chatWS, text, brain.OutputCwd())
+		task, resumed, terr = brain.BeginOrResumeTask(chatWS, text, cc.OutputCwd)
 		if terr != nil {
 			log.Printf("task state: %v", terr)
 		} else if msg := brain.TaskResumeProgressMessage(task, resumed); msg != "" {
@@ -113,7 +114,6 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 
 	for round := 1; ; round++ {
 		if ctx.Err() != nil {
-			brain.ClearPromptProfile()
 			return ss.emitChatCancelled(conn, lr)
 		}
 		if chatWS != nil {
@@ -129,12 +129,10 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		roundProfile := tier.PromptProfile()
 		if promptPeak != nil {
 			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)
-			brain.SetPromptProfile(*promptPeak)
-		} else {
-			brain.SetPromptProfile(roundProfile)
+			roundProfile = *promptPeak
 		}
-		tools := ss.buildTerminalChatToolsForTier(tier)
-		ss.maybeContextCompress(conn, client, history, tools)
+		tools := ss.buildTerminalChatToolsForTier(tier, cc.OutputCwd, cc.Runtime)
+		ss.maybeContextCompress(ctx, conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
 
 		onDelta := func(s string) error {
@@ -158,7 +156,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				})
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
-			asst, reasoning, toolCalls, finishReason, roundUsage, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+			asst, reasoning, toolCalls, finishReason, roundUsage, err = client.ChatStreamRoundFor(ctx, *history, tools, "auto", 0, 0, roundProfile, cc.OutputCwd, onDelta)
 			toolCalls = llm.NormalizeToolCalls(toolCalls)
 			if err == nil {
 				break
@@ -168,7 +166,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 			}
 			log.Printf("chat stream round %d attempt %d: %v", round, attempt, err)
 		}
-		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, "", chatWS, subagentRunningFrom(ctx))
+		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, roundProfile, cc.OutputCwd, "", chatWS, subagentRunningFrom(ctx))
 		if strings.EqualFold(finishReason, "length") {
 			_ = ss.emitStreamLine(conn, map[string]interface{}{
 				"type":    "error",
@@ -177,14 +175,12 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				brain.ClearPromptProfile()
 				return ss.emitChatCancelled(conn, lr)
 			}
 			msg := err.Error() + "\n\n本连接对话上下文已保留（含已执行的工具结果）。直接输入「继续」即可接着做，无需从头重述任务。"
 			lr.Stop()
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
-			brain.ClearPromptProfile()
 			return err
 		}
 
@@ -235,7 +231,6 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				if chatWS != nil && task != nil {
 					_ = brain.MarkTaskFailed(chatWS, task, "tool_args_unparsed", hint, round, 0, 0, "", "")
 				}
-				brain.ClearPromptProfile()
 				if lr != nil {
 					lr.Stop()
 				}
@@ -243,7 +238,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 				return ss.emitChatDone(conn, lr, false, false, "tool_args_unparsed", hint)
 			}
 			*history = append(*history, llm.Message{Role: "assistant", Content: asst})
-			if err := brain.AppendChatTurn(text, asst); err != nil {
+			if err := brain.AppendChatTurnFor(chatWS, text, asst); err != nil {
 				log.Printf("short-term memory: %v", err)
 			}
 			if chatWS != nil && task != nil {
@@ -251,8 +246,7 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 					log.Printf("task done: %v", err)
 				}
 			}
-			ss.maybeContextCompress(conn, client, history, tools)
-			brain.ClearPromptProfile()
+			ss.maybeContextCompress(ctx, conn, client, history, tools)
 			return ss.emitChatDone(conn, lr, true, false, "", "")
 		}
 
@@ -266,16 +260,13 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, br *bufio.Reader
 		results, err := ss.executeChatToolCalls(ctx, conn, client, history, tools, toolCalls, round, &sessPromptTok, &sessCompletionTok, chatWS)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				brain.ClearPromptProfile()
 				return ss.emitChatCancelled(conn, lr)
 			}
-			brain.ClearPromptProfile()
 			return err
 		}
 		if brk := guard.observe(results); brk != nil {
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
-		brain.ClearPromptProfile()
 	}
 }
 
@@ -293,7 +284,6 @@ func (ss *SocketServer) emitChatLoopFailure(conn net.Conn, lr *connLineReader, c
 			log.Printf("task failed persist: %v", err)
 		}
 	}
-	brain.ClearPromptProfile()
 	msg := brk.Reason
 	if task != nil && task.Goal != "" {
 		msg = fmt.Sprintf("%s\n\n任务已标记失败（code=%s）。目标：%s\n输入「继续」可恢复同一任务。", brk.Reason, brk.Code, task.Goal)
@@ -334,7 +324,7 @@ func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *connLineReader) err
 
 // maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。
 // history 指本连接内存中的多轮 user/assistant/tool，不是 short-term 文件；short-term 由 AppendChatTurn 写入磁盘供 evolve 提炼。
-func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool) {
+func (ss *SocketServer) maybeContextCompress(ctx context.Context, conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool) {
 	if config.Config == nil || !config.Config.Evolution.Enabled {
 		return
 	}
@@ -348,7 +338,8 @@ func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, 
 		"type":    "progress",
 		"message": fmt.Sprintf("context ~%d/%d tokens (≥%.0f%%), consolidating memory...", est, window, llm.ContextCompressRatioValue()*100),
 	})
-	if err := evolve.RunSessionCompress(context.Background()); err != nil {
+	cc := brain.ChatContextFrom(ctx)
+	if err := evolve.RunSessionCompress(ctx, cc.WS); err != nil {
 		log.Printf("session compress: %v", err)
 		return
 	}
@@ -476,8 +467,9 @@ func safePathUnder(base, rel string) (string, error) {
 	return brain.PathUnderBase(base, rel)
 }
 
-func resolveExecCwd() (string, error) {
-	return brain.ExecWorkingDir()
+func resolveExecCwd(ctx context.Context) (string, error) {
+	cc := brain.ChatContextFrom(ctx)
+	return brain.ExecWorkingDirFor(cc.OutputCwd)
 }
 
 // isFatalBrowserError returns true when the tool error or output indicates
@@ -527,7 +519,7 @@ func firstDroppableIndex(msgs []llm.Message) int {
 	return -1
 }
 
-func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, lastTool string, chatWS *brain.Workspace, subagentRunning int) {
+func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, roundProfile brain.PromptProfile, outCwd string, lastTool string, chatWS *brain.Workspace, subagentRunning int) {
 	in := usage.PromptTokens
 	out := usage.CompletionTokens
 	if in == 0 && out == 0 && usage.TotalTokens > 0 {
@@ -553,7 +545,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		"context_window":     client.ContextWindowTokens(),
 		"tools":              len(tools),
 		"last_tool":          lastTool,
-		"prompt_profile":     string(brain.ActivePromptProfile()),
+		"prompt_profile":     string(roundProfile),
 	}
 	w := chatWS
 	if w != nil {
@@ -563,7 +555,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 		ev["cata_home"] = brain.CataHome()
 		ev["active_mode"] = w.ActiveMode
 	}
-	if outCwd := brain.OutputCwd(); outCwd != "" {
+	if outCwd != "" {
 		ev["output_cwd"] = outCwd
 	}
 	if subagentRunning > 0 {

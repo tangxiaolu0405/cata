@@ -184,7 +184,8 @@ func (ss *SocketServer) runChatToolSequential(
 	fatalBrowser bool,
 ) (chatToolExecResult, bool, error) {
 	name := tc.Function.Name
-	ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, sessPromptTok, sessCompletionTok, name, chatWS, subagentRunningFrom(ctx))
+	cc := brain.ChatContextFrom(ctx)
+	ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, sessPromptTok, sessCompletionTok, cc.Profile, cc.OutputCwd, name, chatWS, subagentRunningFrom(ctx))
 	_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name, "level": toolDisplayLevelForStart(name)})
 
 	var out string
@@ -234,7 +235,8 @@ func (ss *SocketServer) runChatToolBatchParallel(
 				return
 			}
 			name := tc.Function.Name
-			ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, sessPromptTok, sessCompletionTok, name, chatWS, subagentRunningFrom(ctx))
+			cc := brain.ChatContextFrom(ctx)
+			ss.emitChatStats(conn, client, history, tools, round, llm.StreamUsage{}, sessPromptTok, sessCompletionTok, cc.Profile, cc.OutputCwd, name, chatWS, subagentRunningFrom(ctx))
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name, "level": toolDisplayLevelForStart(name)})
 			out, terr := ss.runTerminalTool(ctx, conn, tc)
 			results[i] = chatToolExecResult{tc: tc, out: mergeToolOutputError(out, terr), name: name}

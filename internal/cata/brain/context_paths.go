@@ -38,23 +38,26 @@ func TerminalPathsSystemBlock() string {
 
 // TerminalPathsSystemBlockFor 按指定 profile 生成路径块（worker 等并发场景勿依赖全局 Active）。
 func TerminalPathsSystemBlockFor(p PromptProfile) string {
+	return TerminalPathsSystemBlockForContext(p, Active(), OutputCwd(), ActiveRuntimeEnv())
+}
 
+// TerminalPathsSystemBlockForContext 显式指定脑子/产出区/环境的路径块（多 chat 并行勿依赖全局）。
+func TerminalPathsSystemBlockForContext(p PromptProfile, w *Workspace, out string, env *RuntimeEnv) string {
 	switch ProfileRank(p) {
 	case 0:
-		return terminalPathsSystemBlockMinimal()
+		return terminalPathsSystemBlockMinimal(w, out, env)
 	case 1:
-		return terminalPathsSystemBlockTask()
+		return terminalPathsSystemBlockTask(w, out, env)
 	default:
-		return terminalPathsSystemBlockFull()
+		return terminalPathsSystemBlockFull(w, out, env)
 	}
 }
 
-func terminalPathsSystemBlockMinimal() string {
-	out := OutputCwd()
+func terminalPathsSystemBlockMinimal(w *Workspace, out string, env *RuntimeEnv) string {
 	var b strings.Builder
 	b.WriteString(TerminalPathsSystemPrefix)
 	b.WriteString("（简）\n")
-	if w := Active(); w != nil {
+	if w != nil {
 		b.WriteString("- focus_path：`")
 		b.WriteString(w.RootPath)
 		b.WriteString("`\n")
@@ -64,7 +67,7 @@ func terminalPathsSystemBlockMinimal() string {
 		b.WriteString(out)
 		b.WriteString("`\n")
 	}
-	if env := ActiveRuntimeEnv(); env != nil {
+	if env != nil {
 		b.WriteString(fmt.Sprintf("- host/command：`%s`/`%s`  shell：`%s`\n",
 			env.HostPlatform(), env.CommandPlatform(), env.Shell))
 	}
@@ -72,16 +75,15 @@ func terminalPathsSystemBlockMinimal() string {
 	return b.String()
 }
 
-func terminalPathsSystemBlockTask() string {
+func terminalPathsSystemBlockTask(w *Workspace, out string, env *RuntimeEnv) string {
 	home := CataHome()
-	out := OutputCwd()
 	var b strings.Builder
 	b.WriteString(TerminalPathsSystemPrefix)
 	b.WriteString("（task）\n")
 	b.WriteString("三根：CATA_HOME / 项目 `.cata` / 产出区。默认=产出区；`brain/…`→项目 `.cata` 或 home 记忆；`global/…`→`")
 	b.WriteString(home)
 	b.WriteString("/global/`。\n")
-	if w := Active(); w != nil {
+	if w != nil {
 		b.WriteString("- focus_path：`")
 		b.WriteString(w.RootPath)
 		b.WriteString("`\n- 项目 `.cata`：`")
@@ -95,7 +97,6 @@ func terminalPathsSystemBlockTask() string {
 		b.WriteString(out)
 		b.WriteString("`\n")
 	}
-	env := ActiveRuntimeEnv()
 	if env != nil && env.Tools == (HostTools{}) {
 		env.ProbeTools()
 	}
@@ -103,14 +104,13 @@ func terminalPathsSystemBlockTask() string {
 		b.WriteString(fmt.Sprintf("- host/command：`%s`/`%s`  shell：`%s`\n",
 			env.HostPlatform(), env.CommandPlatform(), env.Shell))
 		b.WriteString(env.ToolsAvailabilityBlock())
-		b.WriteString(env.runCommandHints())
+		b.WriteString(runCommandHintsFor(env, out))
 	}
 	b.WriteString("工具见 **tools[]**（含 run_command）。\n")
 	return b.String()
 }
 
-func terminalPathsSystemBlockFull() string {
-	out := OutputCwd()
+func terminalPathsSystemBlockFull(w *Workspace, out string, env *RuntimeEnv) string {
 	var b strings.Builder
 	b.WriteString(TerminalPathsSystemPrefix)
 	b.WriteString("\n")
@@ -118,7 +118,7 @@ func terminalPathsSystemBlockFull() string {
 	b.WriteString(CataHome())
 	b.WriteString("`（引导+home 记忆）② 项目 `.cata`（persona/modes/skills）③ 产出区 output_cwd（代码/命令）。\n")
 	// full 档已注入 constraints：此处只给本轮绝对路径与环境，不复述静态路由。
-	if w := Active(); w != nil {
+	if w != nil {
 		b.WriteString("- home：`")
 		b.WriteString(w.Dir())
 		b.WriteString("`\n- 项目 `.cata`：`")
@@ -147,12 +147,11 @@ func terminalPathsSystemBlockFull() string {
 	} else {
 		b.WriteString("- output_cwd：（未知）\n")
 	}
-	env := ActiveRuntimeEnv()
 	if env != nil && env.Tools == (HostTools{}) {
 		env.ProbeTools()
 	}
 	if env == nil {
-		b.WriteString(SubagentDelegateGuideBlock())
+		b.WriteString(SubagentDelegateGuideBlockFor(out))
 		return b.String()
 	}
 	b.WriteString(fmt.Sprintf("- host/command：`%s`/`%s` arch：`%s`  shell：`%s`",
@@ -171,10 +170,10 @@ func terminalPathsSystemBlockFull() string {
 	if env.IsWSL() && out != "" && len(out) >= 2 && out[1] == ':' {
 		b.WriteString(fmt.Sprintf("- WSL 产出区：`%s`\n", WSLPathForOutput(out)))
 	}
-	b.WriteString(SubagentDelegateGuideBlock())
+	b.WriteString(SubagentDelegateGuideBlockFor(out))
 	b.WriteString("\n")
 	b.WriteString(env.ToolsAvailabilityBlock())
-	b.WriteString(env.runCommandHints())
+	b.WriteString(runCommandHintsFor(env, out))
 	return b.String()
 }
 

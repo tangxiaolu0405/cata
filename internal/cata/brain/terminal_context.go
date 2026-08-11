@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,18 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 
 // TerminalBrainSystemExtensionFor 按指定 profile 组装节选（供 worker minimal 注入，避免全局 profile 竞态）。
 func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) string {
+	return terminalBrainSystemExtension(p, Active(), OutputCwd(), ActiveRuntimeEnv(), maxPerFile, maxTotal)
+}
+
+// TerminalBrainSystemExtensionForContext 按 ctx 中的 ChatContext（脑子分区/产出区/运行环境）组装节选。
+// 多 cata 并行时必须用此入口：勿依赖全局 Active()/OutputCwd()/ActiveRuntimeEnv()。
+func TerminalBrainSystemExtensionForContext(ctx context.Context, p PromptProfile, maxPerFile, maxTotal int) string {
+	cc := ChatContextFrom(ctx)
+	return terminalBrainSystemExtension(p, cc.WS, cc.OutputCwd, cc.Runtime, maxPerFile, maxTotal)
+}
+
+// terminalBrainSystemExtension 显式指定 workspace/产出区/运行环境组装节选（全局版与 ctx 版共用）。
+func terminalBrainSystemExtension(p PromptProfile, w *Workspace, out string, env *RuntimeEnv, maxPerFile, maxTotal int) string {
 	if maxPerFile <= 0 {
 		maxPerFile = 6500
 	}
@@ -74,7 +87,7 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 		return true
 	}
 
-	paths := TerminalPathsSystemBlockFor(p)
+	paths := TerminalPathsSystemBlockForContext(p, w, out, env)
 	if !appendBlock(paths) {
 		return b.String()
 	}
@@ -83,9 +96,9 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 	case 0:
 		return b.String()
 	case 1:
-		if w := Active(); w != nil {
-			caps := LoadActiveCapabilitiesCached()
-			if skills := SkillsIndexBlockCached(caps.Skills); !appendBlock(skills) {
+		if w != nil {
+			caps := LoadCapabilitiesCachedFor(w)
+			if skills := SkillsIndexBlockCachedFor(w, caps.Skills); !appendBlock(skills) {
 				return b.String()
 			}
 			if modes := ModesCatalogPromptBlock(w); !appendBlock(modes) {
@@ -95,21 +108,21 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 				return b.String()
 			}
 		}
-		if idx := MemoryIndexPromptBlockFor(p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+		if idx := MemoryIndexPromptBlockForWorkspace(w, p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
 			if !appendBlock(idx) {
 				return b.String()
 			}
 		}
 		// task 档也要有 active mode 节选，否则首轮看不到项目 SOP / 委派路由
-		if content := terminalProjectContentExcerpt(minInt(maxPerFile, 3200), maxTotal-used); content != "" {
+		if content := terminalProjectContentExcerptFor(w, minInt(maxPerFile, 3200), maxTotal-used); content != "" {
 			_ = appendBlock(content)
 		}
 		return b.String()
 	}
 
-	if w := Active(); w != nil {
-		caps := LoadActiveCapabilitiesCached()
-		if skills := SkillsIndexBlockCached(caps.Skills); !appendBlock(skills) {
+	if w != nil {
+		caps := LoadCapabilitiesCachedFor(w)
+		if skills := SkillsIndexBlockCachedFor(w, caps.Skills); !appendBlock(skills) {
 			return b.String()
 		}
 		if modes := ModesCatalogPromptBlock(w); !appendBlock(modes) {
@@ -119,7 +132,7 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 			return b.String()
 		}
 	}
-	if idx := MemoryIndexPromptBlockFor(p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+	if idx := MemoryIndexPromptBlockForWorkspace(w, p, maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
 		if !appendBlock(idx) {
 			return b.String()
 		}
@@ -128,7 +141,7 @@ func TerminalBrainSystemExtensionFor(p PromptProfile, maxPerFile, maxTotal int) 
 	if guidance := terminalGuidanceExcerpt(maxPerFile, maxTotal-used); !appendBlock(guidance) {
 		return b.String()
 	}
-	if content := terminalProjectContentExcerpt(maxPerFile, maxTotal-used); content != "" {
+	if content := terminalProjectContentExcerptFor(w, maxPerFile, maxTotal-used); content != "" {
 		if !appendBlock(content) {
 			return b.String()
 		}
@@ -176,9 +189,13 @@ func terminalGuidanceExcerpt(maxPerFile, budget int) string {
 	return b.String()
 }
 
-// terminalProjectContentExcerpt focus_path/.cata 主要内容：mode persona/behavior/constraints + persona.local。
+// terminalProjectContentExcerpt focus_path/.cata 主要内容：mode persona/behavior/constraints + persona.local（全局 Active）。
 func terminalProjectContentExcerpt(maxPerFile, budget int) string {
-	w := Active()
+	return terminalProjectContentExcerptFor(Active(), maxPerFile, budget)
+}
+
+// terminalProjectContentExcerptFor 显式指定 workspace 的 focus_path/.cata 主要内容节选（多 chat 并行勿依赖全局 Active）。
+func terminalProjectContentExcerptFor(w *Workspace, maxPerFile, budget int) string {
 	if w == nil {
 		return legacyProjectContentFallback(maxPerFile, budget)
 	}

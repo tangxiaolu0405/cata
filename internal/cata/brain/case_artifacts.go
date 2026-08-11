@@ -255,15 +255,27 @@ func AppendModeRunLog(outputCwd string, rec ModeRunLog) (string, error) {
 	return path, nil
 }
 
-// AppendDelegateModeNote 主 short-term 留痕。
+// AppendDelegateModeNote 主 short-term 留痕（全局 Active）。
 func AppendDelegateModeNote(modeID, caseID, subID, status, summary string) error {
-	summary = truncateRunes(strings.TrimSpace(summary), 240)
-	line := fmt.Sprintf("[delegate_mode mode=%s case=%s id=%s status=%s] %s",
-		ResolveDelegateModeID(modeID), caseID, subID, status, summary)
 	w, err := MustActive()
 	if err != nil {
 		return err
 	}
+	return AppendDelegateModeNoteFor(w, modeID, caseID, subID, status, summary)
+}
+
+// AppendDelegateModeNoteFor 显式指定 workspace 的主 short-term 留痕（多 chat 并行勿依赖全局 Active）。
+func AppendDelegateModeNoteFor(w *Workspace, modeID, caseID, subID, status, summary string) error {
+	if w == nil {
+		var err error
+		w, err = MustActive()
+		if err != nil {
+			return err
+		}
+	}
+	summary = truncateRunes(strings.TrimSpace(summary), 240)
+	line := fmt.Sprintf("[delegate_mode mode=%s case=%s id=%s status=%s] %s",
+		ResolveDelegateModeID(modeID), caseID, subID, status, summary)
 	block := fmt.Sprintf("\n\n## %s delegate_mode\n\n%s\n", clock.RFC3339(), line)
 	return appendToShortTerm(w.ShortTermPath(), block)
 }

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -222,19 +223,25 @@ func withBootLeaderSystemMessage(messages []Message) []Message {
 }
 
 func withBootLeaderSystemMessageFor(messages []Message, profile brain.PromptProfile) []Message {
+	return withBootLeaderSystemMessageForCtx(nil, messages, profile)
+}
+
+// withBootLeaderSystemMessageForCtx 与 For 版相同，但 brain 节选按 ctx 中 ChatContext 的
+// 脑子分区/产出区/运行环境组装（多 cata 并行勿依赖全局 Active/OutputCwd/RuntimeEnv）。
+func withBootLeaderSystemMessageForCtx(ctx context.Context, messages []Message, profile brain.PromptProfile) []Message {
 	prompt := effectiveBootLeaderPromptFor(profile)
 	if prompt == "" {
-		return ensureCataBrainExcerptSystemFor(messages, profile)
+		return ensureCataBrainExcerptSystemForCtx(ctx, messages, profile)
 	}
 
 	if len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt {
-		return ensureCataBrainExcerptSystemFor(messages, profile)
+		return ensureCataBrainExcerptSystemForCtx(ctx, messages, profile)
 	}
 
 	out := make([]Message, 0, len(messages)+1)
 	out = append(out, Message{Role: "system", Content: prompt})
 	out = append(out, messages...)
-	return ensureCataBrainExcerptSystemFor(out, profile)
+	return ensureCataBrainExcerptSystemForCtx(ctx, out, profile)
 }
 
 // ensureCataBrainExcerptSystem 在 boot-leader 之后插入路径块 + 脑子节选（若尚未存在）。
@@ -243,6 +250,11 @@ func ensureCataBrainExcerptSystem(msgs []Message) []Message {
 }
 
 func ensureCataBrainExcerptSystemFor(msgs []Message, profile brain.PromptProfile) []Message {
+	return ensureCataBrainExcerptSystemForCtx(nil, msgs, profile)
+}
+
+// ensureCataBrainExcerptSystemForCtx 与 For 版相同，但节选按 ctx 中 ChatContext 组装。
+func ensureCataBrainExcerptSystemForCtx(ctx context.Context, msgs []Message, profile brain.PromptProfile) []Message {
 	for _, m := range msgs {
 		if m.Role != "system" {
 			continue
@@ -254,7 +266,7 @@ func ensureCataBrainExcerptSystemFor(msgs []Message, profile brain.PromptProfile
 		}
 	}
 	perFile, total := brainExcerptLimitsFor(profile)
-	ext := brain.TerminalBrainSystemExtensionFor(profile, perFile, total)
+	ext := brain.TerminalBrainSystemExtensionForContext(ctx, profile, perFile, total)
 	if strings.TrimSpace(ext) == "" {
 		return msgs
 	}
@@ -540,6 +552,8 @@ type ChatRequest struct {
 	// SubagentID / SessionID worker 轮次审计（可选）。
 	SubagentID string `json:"-"`
 	SessionID  string `json:"-"`
+	// LogOutputCwd 本轮 LLM 请求日志应写入的产出区（~/.cata/llm/<sanitized>.log）；空则用全局。
+	LogOutputCwd string `json:"-"`
 }
 
 // ChatResponse 聊天响应

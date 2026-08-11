@@ -15,7 +15,12 @@ var (
 
 // LoadActiveCapabilitiesCached 带文件 mtime 缓存的 capabilities 读取。
 func LoadActiveCapabilitiesCached() Capabilities {
-	key := capabilitiesCacheKey()
+	return LoadCapabilitiesCachedFor(Active())
+}
+
+// LoadCapabilitiesCachedFor 显式指定 workspace 的带缓存 capabilities 读取。
+func LoadCapabilitiesCachedFor(w *Workspace) Capabilities {
+	key := capabilitiesCacheKeyFor(w)
 	capsCacheMu.RLock()
 	if capsCacheKey == key {
 		c := capsCacheVal
@@ -24,7 +29,7 @@ func LoadActiveCapabilitiesCached() Capabilities {
 	}
 	capsCacheMu.RUnlock()
 
-	c := LoadActiveCapabilities()
+	c := LoadCapabilitiesFor(w)
 	capsCacheMu.Lock()
 	capsCacheKey = key
 	capsCacheVal = c
@@ -33,7 +38,10 @@ func LoadActiveCapabilitiesCached() Capabilities {
 }
 
 func capabilitiesCacheKey() string {
-	w := Active()
+	return capabilitiesCacheKeyFor(Active())
+}
+
+func capabilitiesCacheKeyFor(w *Workspace) string {
 	if w == nil {
 		return "no-workspace"
 	}

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -191,18 +192,29 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if cwd == "" {
 				cwd = config.GetBrainBaseDir()
 			}
+			var runtime *brain.RuntimeEnv
 			if req.Runtime != nil {
-				brain.SetRuntimeEnv(req.Runtime)
+				runtime = req.Runtime
+				brain.SetRuntimeEnv(runtime)
 			} else {
 				e := brain.DetectRuntimeEnvFromProcess()
-				brain.SetRuntimeEnv(&e)
+				runtime = &e
+				brain.SetRuntimeEnv(runtime)
 			}
 			ws, err := brain.ResolveWorkspace(cwd)
 			if err != nil {
 				log.Printf("resolve brain: %v", err)
 			}
 			connWS = ws
-			if err := ss.handleTerminalChatStream(conn, br, &chatHistory, req.Text, ws, &chatPromptPeak); err != nil {
+			// 显式 ChatContext：多 cata 并行时勿依赖全局 SetActive/SetOutputCwd/SetRuntimeEnv。
+			cc := &brain.ChatContext{
+				WS:        ws,
+				OutputCwd: cwd,
+				Runtime:   runtime,
+				Profile:   brain.PromptProfileTask,
+			}
+			chatCtx := brain.WithChatContext(context.Background(), cc)
+			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			continue
@@ -210,7 +222,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			ss.markChatSession(&chatSession)
 			chatHistory = nil
 			chatPromptPeak = ""
-			if err := brain.AppendSessionBoundary(); err != nil {
+			if err := brain.AppendSessionBoundaryFor(connWS); err != nil {
 				log.Printf("short-term session boundary: %v", err)
 			}
 			if w := connWS; w != nil {

@@ -11,13 +11,17 @@ import (
 )
 
 // RunCrystallize 高 token / 重复任务后尝试将探索固化为脑子内 skill（不修改 mcp）。
-func RunCrystallize(ctx context.Context) error {
+// ws 可显式指定脑子分区（多 cata 并行勿依赖全局 MustActive）；nil 时回退全局。
+func RunCrystallize(ctx context.Context, ws *brain.Workspace) error {
 	if config.Config == nil || !config.Config.LLM.Enabled || !config.Config.Evolution.Enabled {
 		return nil
 	}
-	ws, err := brain.MustActive()
-	if err != nil {
-		return fmt.Errorf("active workspace: %w", err)
+	var err error
+	if ws == nil {
+		ws, err = brain.MustActive()
+		if err != nil {
+			return fmt.Errorf("active workspace: %w", err)
+		}
 	}
 	return NewEngine(cycleInterval()).runCycle(ctx, ws, false, true)
 }
