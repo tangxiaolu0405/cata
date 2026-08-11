@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"cata/internal/cata/brain"
+	"cata/internal/cata/config"
 	"cata/internal/cata/scheduler"
 	"cata/internal/llm"
 )
@@ -107,7 +108,9 @@ func (t *scheduleTaskTool) Execute(ctx context.Context, _ net.Conn, argsJSON str
 	}
 	daemonNote := ""
 	if enabled {
-		if err := ensureSchedulerDaemon(); err != nil {
+		if !config.SchedulesEnabled() {
+			daemonNote = "（调度守护未启动：config.schedules.enabled=false）"
+		} else if err := ensureSchedulerDaemon(); err != nil {
 			log.Printf("schedule_task: ensure scheduler daemon: %v", err)
 		} else {
 			daemonNote = "（调度守护已在后台运行）"

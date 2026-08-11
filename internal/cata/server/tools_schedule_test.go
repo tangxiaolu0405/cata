@@ -270,3 +270,31 @@ func TestScheduleTaskEnsuresDaemonWhenEnabled(t *testing.T) {
 		t.Fatalf("disabled task should not ensure daemon, called=%d", called)
 	}
 }
+
+func TestScheduleTaskSkipsDaemonWhenSchedulesDisabled(t *testing.T) {
+	ws := scheduleTestContext(t)
+	oldCfg := config.Config
+	cfg := &config.AppConfig{}
+	cfg.Schedules.Enabled = boolPtr(false)
+	config.Config = cfg
+	t.Cleanup(func() { config.Config = oldCfg })
+
+	called := 0
+	old := ensureSchedulerDaemon
+	ensureSchedulerDaemon = func() error { called++; return nil }
+	defer func() { ensureSchedulerDaemon = old }()
+
+	tool := &scheduleTaskTool{}
+	out, err := tool.Execute(scheduleCtx(ws), nil, `{"name":"disabled-cfg","prompt":"p","interval":"1h"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called != 0 {
+		t.Fatalf("daemon should not be ensured when schedules disabled, called=%d", called)
+	}
+	if !strings.Contains(out, "schedules.enabled=false") {
+		t.Fatalf("output should mention schedules disabled: %s", out)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
