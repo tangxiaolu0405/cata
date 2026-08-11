@@ -6,7 +6,7 @@
 !/.github/**
 
 手动签名.txt
-
+COMMIT_MSG.md
 # Build artifacts (repo root only — do not ignore internal/cata/)
 /cata.exe
 /cata
