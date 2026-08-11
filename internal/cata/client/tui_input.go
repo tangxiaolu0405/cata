@@ -161,6 +161,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.stats.turns, m.stats.round, m.stats.tools = 0, 0, 0
 			m.stats.sessionTok = 0
 			m.stats.state = "ready"
+			m.thinkingActive = false
 			m.stats.promptProfile = ""
 			m.subagents = nil
 			m.log = styleDim.Render("— session cleared") + "\n"
@@ -206,7 +207,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		outCwd = m.cwd
 	}
 	rt := m.runtime
-	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt}); err != nil {
+	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt, ShowThinking: m.showThinking}); err != nil {
 		m.streaming = false
 		m.cancelRequested = false
 		m.input.Focus()

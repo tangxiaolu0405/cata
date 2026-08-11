@@ -5,10 +5,11 @@ import (
 	"strings"
 )
 
-// ChatOptions 客户端启动选项（--dir / --quiet / --verbose）。
+// ChatOptions 客户端启动选项（--dir / --quiet / --verbose / --show-thinking）。
 type ChatOptions struct {
-	Dirs        []string
-	DisplayMode string // "" | "quiet" | "verbose"
+	Dirs         []string
+	DisplayMode  string // "" | "quiet" | "verbose"
+	ShowThinking bool   // 展示模型推理（thinking 事件）
 }
 
 // ParseChatOptions extracts chat options from CLI args.
@@ -27,6 +28,8 @@ func ParseChatOptions(args []string) ChatOptions {
 			o.DisplayMode = "quiet"
 		case "--verbose", "-v":
 			o.DisplayMode = "verbose"
+		case "--show-thinking":
+			o.ShowThinking = true
 		}
 	}
 	return o

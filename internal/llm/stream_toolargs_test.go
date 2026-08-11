@@ -36,7 +36,7 @@ func TestReadOpenAIChatStream_toolCallObjectArgs(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":{\"path\":\"x.csv\"}}}]}}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: [DONE]\n\n"
-	content, _, tcs, fr, _, err := ReadOpenAIChatStream(strings.NewReader(sse), nil)
+	content, _, tcs, fr, _, err := ReadOpenAIChatStream(strings.NewReader(sse), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

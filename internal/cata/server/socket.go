@@ -53,6 +53,8 @@ type Request struct {
 	Cwd string `json:"cwd,omitempty"`
 	// Runtime 客户端所在 OS/终端（注入 LLM，避免生成需多轮纠正的命令）
 	Runtime *brain.RuntimeEnv `json:"runtime,omitempty"`
+	// ShowThinking 为 true 时流式下发 thinking 事件（客户端 --show-thinking）
+	ShowThinking bool `json:"show_thinking,omitempty"`
 }
 
 // Response 服务器响应
@@ -214,7 +216,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 				Profile:   brain.PromptProfileTask,
 			}
 			chatCtx := brain.WithChatContext(context.Background(), cc)
-			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak); err != nil {
+			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak, req.ShowThinking); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			continue

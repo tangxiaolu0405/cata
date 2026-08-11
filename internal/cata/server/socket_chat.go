@@ -42,7 +42,7 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
 // chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
 // promptPeak 为本连接会话内已达最高 prompt 档位（sticky，chat_reset 清零）。
-func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile) (err error) {
+func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile, showThinking bool) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	cc := brain.ChatContextFrom(ctx)
@@ -141,6 +141,13 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			}
 			return ss.emitStreamLine(conn, map[string]interface{}{"type": "token", "content": s})
 		}
+		// --show-thinking：把 DeepSeek reasoning_content 增量实时下发，TUI 展示思考过程。
+		onReasoning := func(s string) error {
+			if s == "" || !showThinking {
+				return nil
+			}
+			return ss.emitStreamLine(conn, map[string]interface{}{"type": "thinking", "content": s})
+		}
 
 		const maxLLMAttempts = 3
 		var asst string
@@ -156,7 +163,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 				})
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
-			asst, reasoning, toolCalls, finishReason, roundUsage, err = client.ChatStreamRoundFor(ctx, *history, tools, "auto", 0, 0, roundProfile, cc.OutputCwd, onDelta)
+			asst, reasoning, toolCalls, finishReason, roundUsage, err = client.ChatStreamRoundFor(ctx, *history, tools, "auto", 0, 0, roundProfile, cc.OutputCwd, onDelta, onReasoning)
 			toolCalls = llm.NormalizeToolCalls(toolCalls)
 			if err == nil {
 				break

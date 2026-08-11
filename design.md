@@ -156,7 +156,8 @@ ok  internal/auth  0.234s                     ← stderr, 完整命令输出
 #### 推理/思考（DeepSeek thinking）
 
 - **默认**：不向终端展示；Server 收集后写入 assistant 消息的 `reasoning_content`（tool 轮次 API 要求）
-- **规划**：`thinking` 事件 + `cata chat --show-thinking`
+- **`cata chat --show-thinking`**：Server 在流式轮次把 `reasoning_content` 增量下发为 `thinking` 事件，
+  TUI 以「┈ 思考中 ┈」块展示（深色），正文到达后自动收块；未开启时不下发、行为不变
 - 配置：`config.json` → `llm.thinking`（`auto` / `enabled` / `disabled`），见 `internal/llm/provider.go`
 
 #### 文件操作确认

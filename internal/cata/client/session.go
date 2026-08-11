@@ -13,13 +13,14 @@ import (
 )
 
 type req struct {
-	Command   string            `json:"command"`
-	Text      string            `json:"text,omitempty"`
-	Stream    bool              `json:"stream,omitempty"`
-	ConfirmID string            `json:"confirm_id,omitempty"`
-	Approved  bool              `json:"approved,omitempty"`
-	Cwd       string            `json:"cwd,omitempty"`
-	Runtime   *brain.RuntimeEnv `json:"runtime,omitempty"`
+	Command      string            `json:"command"`
+	Text         string            `json:"text,omitempty"`
+	Stream       bool              `json:"stream,omitempty"`
+	ConfirmID    string            `json:"confirm_id,omitempty"`
+	Approved     bool              `json:"approved,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Runtime      *brain.RuntimeEnv `json:"runtime,omitempty"`
+	ShowThinking bool              `json:"show_thinking,omitempty"`
 }
 
 type resp struct {

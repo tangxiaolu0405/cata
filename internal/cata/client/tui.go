@@ -116,6 +116,10 @@ type model struct {
 
 	// displayMode：""=auto（按事件 level）/ quiet（隐藏工具输出）/ verbose（完整输出）。
 	displayMode string
+	// showThinking：--show-thinking 时展示服务端 thinking 事件（模型推理）。
+	showThinking bool
+	// thinkingActive：本段 thinking 块已开启，首个 token 到达前保持；用于块边界处理。
+	thinkingActive bool
 
 	composeSendSeq uint64 // 当前挂起的 Enter 发送代号，0 表示无
 	slashList      *list.Model
@@ -204,6 +208,7 @@ func RunChat(opts ChatOptions) {
 	bindStats(cwd)
 	m := newModel(s, cwd)
 	m.displayMode = opts.displayMode()
+	m.showThinking = opts.ShowThinking
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
@@ -329,6 +334,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.cancelRequested = false
 		m.input.Focus()
+		m.closeThinking()
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
 			m.appendLog(styledLogLine(styleDim, "disconnected — try again"), true)
@@ -352,12 +358,24 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 	case "token":
 		c := str(ev.raw["content"])
 		if c != "" {
+			m.closeThinking()
 			m.appendLog(c, false)
 		}
+	case "thinking":
+		c := str(ev.raw["content"])
+		if c == "" || !m.showThinking {
+			break
+		}
+		if !m.thinkingActive {
+			m.thinkingActive = true
+			m.appendLog(styledLogLine(styleDim, "\n┈ 思考中 ┈"), true)
+		}
+		m.appendLog(c, false)
 	case "stats":
 		m.applyStats(ev.raw)
 		m.syncSidebarViewport()
 	case "progress":
+		m.closeThinking()
 		m.stats.state = str(ev.raw["message"])
 		m.appendRunDetail("• " + str(ev.raw["message"]))
 		m.syncSidebarViewport()
@@ -371,6 +389,7 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			m.syncSidebarViewport()
 		}
 	case "tool_start":
+		m.closeThinking()
 		if n := str(ev.raw["name"]); n != "" {
 			m.stats.lastTool = n
 			m.stats.state = n
@@ -405,12 +424,14 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			m.appendLog(formatToolResultLine("exec_done", ev.raw, m.displayMode)+"\n", true)
 		}
 	case "error":
+		m.closeThinking()
 		m.appendLog(styleErr.Render("! "+str(ev.raw["message"]))+"\n", true)
 		m.appendRunDetail("! " + str(ev.raw["message"]))
 		m.syncSidebarViewport()
 	case "user_choice":
 		return m.startChoiceOverlay(ev.raw)
 	case "done":
+		m.closeThinking()
 		if ev.raw["cancelled"] == true {
 			m.appendLog(styledLogLine(styleDim, "\n— stopped"), true)
 			m.appendRunDetail("— stopped")
@@ -557,6 +578,14 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.overlay.list, cmd = m.overlay.list.Update(key)
 	return m, cmd
+}
+
+// closeThinking 结束当前 thinking 块（若已开启）：补一个换行避免与正文粘连。
+func (m *model) closeThinking() {
+	if m.thinkingActive {
+		m.appendLog("\n", false)
+		m.thinkingActive = false
+	}
 }
 
 // styledLogLine 渲染一行日志文本，并把行尾换行放在样式之外。

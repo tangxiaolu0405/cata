@@ -17,7 +17,7 @@ import (
 
 // ReadOpenAIChatStream 读取 OpenAI 兼容的 text/event-stream（data: JSON 行），
 // 将 assistant 文本增量交给 onDelta，并返回合并正文、工具调用与 finish_reason。
-func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error, onReasoning func(string) error) (content string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	br := bufio.NewReader(r)
 	aggs := make(map[int]*streamToolAgg)
 	var contentBuf strings.Builder
@@ -76,6 +76,11 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 		d := ch.Delta
 		if d.ReasoningContent != "" {
 			reasoningBuf.WriteString(d.ReasoningContent)
+			if onReasoning != nil {
+				if e := onReasoning(d.ReasoningContent); e != nil {
+					return "", "", nil, "", usage, e
+				}
+			}
 		}
 		if d.Content != "" {
 			contentBuf.WriteString(d.Content)
@@ -120,6 +125,10 @@ func ReadOpenAIChatStream(r io.Reader, onDelta func(string) error) (content stri
 	reasoning = reasoningBuf.String()
 	if reasoning == "" {
 		reasoning = lastChoiceReasoning
+		// 兼容实现：reasoning 只在最后一帧 message 里下发（无 delta），一次性补发。
+		if onReasoning != nil && reasoning != "" {
+			_ = onReasoning(reasoning)
+		}
 	}
 	return contentBuf.String(), reasoning, toolCalls, finishReason, usage, nil
 }
@@ -246,16 +255,16 @@ type streamRoundFlags struct {
 
 // ChatStreamRound 单次流式 chat/completions 请求（主 chat：注入 brain）。
 func (c *Client) ChatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
-	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{}, onDelta)
+	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{}, onDelta, nil)
 }
 
 // ChatStreamRoundFor 与 ChatStreamRound 相同，但显式指定 brain 注入档位与 LLM 日志产出区
 // （多 cata 并行时避免依赖全局 SetPromptProfile/OutputCwd）。
-func (c *Client) ChatStreamRoundFor(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, profile brain.PromptProfile, logOutputCwd string, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+func (c *Client) ChatStreamRoundFor(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, profile brain.PromptProfile, logOutputCwd string, onDelta func(string) error, onReasoning func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	return c.chatStreamRound(ctx, messages, tools, toolChoice, maxTokens, temperature, streamRoundFlags{
 		brainProfile: profile,
 		logOutputCwd: logOutputCwd,
-	}, onDelta)
+	}, onDelta, onReasoning)
 }
 
 // ChatWorkerStreamRound 子 Agent 流式轮次：minimal 脑子注入、低温度、禁用 thinking。
@@ -271,10 +280,10 @@ func (c *Client) ChatWorkerStreamRound(ctx context.Context, messages []Message, 
 		subagentID:      meta.SubagentID,
 		sessionID:       meta.SessionID,
 		logOutputCwd:    logCwd,
-	}, onDelta)
+	}, onDelta, nil)
 }
 
-func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
+func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error, onReasoning func(string) error) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, usage StreamUsage, err error) {
 	if maxTokens <= 0 {
 		maxTokens = c.maxTokens
 	}
@@ -341,10 +350,10 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 		body, _ := io.ReadAll(resp.Body)
 		// 部分代理仍返回 SSE 正文但 Content-Type 标成 application/json。
 		if looksLikeSSEChatBody(body) {
-			assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, "text/event-stream", bytes.NewReader(body), onDelta)
+			assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, "text/event-stream", bytes.NewReader(body), onDelta, onReasoning)
 			if err != nil {
 				log.Printf("LLM: mislabeled SSE parse failed (Content-Type=%s): %v; falling back to non-stream", ct, err)
-				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
+				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage,
 					fmt.Sprintf("mislabeled SSE (Content-Type=%s)", ct))
 			}
 		} else {
@@ -353,33 +362,32 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 			if perr != nil {
 				log.Printf("LLM: stream got non-SSE JSON parse error (Content-Type=%s): %v; falling back to non-stream; body=%s",
 					ct, perr, truncateForErr(body, 200))
-				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
+				return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage,
 					fmt.Sprintf("non-SSE Content-Type=%s", ct))
 			}
 			finishReason = "stop"
 			if rawReasoning := extractReasoningFromChatJSON(body); rawReasoning != "" {
 				reasoning = rawReasoning
+				if onReasoning != nil {
+					_ = onReasoning(rawReasoning)
+				}
 			}
 		}
 		if emptyLLMResult(assistant, reasoning, toolCalls) {
 			log.Printf("LLM: stream endpoint returned empty non-SSE body (Content-Type=%s); falling back to non-stream; body=%s",
 				ct, truncateForErr(body, 200))
-			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage,
+			return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage,
 				"empty non-SSE body")
 		}
-		if onDelta != nil {
-			if text := assistantText(assistant, reasoning); text != "" {
-				_ = onDelta(text)
-			}
-		}
+		sendAssistantDelta(onDelta, onReasoning, assistant, reasoning)
 		c.appendLLMLog(req, tools, toolChoice, assistantText(assistant, reasoning), toolCalls, body)
 		return assistantText(assistant, reasoning), reasoning, toolCalls, finishReason, usage, nil
 	}
 
-	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta)
+	assistant, reasoning, toolCalls, finishReason, usage, err = pickStreamReader(c.apiFormat, c.apiURL, ct, resp.Body, onDelta, onReasoning)
 	if err != nil {
 		log.Printf("LLM: SSE read failed: %v; falling back to non-stream", err)
-		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "SSE read error")
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage, "SSE read error")
 	}
 
 	// 正文里嵌入的 [tool_call …] / <tool_call> 也可补救（部分端 finish_reason=tool_calls 但 delta 为空）
@@ -397,12 +405,12 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	// 再发一次非流式请求拿到完整 tool_calls，才能进入服务端多轮工具循环。
 	if (strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use")) && len(toolCalls) == 0 && len(tools) > 0 {
 		log.Printf("LLM: stream finish_reason=tool_calls but 0 parsed tool_calls; retrying non-stream once")
-		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty tool_calls")
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage, "empty tool_calls")
 	}
 
 	if emptyLLMResult(assistant, reasoning, toolCalls) {
 		log.Printf("LLM: SSE finished with empty content/tools; falling back to non-stream (slow proxy / thinking models)")
-		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, usage, "empty SSE")
+		return c.nonStreamFallbackRound(ctx, messages, tools, toolChoice, maxTokens, temperature, flags, onDelta, onReasoning, usage, "empty SSE")
 	}
 
 	out := assistantText(assistant, reasoning)
@@ -426,8 +434,26 @@ func extractReasoningFromChatJSON(body []byte) string {
 	return strings.TrimSpace(wrap.Choices[0].Message.ReasoningContent)
 }
 
+// sendAssistantDelta 将最终正文交给 onDelta。
+// 若 reasoning 已通过 onReasoning 单独下发（--show-thinking），正文只发真实 content，
+// 避免同一段推理在 TUI 思考块与主正文重复出现；未开 onReasoning 时保持原 assistantText 回退。
+func sendAssistantDelta(onDelta, onReasoning func(string) error, assistant, reasoning string) {
+	if onDelta == nil {
+		return
+	}
+	if onReasoning != nil && strings.TrimSpace(reasoning) != "" {
+		if text := strings.TrimSpace(assistant); text != "" {
+			_ = onDelta(text)
+		}
+		return
+	}
+	if text := assistantText(assistant, reasoning); text != "" {
+		_ = onDelta(text)
+	}
+}
+
 // nonStreamFallbackRound 流式不可用/空响应时改走非流式（慢推理代理常见：假 SSE / 早回空 JSON）。
-func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error, usage StreamUsage, why string) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, outUsage StreamUsage, err error) {
+func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message, tools []Tool, toolChoice string, maxTokens int, temperature float64, flags streamRoundFlags, onDelta func(string) error, onReasoning func(string) error, usage StreamUsage, why string) (assistant string, reasoning string, toolCalls []ToolCall, finishReason string, outUsage StreamUsage, err error) {
 	_ = ctx
 	outUsage = usage
 	log.Printf("LLM: non-stream fallback (%s)", why)
@@ -461,9 +487,10 @@ func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message,
 		return "", "", nil, "", outUsage, fmt.Errorf("empty LLM response after non-stream fallback (%s); proxy may have timed out upstream or dropped the completion", why)
 	}
 	out := assistantText(assistant, reasoning)
-	if onDelta != nil && out != "" {
-		_ = onDelta(out)
+	if onReasoning != nil && reasoning != "" {
+		_ = onReasoning(reasoning)
 	}
+	sendAssistantDelta(onDelta, onReasoning, assistant, reasoning)
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}

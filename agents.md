@@ -189,11 +189,11 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config`。
 
-**预留**（server 未发或未接）：`thinking`、`file_written`、`diff`。`display` 分级已落地（tool_start/tool_result 带 `level`；TUI `--quiet`/`--verbose`）。
+**预留**（server 未发或未接）：`file_written`、`diff`。已落地：`display` 分级（tool_start/tool_result 带 `level`；TUI `--quiet`/`--verbose`）、`thinking` 事件（`cata chat --show-thinking` 展示模型推理）。
 
 ### 推理/思考内容
 
-- Server 在流式轮次收集 `reasoning_content` 并写入 **history**（供 DeepSeek tool 轮次回传），**不向 client 发 `thinking` 事件**
+- Server 在流式轮次收集 `reasoning_content` 并写入 **history**（供 DeepSeek tool 轮次回传）；客户端带 `--show-thinking` 时实时下发 `thinking` 事件，默认不展示
 - DeepSeek `llm.thinking`：`auto` / `enabled` / `disabled`（`internal/llm/provider.go`）
 
 ---
