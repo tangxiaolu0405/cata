@@ -48,6 +48,14 @@ func TestTerminalBrainExtensionMinimalSkipsDocs(t *testing.T) {
 }
 
 func TestTerminalBrainExtensionTaskIncludesPersonaSkipsGuidance(t *testing.T) {
+	// task 档的 project content 节选依赖 focus_path/.cata 脚手架
+	//（persona / behavior / constraints），因此需要真实工作区而非裸全局。
+	ws, _ := testWorkspace(t, "task-profile")
+	if err := ws.EnsureScaffold(); err != nil {
+		t.Fatal(err)
+	}
+	SetActive(ws)
+	defer SetActive(nil)
 	SetPromptProfile(PromptProfileTask)
 	defer ClearPromptProfile()
 
