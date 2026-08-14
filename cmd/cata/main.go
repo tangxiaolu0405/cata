@@ -3,8 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/client"
@@ -48,6 +52,12 @@ func main() {
 		handleConfigCommand(args[1:])
 	case "run":
 		runServer(args[1:])
+	case "agent":
+		runAgent(args[1:])
+	case "link":
+		runLink(args[1:])
+	case "supervisor":
+		runSupervisor(args[1:])
 	case "schedule":
 		runSchedule(args[1:])
 	case "update":
@@ -65,7 +75,10 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  cata                    Start chat (default, TUI)")
 	fmt.Println("  cata chat [--dir <path>] [--quiet|-q] [--verbose|-v] [--show-thinking]  Start chat at output dir")
-	fmt.Println("  cata run                Start server (one per machine; foreground)")
+	fmt.Println("  cata run                Start server (one per machine; foreground, legacy)")
+	fmt.Println("  cata agent              Start one agent per workspace (one LLM loop; --workspace <ws_id>)")
+	fmt.Println("  cata link               Register local workspaces to a remote gateway (add/remove/list)")
+	fmt.Println("  cata supervisor         Per-machine daemon: keep registered agent processes alive")
 	fmt.Println("  cata schedule           Self-hosted scheduler daemon (discovers tasks, fires as real client)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
 	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")
@@ -80,6 +93,9 @@ func printUsage() {
 	fmt.Println("  cata chat --quiet          # 工具输出静默，只看结论")
 	fmt.Println("  cata chat --verbose        # 工具输出完整显示")
 	fmt.Println("  cata chat --show-thinking   # 展示模型推理过程（thinking 块）")
+	fmt.Println("  cata agent --workspace <ws_id>")
+	fmt.Println("  cata agent --workspace <ws_id> --link   # also hold WSS tunnel to gateway")
+	fmt.Println("  cata link add --dir ~/project           # register + keep-alive agent")
 	fmt.Println("  cata update")
 	fmt.Println("  cata update --check")
 	fmt.Println()
@@ -158,6 +174,116 @@ func runInitConfig() {
 	}
 	fmt.Printf("Config: llm=%s evolution=%ds exec=%v\n",
 		cfg.LLM.Provider, cfg.Evolution.CycleInterval, cfg.Exec.Enabled)
+}
+
+// runAgent 启动「一个工作空间一个 agent」进程：绑定单一工作空间（一个 LLM loop），
+// 服务 per-ws Unix socket（~/.cata/sockets/<ws_id>.sock）。进程生命周期内不再跨工作空间切换，
+// 从结构上消除多空间并行时的全局状态串扰。
+//   - --workspace <ws_id>  必需：要服务的工作空间 id
+//   - --idle-timeout <s>   无 chat 会话持续该秒数后自动退出（默认 300；0 表示不空闲回收）
+//   - --keep-alive         常驻（注册到网关的项目）：不因空闲退出
+//   - --link               额外持有到网关的 WSS 隧道（需 link.json 配置 gateway_url/token）
+//
+// 由 cata chat（本地按需拉起）、cata supervisor（注册常驻）或 cata link（隧道）管理生命周期。
+func runAgent(args []string) {
+	wsID := ""
+	idleTimeout := 300
+	keepAlive := false
+	link := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--workspace" && i+1 < len(args):
+			wsID = args[i+1]
+			i++
+		case a == "--idle-timeout" && i+1 < len(args):
+			if v, err := strconv.Atoi(args[i+1]); err == nil && v >= 0 {
+				idleTimeout = v
+				i++
+			}
+		case a == "--keep-alive":
+			keepAlive = true
+		case a == "--link":
+			link = true
+		case a == "--managed":
+			// 兼容：agent 生命周期由 supervisor/link/chat 管理，非传统 managed server。
+		case a == "-h" || a == "--help":
+			fmt.Println("Usage: cata agent --workspace <ws_id> [--idle-timeout <sec>] [--keep-alive] [--link]")
+			fmt.Println()
+			fmt.Println("  One workspace = one agent = one LLM loop, bound to ~/.cata/sockets/<ws_id>.sock.")
+			fmt.Println("  --keep-alive  resident (registered to gateway); --link also holds WSS tunnel.")
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "cata agent: unknown flag %q\n", a)
+			os.Exit(2)
+		}
+	}
+	if strings.TrimSpace(wsID) == "" {
+		fmt.Fprintln(os.Stderr, "cata agent: --workspace <ws_id> required")
+		os.Exit(2)
+	}
+
+	ws, err := brain.BindWorkspace(wsID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata agent: bind workspace: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := brain.ArchiveSessionLogs(); err != nil {
+		log.Printf("cata agent: archive logs: %v", err)
+	}
+	if keepAlive {
+		server.SetupAgentLogging(ws.ID)
+	} else {
+		server.SetupProcessLogging(false)
+	}
+
+	socketPath := config.ResolvedAgentSocketPath(ws.ID)
+	srv, err := server.NewServerWithOptions(server.Options{
+		Workspace:   ws,
+		SocketPath:  socketPath,
+		IdleTimeout: time.Duration(idleTimeout) * time.Second,
+		KeepAlive:   keepAlive,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata agent: create server: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := srv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "cata agent: start: %v\n", err)
+		os.Exit(1)
+	}
+
+	// pid 文件：供 supervisor / `cata link remove` 停止进程。
+	if err := writeAgentPID(ws.ID); err != nil {
+		log.Printf("cata agent: write pid: %v", err)
+	}
+	defer removeAgentPID(ws.ID)
+
+	if link {
+		// 隧道是长连接（断线自动重连）：放后台 goroutine，主流程走 srv.Wait()。
+		// 进程退出（Stop/信号）时随进程结束；断线重连不影响 chat socket 服务。
+		go func() {
+			if err := startAgentTunnel(ws.ID); err != nil {
+				log.Printf("cata agent: tunnel: %v", err)
+			}
+		}()
+	}
+
+	srv.Wait()
+}
+
+func writeAgentPID(agentID string) error {
+	path := config.AgentPIDPath(agentID)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644)
+}
+
+func removeAgentPID(agentID string) {
+	_ = os.Remove(config.AgentPIDPath(agentID))
 }
 
 func runServer(args []string) {

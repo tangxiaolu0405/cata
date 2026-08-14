@@ -26,11 +26,16 @@ type Bot struct {
 	progressOnce map[string]bool // eventMsgID
 }
 
-// NewBot 创建 QQ bot。
+// NewBot 创建 QQ bot（本地模式：拨本机 socket）。
 func NewBot(cfg gateway.Config) *Bot {
+	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
+}
+
+// NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入）。
+func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
 	return &Bot{
 		cfg:          cfg,
-		sessions:     gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot),
+		sessions:     sessions,
 		locks:        gateway.NewProcessLock(),
 		pendingExec:  make(map[string]chan bool),
 		pendingPick:  make(map[string]chan []string),

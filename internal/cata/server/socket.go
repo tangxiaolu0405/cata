@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"cata/internal/cata/brain"
-	"cata/internal/cata/client"
 	"cata/internal/cata/config"
 	"cata/internal/llm"
 	"cata/internal/mcp"
@@ -24,6 +24,7 @@ import (
 // SocketServer 处理客户端连接
 type SocketServer struct {
 	server           *Server
+	boundWS          *brain.Workspace // agent 模式绑定工作空间（nil = 传统多空间）
 	ln               net.Listener
 	chatSessions     int32         // 仅统计 cata chat 长连接；ping 探测不计入
 	tools            *ToolRegistry // built-in tool registry
@@ -67,16 +68,24 @@ type Response struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// NewSocketServer 创建 socket 服务器
+// NewSocketServer 创建传统模式 socket 服务器（默认 ~/.cata/cata.sock）。
 func NewSocketServer(srv *Server) (*SocketServer, error) {
-	socketPath := getSocketPath()
+	return NewSocketServerAt(srv, "")
+}
+
+// NewSocketServerAt 创建 socket 服务器；socketPath 为空时用默认 cata.sock。
+// agent 模式传入 ~/.cata/sockets/<ws_id>.sock，并绑定单一工作空间。
+func NewSocketServerAt(srv *Server, socketPath string) (*SocketServer, error) {
+	if socketPath == "" {
+		socketPath = getSocketPath()
+	}
 
 	// 确保目录存在
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create socket directory: %w", err)
 	}
 
-	if err := client.PingServer(); err == nil {
+	if pingSocket(socketPath) == nil {
 		return nil, fmt.Errorf("cata server already running (socket: %s)", socketPath)
 	}
 	// 删除陈旧 socket 文件
@@ -93,6 +102,7 @@ func NewSocketServer(srv *Server) (*SocketServer, error) {
 	reg := NewToolRegistry()
 	ss := &SocketServer{
 		server:      srv,
+		boundWS:     srv.workspace,
 		ln:          ln,
 		tools:       reg,
 		subagentSem: newSubagentLimiter(config.MaxSubagentConcurrent()),
@@ -107,6 +117,31 @@ func NewSocketServer(srv *Server) (*SocketServer, error) {
 // getSocketPath 获取 socket 文件路径（默认 CATA_HOME/cata.sock，见 internal/config）。
 func getSocketPath() string {
 	return config.ResolvedSocketPath()
+}
+
+// pingSocket 探测指定 socket 是否存活。
+func pingSocket(socketPath string) error {
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	req, _ := json.Marshal(map[string]string{"command": "ping"})
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+	var resp Response
+	if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
+		return err
+	}
+	if !resp.Success || resp.Message != "pong" {
+		return fmt.Errorf("bad ping response")
+	}
+	return nil
 }
 
 // Start 启动 socket 服务器
@@ -136,9 +171,12 @@ func (ss *SocketServer) Start() {
 // Stop 停止 socket 服务器
 func (ss *SocketServer) Stop() {
 	if ss.ln != nil {
+		socketPath := ss.ln.Addr().String()
 		ss.ln.Close()
-		socketPath := getSocketPath()
-		os.Remove(socketPath)
+		if u, ok := ss.ln.(*net.UnixListener); ok {
+			socketPath = u.Addr().String()
+		}
+		_ = os.Remove(socketPath)
 		log.Println("Socket server stopped")
 	}
 }
@@ -206,11 +244,18 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 				runtime = &e
 				brain.SetRuntimeEnv(runtime)
 			}
-			ws, err := brain.ResolveWorkspace(cwd)
-			if err != nil {
-				log.Printf("resolve brain: %v", err)
+			var ws *brain.Workspace
+			if ss.boundWS != nil {
+				// agent 模式：进程只服务一个工作空间。
+				ws = ss.boundWS
+			} else {
+				ws, err = brain.ResolveWorkspace(cwd)
+				if err != nil {
+					log.Printf("resolve brain: %v", err)
+				}
 			}
 			connWS = ws
+			ss.server.touchActivity()
 			// 显式 ChatContext：多 cata 并行时勿依赖全局 SetActive/SetOutputCwd/SetRuntimeEnv。
 			cc := &brain.ChatContext{
 				WS:        ws,

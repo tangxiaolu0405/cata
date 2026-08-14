@@ -18,9 +18,10 @@ COMMIT_MSG.md
 /cata-pet.exe
 
 
-# Frontend deps (cata-pet)
+# Frontend deps (cata-pet / cata-desktop)
 **/node_modules/
 */cata-pet/*
+*/cata-desktop/*
 
 # macOS
 .DS_Store

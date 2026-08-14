@@ -15,6 +15,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/gateway"
+	"cata/internal/gateway/tunnel"
 )
 
 //go:embed static/*
@@ -27,18 +28,24 @@ type Server struct {
 	web     *WebChat
 	hub     *Hub
 	httpSrv *http.Server
+	reg     *tunnel.Registry // 非 nil = remote 模式：项目列表/路由来自在线 agent
 }
 
-// NewServer 创建 UI 服务器。
+// NewServer 创建 UI 服务器（本地模式）。
 func NewServer(cfg gateway.Config, hub *Hub) *Server {
+	return NewServerWithRegistry(cfg, hub, nil)
+}
+
+// NewServerWithRegistry 创建 UI 服务器；reg 非 nil 时运行在 remote 模式：
+// 项目 = 在线 agent，聊天经隧道拨到远端 per-ws socket。
+func NewServerWithRegistry(cfg gateway.Config, hub *Hub, reg *tunnel.Registry) *Server {
 	if hub == nil {
 		hub = DefaultHub
 	}
-	return &Server{
-		cfg: cfg,
-		web: NewWebChat(cfg),
-		hub: hub,
+	if reg != nil {
+		return &Server{cfg: cfg, web: NewWebChatWithRegistry(cfg, reg), hub: hub, reg: reg}
 	}
+	return &Server{cfg: cfg, web: NewWebChat(cfg), hub: hub}
 }
 
 // Run 监听直到 ctx 取消。
@@ -143,6 +150,38 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
+	if s.reg != nil {
+		// remote 模式：项目 = 当前在线 agent。
+		type arow struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Kind        string `json:"kind,omitempty"`
+			HomeDir     string `json:"home_dir,omitempty"`
+			LastSeen    string `json:"last_seen_at,omitempty"`
+			ConnectedAt string `json:"connected_at,omitempty"`
+			RemoteAddr  string `json:"remote_addr,omitempty"`
+		}
+		agents := s.reg.OnlineAgents()
+		out := make([]arow, 0, len(agents))
+		for _, a := range agents {
+			name := a.Name
+			if name == "" {
+				name = a.AgentID
+			}
+			out = append(out, arow{
+				ID:          a.AgentID,
+				Name:        name,
+				Path:        a.RootPath,
+				Kind:        "agent",
+				HomeDir:     a.RootPath,
+				ConnectedAt: a.ConnectedAt,
+				RemoteAddr:  a.RemoteAddr,
+			})
+		}
+		writeJSON(w, out)
+		return
+	}
 	list, err := brain.ListHomeWorkspaces()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -171,6 +210,17 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveProject(id string) (gateway.Project, bool) {
+	if s.reg != nil {
+		a, ok := s.reg.FindAgent(id)
+		if !ok {
+			return gateway.Project{}, false
+		}
+		name := a.Name
+		if name == "" {
+			name = a.AgentID
+		}
+		return gateway.Project{ID: a.AgentID, Name: name, Path: a.RootPath}, true
+	}
 	ws, ok := brain.FindHomeWorkspace(id)
 	if !ok {
 		return gateway.Project{}, false

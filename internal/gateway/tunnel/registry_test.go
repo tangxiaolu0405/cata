@@ -1,0 +1,216 @@
+package tunnel
+
+import (
+	"bufio"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"cata/internal/cata/tunnel"
+)
+
+// TestTunnelRoundtrip 端到端：worker（模拟 cata agent --link）注册到网关，
+// 网关 DialAgent 打开 stream，字节经 WSS 帧在 stream 与本地 Unix socket 间往返。
+func TestTunnelRoundtrip(t *testing.T) {
+	// 模拟本地 agent：Unix socket 收到每行回显 "echo:<line>"。
+	dir := t.TempDir()
+	sockPath := dir + "/agent.sock"
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				for {
+					line, err := br.ReadBytes('\n')
+					if err != nil {
+						return
+					}
+					_, _ = c.Write(append([]byte("echo:"), line...))
+				}
+			}(c)
+		}
+	}()
+
+	reg := NewRegistry()
+	ts := httptest.NewServer(Handler(reg, HandlerOptions{Token: "tok"}))
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/cata/v1/tunnel?agent=ws-1"
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer tok")
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatalf("dial: %v (resp=%v)", err, resp)
+	}
+	defer ws.Close()
+
+	if err := ws.WriteJSON(tunnel.Frame{
+		Type: tunnel.FrameHello, AgentID: "ws-1", Name: "proj", RootPath: "/p",
+		Protocol: tunnel.ProtocolName, Version: tunnel.Version,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitUntil(t, 5*time.Second, func() bool { return reg.AgentAlive("ws-1") })
+
+	// worker 读循环：处理 open/line/close。
+	streams := map[uint64]net.Conn{}
+	go func() {
+		for {
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			var f tunnel.Frame
+			if err := json.Unmarshal(msg, &f); err != nil {
+				continue
+			}
+			switch f.Type {
+			case tunnel.FrameOpen:
+				c, err := net.Dial("unix", sockPath)
+				if err != nil {
+					_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Stream: f.Stream, Message: err.Error()})
+					continue
+				}
+				streams[f.Stream] = c
+				_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameOpened, Stream: f.Stream})
+				go func(id uint64, c net.Conn) {
+					br := bufio.NewReader(c)
+					for {
+						line, err := br.ReadBytes('\n')
+						if err != nil {
+							_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameClose, Stream: id})
+							_ = c.Close()
+							return
+						}
+						if err := ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameLine, Stream: id, Data: tunnel.EncodeData(line)}); err != nil {
+							_ = c.Close()
+							return
+						}
+					}
+				}(f.Stream, c)
+			case tunnel.FrameLine:
+				data, err := tunnel.DecodeData(f.Data)
+				if err != nil {
+					continue
+				}
+				if c, ok := streams[f.Stream]; ok {
+					_, _ = c.Write(data)
+				}
+			case tunnel.FrameClose:
+				if c, ok := streams[f.Stream]; ok {
+					_ = c.Close()
+					delete(streams, f.Stream)
+				}
+			}
+		}
+	}()
+
+	conn, err := reg.DialAgent("ws-1")
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("hi\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, 64)
+	got := readWithTimeout(t, conn, buf)
+	if got != "echo:hi\n" {
+		t.Fatalf("roundtrip got %q, want %q", got, "echo:hi\n")
+	}
+
+	// 关闭 worker 连接 → agent 应自动下线，stream 也应关闭。
+	_ = ws.Close()
+	waitUntil(t, 5*time.Second, func() bool { return !reg.AgentAlive("ws-1") })
+}
+
+func waitUntil(t *testing.T, d time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met within timeout")
+}
+
+func readWithTimeout(t *testing.T, conn net.Conn, buf []byte) string {
+	t.Helper()
+	ch := make(chan string, 1)
+	go func() {
+		n, err := conn.Read(buf)
+		if err != nil {
+			ch <- "<err:" + err.Error() + ">"
+			return
+		}
+		ch <- string(buf[:n])
+	}()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(5 * time.Second):
+		t.Fatal("read timeout")
+		return ""
+	}
+}
+
+// TestHandlerRequiresTokenAndHello 未带 token / 非 hello 首帧应拒绝。
+func TestHandlerRequiresTokenAndHello(t *testing.T) {
+	reg := NewRegistry()
+	ts := httptest.NewServer(Handler(reg, HandlerOptions{Token: "tok"}))
+	defer ts.Close()
+
+	// 无 token
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/cata/v1/tunnel?agent=ws-1"
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("dial without token should fail")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%v err=%v", resp, err)
+	}
+
+	// 带 token 但首帧不是 hello
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer tok")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatalf("dial with token: %v", err)
+	}
+	defer ws.Close()
+	if err := ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameLine, Stream: 1, Data: tunnel.EncodeData([]byte("x"))}); err != nil {
+		t.Fatal(err)
+	}
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msg, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("expected error frame, got err: %v", err)
+	}
+	var f tunnel.Frame
+	_ = json.Unmarshal(msg, &f)
+	if f.Type != tunnel.FrameError {
+		t.Fatalf("expected error frame, got %+v", f)
+	}
+	if reg.AgentAlive("ws-1") {
+		t.Fatal("agent should not be registered after bad hello")
+	}
+}

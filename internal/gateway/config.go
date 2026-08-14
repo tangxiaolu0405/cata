@@ -14,9 +14,11 @@ import (
 // Edition gateway 发行档位（由配置决定，非不同二进制）。
 //   - base：gateway + 本机 cata server 一体（默认自动拉起 worker）
 //   - channel：仅渠道适配，worker 需外部运行（默认）
+//   - remote：云端注册中心 + 路由，接受各机器 `cata agent --link` 的 WSS 隧道
 const (
 	EditionBase    = "base"
 	EditionChannel = "channel"
+	EditionRemote  = "remote"
 )
 
 // CataServerMode worker 连接方式。
@@ -62,10 +64,22 @@ type Config struct {
 	CataURL            string           `json:"cata_url,omitempty"`  // 模式二/三预留
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	Projects           []Project        `json:"projects,omitempty"`
+	// remote 模式（cata_server.mode=remote）：本网关作为云端注册中心 + 路由。
+	// GatewayToken 隧道共享 Bearer token（v1；逐 agent token 留 v2）。空 = 拒绝所有隧道。
+	GatewayToken string `json:"gateway_token,omitempty"`
+	// TunnelListen 隧道/agents API 监听地址（默认 0.0.0.0:8799）。
+	TunnelListen string `json:"tunnel_listen,omitempty"`
+	// AllowAgentIDs 允许注册的 agent_id 白名单；空 = 放行所有（仍要求 token）。
+	AllowAgentIDs []string `json:"allow_agent_ids,omitempty"`
+	// DefaultAgentID 通道类会话（telegram/qq）在远端默认路由到的 agent（空 = 第一个在线）。
+	DefaultAgentID string `json:"default_agent_id,omitempty"`
 }
 
 // DefaultUIListen 控制台默认监听地址（全网卡，便于局域网手机访问）。
 const DefaultUIListen = "0.0.0.0:8787"
+
+// DefaultTunnelListen 隧道端点默认监听地址（remote 模式；全网卡便于各机器 agent 接入）。
+const DefaultTunnelListen = "0.0.0.0:8799"
 
 // LoadConfig 读取 gateway 配置。
 func LoadConfig() (Config, error) {
@@ -124,6 +138,18 @@ func applyEnvOverrides(cfg *Config) {
 	if v, ok := os.LookupEnv("CATA_GATEWAY_UI"); ok {
 		cfg.UIListen = strings.TrimSpace(v)
 	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_TOKEN")); v != "" {
+		cfg.GatewayToken = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_TUNNEL_LISTEN")); v != "" {
+		cfg.TunnelListen = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_ALLOW_AGENTS")); v != "" {
+		cfg.AllowAgentIDs = parseStringList(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_DEFAULT_AGENT")); v != "" {
+		cfg.DefaultAgentID = v
+	}
 }
 
 func envBool(v string) bool {
@@ -140,9 +166,12 @@ func (c *Config) normalize() {
 		c.CataServer.Mode = ServerModeRemote
 	}
 	if c.CataServer.Mode == "" {
-		if c.Edition == EditionBase {
+		switch c.Edition {
+		case EditionBase:
 			c.CataServer.Mode = ServerModeSocket
-		} else {
+		case EditionRemote:
+			c.CataServer.Mode = ServerModeRemote
+		default:
 			c.CataServer.Mode = ServerModeExternal
 		}
 	}
@@ -167,11 +196,32 @@ func (c Config) ShouldAutoStartServer() bool {
 	return c.CataServer.AutoStart
 }
 
+// RemoteMode 本网关是否运行在 remote（云端注册中心+路由）模式。
+func (c Config) RemoteMode() bool {
+	return c.CataServer.Mode == ServerModeRemote
+}
+
+// TunnelEnabled remote 模式且已配置隧道 token（空 token 拒绝所有隧道连接）。
+func (c Config) TunnelEnabled() bool {
+	return c.RemoteMode() && strings.TrimSpace(c.GatewayToken) != ""
+}
+
+// ResolvedTunnelListen 返回隧道端点实际监听地址。
+func (c Config) ResolvedTunnelListen() string {
+	v := strings.TrimSpace(c.TunnelListen)
+	if v == "" {
+		return DefaultTunnelListen
+	}
+	return v
+}
+
 // EditionLabel 用于日志。
 func (c Config) EditionLabel() string {
 	switch c.Edition {
 	case EditionBase:
 		return "base (gateway + local cata server)"
+	case EditionRemote:
+		return "remote (cloud registry + tunnel routing)"
 	default:
 		return "channel (gateway only)"
 	}
@@ -280,6 +330,7 @@ func GatewayKnownTopKeys() []string {
 		"telegram_bot_token", "telegram_allowed_user_ids",
 		"qq_app_id", "qq_app_secret", "qq_allowed_openids", "qq_sandbox",
 		"worker_root", "socket_path", "cata_url", "ui_listen", "projects",
+		"gateway_token", "tunnel_listen", "allow_agent_ids", "default_agent_id",
 	}
 }
 

@@ -1,8 +1,17 @@
 package gateway
 
 import (
+	"fmt"
+	"net"
+	"strings"
 	"sync"
+
+	"cata/internal/gateway/tunnel"
 )
+
+// ConnFactory 创建一条 cata 连接句柄：本地模式拨本机 Unix socket，
+// remote 模式经隧道拨远端 agent（socketPath 参数在 remote 模式被忽略）。
+type ConnFactory func(socketPath, cwd string) *CataConn
 
 // SessionKey 渠道会话键（channel:chat_id，如 telegram:12345）。
 type SessionKey string
@@ -10,20 +19,62 @@ type SessionKey string
 // SessionManager 为每个渠道会话维护一条 cata socket（server 侧保留 history）。
 // 各会话 cwd = {worker_root}/{channel}/{chat_id}/。
 type SessionManager struct {
-	socketPath string
-	workerRoot string
+	socketPath  string
+	workerRoot  string
+	connFactory ConnFactory
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
 }
 
-// NewSessionManager 创建会话管理器。
+// NewSessionManager 创建会话管理器（本地模式：拨本机 Unix socket）。
 func NewSessionManager(socketPath, workerRoot string) *SessionManager {
 	return &SessionManager{
-		socketPath: socketPath,
-		workerRoot: workerRoot,
-		sessions:   make(map[SessionKey]*CataConn),
+		socketPath:  socketPath,
+		workerRoot:  workerRoot,
+		connFactory: NewCataConn,
+		sessions:    make(map[SessionKey]*CataConn),
 	}
+}
+
+// NewRemoteSessionManager 创建会话管理器（remote 模式：经 connFactory 拨远端 agent）。
+func NewRemoteSessionManager(workerRoot string, connFactory ConnFactory) *SessionManager {
+	return &SessionManager{
+		workerRoot:  workerRoot,
+		connFactory: connFactory,
+		sessions:    make(map[SessionKey]*CataConn),
+	}
+}
+
+// RemoteSessionManagerForDefaultAgent 创建 remote 模式通道会话管理器：
+// 所有会话（telegram/qq）拨到指定 agent（v1：cfg.DefaultAgentID 或第一个在线 agent）。
+// cwd 统一用该 agent 的工作空间根路径（远端真实存在；v1 通道会话共享产出区，history 仍 per-连接）。
+// 目标 agent 懒解析：网关可以先于 agent 上线启动，连接建立时才选当前在线目标。
+func RemoteSessionManagerForDefaultAgent(cfg Config, reg *tunnel.Registry) (*SessionManager, error) {
+	if reg == nil {
+		return nil, fmt.Errorf("remote registry required")
+	}
+	return NewRemoteSessionManager(cfg.WorkerRoot, func(_ string, _ string) *CataConn {
+		agentID, root := defaultAgentTarget(cfg, reg)
+		return NewCataConnWithDialer("", root, func() (net.Conn, error) {
+			return reg.DialAgent(agentID)
+		})
+	}), nil
+}
+
+// defaultAgentTarget 返回当前默认通道 agent：优先 cfg.DefaultAgentID，否则第一个在线。
+func defaultAgentTarget(cfg Config, reg *tunnel.Registry) (agentID, root string) {
+	id := strings.TrimSpace(cfg.DefaultAgentID)
+	if id != "" && reg.AgentAlive(id) {
+		if info, ok := reg.FindAgent(id); ok {
+			return id, info.RootPath
+		}
+	}
+	agents := reg.OnlineAgents()
+	if len(agents) == 0 {
+		return "", ""
+	}
+	return agents[0].AgentID, agents[0].RootPath
 }
 
 // Get 获取或创建会话连接（按会话键分配独立 worker 目录）。
@@ -37,6 +88,12 @@ func (m *SessionManager) Get(key SessionKey) (*CataConn, error) {
 
 // GetWithCwd 获取或创建会话连接，使用显式 cwd（如 web 项目真实路径）。
 func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, error) {
+	return m.GetWithCwdDialer(key, cwd, nil)
+}
+
+// GetWithCwdDialer 获取或创建会话连接；dialer 非 nil 时该连接用自定义拨号
+// （remote 模式按项目路由到对应在线 agent），否则走默认 connFactory。
+func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer func() (net.Conn, error)) (*CataConn, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.sessions[key]; ok {
@@ -46,7 +103,12 @@ func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, erro
 		_ = c.Close()
 		delete(m.sessions, key)
 	}
-	c := NewCataConn(m.socketPath, cwd)
+	var c *CataConn
+	if dialer != nil {
+		c = NewCataConnWithDialer("", cwd, dialer)
+	} else {
+		c = m.connFactory(m.socketPath, cwd)
+	}
 	m.sessions[key] = c
 	return c, nil
 }

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"cata/internal/cata/client"
 	"cata/internal/gateway"
+	"cata/internal/gateway/tunnel"
 )
 
 // WebChat 管理 web:<project_id> 会话。
@@ -17,6 +19,7 @@ type WebChat struct {
 	cfg      gateway.Config
 	sessions *gateway.SessionManager
 	locks    *gateway.ProcessLock
+	remote   *tunnel.Registry // 非 nil = remote 模式：经隧道拨远端 agent
 
 	chatMu sync.Mutex // 本阶段全局串行化 web LLM 轮次
 
@@ -26,7 +29,7 @@ type WebChat struct {
 	pathLock map[string]func() // project path unlockers while session open
 }
 
-// NewWebChat 创建 web 聊天管理器。
+// NewWebChat 创建 web 聊天管理器（本地模式：拨本机 per-ws / legacy socket）。
 func NewWebChat(cfg gateway.Config) *WebChat {
 	return &WebChat{
 		cfg:      cfg,
@@ -37,6 +40,23 @@ func NewWebChat(cfg gateway.Config) *WebChat {
 		pathLock: make(map[string]func()),
 	}
 }
+
+// NewWebChatWithRegistry 创建 web 聊天管理器（remote 模式：项目 = 在线 agent，
+// 会话经隧道拨到对应 agent 的 per-ws socket）。
+func NewWebChatWithRegistry(cfg gateway.Config, reg *tunnel.Registry) *WebChat {
+	return &WebChat{
+		cfg:      cfg,
+		sessions: gateway.NewRemoteSessionManager(cfg.WorkerRoot, gateway.NewCataConn),
+		locks:    gateway.NewProcessLock(),
+		remote:   reg,
+		pendingE: make(map[string]chan bool),
+		pendingC: make(map[string]chan []string),
+		pathLock: make(map[string]func()),
+	}
+}
+
+// Remote 是否运行在 remote 模式。
+func (w *WebChat) Remote() bool { return w.remote != nil }
 
 func webSessionKey(projectID string) gateway.SessionKey {
 	return gateway.SessionKeyFor("web", projectID)
@@ -98,12 +118,22 @@ func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string
 	w.chatMu.Lock()
 	defer w.chatMu.Unlock()
 
-	conn, err := w.sessions.GetWithCwd(key, abs)
+	conn, err := w.sessionConn(key, abs, project)
 	if err != nil {
 		return gateway.ChatResult{}, err
 	}
 	h := &webStreamHandler{w: w, ctx: ctx, emit: emit, projectID: project.ID}
 	return conn.Chat(ctx, text, h)
+}
+
+// sessionConn 获取会话连接：remote 模式经隧道拨对应在线 agent，否则拨本机 socket。
+func (w *WebChat) sessionConn(key gateway.SessionKey, abs string, project gateway.Project) (*gateway.CataConn, error) {
+	if w.remote != nil {
+		return w.sessions.GetWithCwdDialer(key, abs, func() (net.Conn, error) {
+			return w.remote.DialAgent(project.ID)
+		})
+	}
+	return w.sessions.GetWithCwd(key, abs)
 }
 
 // Reset 清空项目会话。
@@ -115,7 +145,7 @@ func (w *WebChat) Reset(project gateway.Project) error {
 	key := webSessionKey(project.ID)
 	unlock := w.locks.Lock(key)
 	defer unlock()
-	conn, err := w.sessions.GetWithCwd(key, abs)
+	conn, err := w.sessionConn(key, abs, project)
 	if err != nil {
 		return err
 	}

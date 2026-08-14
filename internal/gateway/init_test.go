@@ -78,3 +78,33 @@ func TestInitConfig_channelForce(t *testing.T) {
 		t.Fatalf("edition=%s", cfg.Edition)
 	}
 }
+
+func TestInitConfig_remote(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvCataHome, home)
+	if err := config.InitBrainPath(); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := InitConfig(InitOptions{Edition: EditionRemote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Edition != EditionRemote {
+		t.Fatalf("edition=%s", cfg.Edition)
+	}
+	if cfg.CataServer.Mode != ServerModeRemote {
+		t.Fatalf("mode=%s", cfg.CataServer.Mode)
+	}
+	if cfg.GatewayToken == "" {
+		t.Fatal("remote template should include gateway_token")
+	}
+}

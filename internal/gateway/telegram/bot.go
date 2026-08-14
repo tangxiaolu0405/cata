@@ -24,12 +24,18 @@ type Bot struct {
 	pendingPick map[string]chan []string
 }
 
-// NewBot 创建 bot。
+// NewBot 创建 bot（本地模式：拨本机 socket）。
 func NewBot(cfg gateway.Config) *Bot {
+	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
+}
+
+// NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入
+// 经隧道拨远端 agent 的 SessionManager）。
+func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
 	return &Bot{
 		cfg:         cfg,
 		tg:          NewClient(cfg.TelegramBotToken),
-		sessions:    gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot),
+		sessions:    sessions,
 		locks:       gateway.NewProcessLock(),
 		pendingExec: make(map[string]chan bool),
 		pendingPick: make(map[string]chan []string),

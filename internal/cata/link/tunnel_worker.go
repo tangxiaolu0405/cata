@@ -1,0 +1,266 @@
+package link
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"cata/internal/cata/config"
+	"cata/internal/cata/tunnel"
+)
+
+// RunTunnelWorker agent 进程持有到网关的 WSS 隧道（cata agent --link）。
+// 断线自动重连，退避 1s → 30s。ctx 取消（agent 退出）时返回 nil。
+func RunTunnelWorker(ctx context.Context, agentID string) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	if !cfg.GatewayConfigured() {
+		return fmt.Errorf("link.json: gateway_url/token not configured")
+	}
+	if !cfg.HasAgent(agentID) {
+		return fmt.Errorf("link.json: agent %q not registered", agentID)
+	}
+
+	backoff := time.Second
+	for {
+		err := runOneTunnel(ctx, agentID, cfg)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			log.Printf("cata agent %s: tunnel: %v (reconnect in %s)", agentID, err, backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+		}
+	}
+}
+
+func tunnelWSURL(gatewayURL, agentID string) (string, error) {
+	gw := strings.TrimSpace(gatewayURL)
+	if gw == "" {
+		return "", fmt.Errorf("empty gateway url")
+	}
+	u, err := url.Parse(gw)
+	if err != nil {
+		return "", err
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return "", fmt.Errorf("unsupported gateway url scheme %q", u.Scheme)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/cata/v1/tunnel"
+	q := u.Query()
+	q.Set("agent", agentID)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
+	entry := cfg.Agents[agentID]
+	wsURL, err := tunnelWSURL(cfg.GatewayURL, agentID)
+	if err != nil {
+		return err
+	}
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+cfg.Token)
+
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	conn, resp, err := dialer.Dial(wsURL, header)
+	if err != nil {
+		if resp != nil {
+			return fmt.Errorf("dial %s: %s (%s)", wsURL, err, resp.Status)
+		}
+		return fmt.Errorf("dial %s: %w", wsURL, err)
+	}
+	defer conn.Close()
+
+	hello := tunnel.Frame{
+		Type:     tunnel.FrameHello,
+		AgentID:  agentID,
+		Name:     entry.Name,
+		RootPath: entry.RootPath,
+		Protocol: tunnel.ProtocolName,
+		Version:  tunnel.Version,
+	}
+	if err := conn.WriteJSON(hello); err != nil {
+		return err
+	}
+	log.Printf("cata agent %s: tunnel connected: %s", agentID, wsURL)
+
+	ws := &tunnelConn{
+		conn:    conn,
+		streams: map[uint64]*tunnelStream{},
+	}
+	defer ws.closeAll()
+
+	conn.SetReadLimit(int64(tunnel.MaxFrameBytes))
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		var f tunnel.Frame
+		if err := json.Unmarshal(msg, &f); err != nil {
+			log.Printf("cata agent %s: tunnel: bad frame: %v", agentID, err)
+			continue
+		}
+		ws.handleFrame(agentID, f)
+	}
+}
+
+// tunnelConn worker 侧 stream 管理：每条 stream = 一条到本地 per-ws socket 的连接。
+type tunnelConn struct {
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	streams map[uint64]*tunnelStream
+}
+
+func (t *tunnelConn) send(f tunnel.Frame) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.conn.WriteJSON(f)
+}
+
+func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
+	switch f.Type {
+	case tunnel.FrameOpen:
+		t.openStream(agentID, f.Stream)
+	case tunnel.FrameLine:
+		if s := t.getStream(f.Stream); s != nil {
+			data, err := tunnel.DecodeData(f.Data)
+			if err != nil {
+				log.Printf("cata agent %s: stream %d: bad data: %v", agentID, f.Stream, err)
+				return
+			}
+			if _, err := s.write(data); err != nil {
+				_ = t.send(tunnel.Frame{Type: tunnel.FrameClose, Stream: f.Stream})
+				s.close()
+				t.removeStream(f.Stream)
+			}
+		}
+	case tunnel.FrameClose:
+		if s := t.removeStream(f.Stream); s != nil {
+			s.close()
+		}
+	case tunnel.FramePing:
+		_ = t.send(tunnel.Frame{Type: tunnel.FramePong})
+	case tunnel.FramePong:
+		// ignore
+	}
+}
+
+func (t *tunnelConn) openStream(agentID string, id uint64) {
+	socketPath := config.ResolvedAgentSocketPath(agentID)
+	sock, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		_ = t.send(tunnel.Frame{Type: tunnel.FrameError, Stream: id, Message: fmt.Sprintf("dial %s: %v", socketPath, err)})
+		_ = t.send(tunnel.Frame{Type: tunnel.FrameClose, Stream: id})
+		return
+	}
+	s := &tunnelStream{
+		id:   id,
+		conn: t,
+		sock: sock,
+		done: make(chan struct{}),
+	}
+	t.mu.Lock()
+	t.streams[id] = s
+	t.mu.Unlock()
+	_ = t.send(tunnel.Frame{Type: tunnel.FrameOpened, Stream: id})
+
+	go s.readLoop()
+}
+
+func (t *tunnelConn) getStream(id uint64) *tunnelStream {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.streams[id]
+}
+
+func (t *tunnelConn) removeStream(id uint64) *tunnelStream {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := t.streams[id]
+	delete(t.streams, id)
+	return s
+}
+
+func (t *tunnelConn) closeAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.streams {
+		s.close()
+	}
+	t.streams = map[uint64]*tunnelStream{}
+}
+
+// tunnelStream 一条到本地 per-ws socket 的逻辑连接。
+type tunnelStream struct {
+	id   uint64
+	conn *tunnelConn
+	sock net.Conn
+	done chan struct{}
+	once sync.Once
+}
+
+func (s *tunnelStream) write(b []byte) (int, error) {
+	return s.sock.Write(b)
+}
+
+func (s *tunnelStream) readLoop() {
+	defer s.close()
+	br := bufio.NewReaderSize(s.sock, 64*1024)
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			_ = s.conn.send(tunnel.Frame{Type: tunnel.FrameClose, Stream: s.id})
+			return
+		}
+		if len(line) > tunnel.MaxFrameBytes {
+			_ = s.conn.send(tunnel.Frame{Type: tunnel.FrameError, Stream: s.id, Message: "line too large"})
+			_ = s.conn.send(tunnel.Frame{Type: tunnel.FrameClose, Stream: s.id})
+			return
+		}
+		if err := s.conn.send(tunnel.Frame{Type: tunnel.FrameLine, Stream: s.id, Data: tunnel.EncodeData(line)}); err != nil {
+			return
+		}
+	}
+}
+
+func (s *tunnelStream) close() {
+	s.once.Do(func() {
+		close(s.done)
+		_ = s.sock.Close()
+	})
+}

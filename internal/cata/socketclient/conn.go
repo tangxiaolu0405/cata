@@ -23,6 +23,9 @@ type Conn struct {
 	socketPath string
 	cwd        string
 	runtime    brain.RuntimeEnv
+	// dialFunc 非 nil 时替代 Unix socket 拨号（远程隧道流等），
+	// 使 NDJSON chat 协议可以原样跑在任意 net.Conn 上。
+	dialFunc func() (net.Conn, error)
 
 	mu    sync.Mutex
 	conn  net.Conn
@@ -34,6 +37,14 @@ type Conn struct {
 func NewConn(socketPath, cwd string) *Conn {
 	rt := brain.DetectRuntimeEnvFromProcess()
 	return &Conn{socketPath: socketPath, cwd: cwd, runtime: rt}
+}
+
+// NewConnWithDialer 创建连接句柄，用自定义 dialFunc 拨号（如远程隧道的逻辑连接）。
+// socketPath 仅作日志/标识用途。
+func NewConnWithDialer(socketPath, cwd string, dialFunc func() (net.Conn, error)) *Conn {
+	c := NewConn(socketPath, cwd)
+	c.dialFunc = dialFunc
+	return c
 }
 
 // Cwd 返回该连接绑定的产出区。
@@ -63,9 +74,18 @@ func (c *Conn) ensureConn() error {
 	if c.conn != nil {
 		return nil
 	}
-	conn, err := net.DialTimeout("unix", c.socketPath, 5*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect cata socket %s: %w", c.socketPath, err)
+	var conn net.Conn
+	var err error
+	if c.dialFunc != nil {
+		conn, err = c.dialFunc()
+		if err != nil {
+			return fmt.Errorf("dial cata agent: %w", err)
+		}
+	} else {
+		conn, err = net.DialTimeout("unix", c.socketPath, 5*time.Second)
+		if err != nil {
+			return fmt.Errorf("connect cata socket %s: %w", c.socketPath, err)
+		}
 	}
 	c.conn = conn
 	c.br = bufio.NewReaderSize(conn, 64*1024)

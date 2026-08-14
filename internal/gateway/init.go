@@ -45,6 +45,17 @@ func InitConfig(opts InitOptions) (string, error) {
 
 func defaultConfigForEdition(edition string) Config {
 	switch edition {
+	case EditionRemote:
+		return Config{
+			Edition: EditionRemote,
+			CataServer: CataServerConfig{
+				Mode: ServerModeRemote,
+			},
+			GatewayToken: "YOUR_GATEWAY_TOKEN",
+			TunnelListen: DefaultTunnelListen,
+			UIListen:     DefaultUIListen,
+			Projects:     []Project{},
+		}
 	case EditionChannel:
 		return Config{
 			Edition: EditionChannel,

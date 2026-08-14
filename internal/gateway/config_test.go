@@ -50,3 +50,31 @@ func TestConfig_remoteMode(t *testing.T) {
 		t.Fatalf("mode=%s", cfg.CataServer.Mode)
 	}
 }
+
+func TestConfig_editionRemote(t *testing.T) {
+	cfg := Config{Edition: EditionRemote}
+	cfg.normalize()
+	if cfg.ShouldAutoStartServer() {
+		t.Fatal("remote should not auto start local server")
+	}
+	if cfg.CataServer.Mode != ServerModeRemote {
+		t.Fatalf("mode=%s", cfg.CataServer.Mode)
+	}
+	if !cfg.RemoteMode() {
+		t.Fatal("RemoteMode should be true")
+	}
+	if cfg.TunnelEnabled() {
+		t.Fatal("remote without gateway_token should not be tunnel-enabled")
+	}
+	cfg.GatewayToken = "tok"
+	if !cfg.TunnelEnabled() {
+		t.Fatal("remote with gateway_token should be tunnel-enabled")
+	}
+	if cfg.ResolvedTunnelListen() != DefaultTunnelListen {
+		t.Fatalf("tunnel listen default=%s", cfg.ResolvedTunnelListen())
+	}
+	cfg.TunnelListen = "127.0.0.1:9900"
+	if cfg.ResolvedTunnelListen() != "127.0.0.1:9900" {
+		t.Fatal("tunnel listen custom")
+	}
+}

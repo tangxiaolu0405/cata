@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"net"
 	"strings"
 
 	"cata/internal/cata/socketclient"
@@ -27,6 +28,12 @@ type ChoiceOption = socketclient.ChoiceOption
 // NewCataConn 创建 cata socket 连接句柄（兼容旧调用）。
 func NewCataConn(socketPath, cwd string) *CataConn {
 	return socketclient.NewConn(socketPath, cwd)
+}
+
+// NewCataConnWithDialer 创建连接句柄，用自定义 dialer 拨号（remote 模式下经隧道
+// 逻辑连接拨到远端 agent 的 per-ws socket；NDJSON chat 协议零改动）。
+func NewCataConnWithDialer(socketPath, cwd string, dialer func() (net.Conn, error)) *CataConn {
+	return socketclient.NewConnWithDialer(socketPath, cwd, dialer)
 }
 
 // Ping 检查 cata server（兼容旧调用）。

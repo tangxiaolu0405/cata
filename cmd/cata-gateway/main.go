@@ -15,6 +15,7 @@ import (
 	"cata/internal/gateway"
 	"cata/internal/gateway/qq"
 	"cata/internal/gateway/telegram"
+	"cata/internal/gateway/tunnel"
 	"cata/internal/gateway/ui"
 )
 
@@ -54,7 +55,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("cata-gateway — local Web UI + channel adapters for cata server")
+	fmt.Println("cata-gateway — Web UI + channel adapters + remote agent tunnel (cata)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  cata-gateway              Start UI (default) + enabled channels")
@@ -69,6 +70,11 @@ func printUsage() {
 	fmt.Println("  ui_listen in gateway.json; CATA_GATEWAY_UI=0 / off disables UI")
 	fmt.Println("  UI-only works without Telegram/QQ credentials")
 	fmt.Println()
+	fmt.Println("Remote mode (cata_server.mode=remote; cloud gateway):")
+	fmt.Println("  Accepts WSS tunnels from `cata agent --link` on any machine; project = online agent")
+	fmt.Println("  gateway_token (or CATA_GATEWAY_TOKEN) required; tunnel_listen default 0.0.0.0:8799")
+	fmt.Println("  Worker side: cata link add --dir <path> --gateway <url> --token <token>")
+	fmt.Println()
 	fmt.Println("Channels (credential-driven, can run together):")
 	fmt.Println("  telegram  telegram_bot_token / TELEGRAM_BOT_TOKEN")
 	fmt.Println("  qq        qq_app_id + qq_app_secret / QQ_APP_ID + QQ_APP_SECRET")
@@ -77,16 +83,18 @@ func printUsage() {
 	fmt.Println("Editions (gateway.json edition field):")
 	fmt.Println("  base     Gateway + local cata server (auto_start)")
 	fmt.Println("  channel  Gateway only; run cata run separately")
+	fmt.Println("  remote   Cloud registry + tunnel routing (cata_server.mode=remote)")
 	fmt.Println()
 	fmt.Println("Environment:")
 	fmt.Println("  CATA_GATEWAY_EDITION    base | channel")
 	fmt.Println("  CATA_GATEWAY_UI         listen addr, or 0/off to disable")
+	fmt.Println("  CATA_GATEWAY_TOKEN / CATA_TUNNEL_LISTEN / CATA_GATEWAY_ALLOW_AGENTS / CATA_GATEWAY_DEFAULT_AGENT")
 	fmt.Println("  TELEGRAM_BOT_TOKEN / QQ_APP_ID / QQ_APP_SECRET / QQ_SANDBOX")
 	fmt.Println("  TELEGRAM_ALLOWED_USERS / QQ_ALLOWED_OPENIDS")
 	fmt.Println("  CATA_WORKER_ROOT / CATA_SOCKET / CATA_BIN")
 	fmt.Println()
 	fmt.Println("Config: ~/.cata/gateway.json  or docs/gateway-config.html")
-	fmt.Println("Docs: docs/gateway.md")
+	fmt.Println("Docs: docs/gateway.md, docs/tunnel.md")
 	fmt.Println("Log: ~/.cata/cata-gateway.log")
 }
 
@@ -105,7 +113,7 @@ func runInit(args []string) {
 		case "--force", "-f":
 			force = true
 		case "help", "--help", "-h":
-			fmt.Println("Usage: cata-gateway init [--edition base|channel] [--force]")
+			fmt.Println("Usage: cata-gateway init [--edition base|channel|remote] [--force]")
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
@@ -150,6 +158,17 @@ func runGateway(only string) {
 	gateway.SetupLogging()
 	log.Printf("cata-gateway: edition=%s", cfg.EditionLabel())
 
+	remote := cfg.RemoteMode()
+	var reg *tunnel.Registry
+	if remote {
+		if !cfg.TunnelEnabled() {
+			fmt.Fprintf(os.Stderr, "remote mode requires gateway_token (env CATA_GATEWAY_TOKEN or gateway.json gateway_token)\n")
+			os.Exit(1)
+		}
+		reg = tunnel.NewRegistry()
+		log.Printf("cata-gateway: remote mode: tunnel listen=%s (allow_agents=%d)", cfg.ResolvedTunnelListen(), len(cfg.AllowAgentIDs))
+	}
+
 	wantUI := cfg.UIEnabled()
 	wantTG := channelTelegramReady(cfg)
 	wantQQ := channelQQReady(cfg)
@@ -167,31 +186,53 @@ func runGateway(only string) {
 			os.Exit(1)
 		}
 	default:
-		if !wantTG && !wantQQ && !wantUI {
+		if !remote && !wantTG && !wantQQ && !wantUI {
 			fmt.Fprintf(os.Stderr, "nothing to run: enable ui_listen and/or set telegram_bot_token / qq credentials\n")
 			fmt.Fprintf(os.Stderr, "Hint: cata-gateway init\n")
 			os.Exit(1)
 		}
 	}
 
-	srvMgr := gateway.NewServerManager(cfg)
-	if err := srvMgr.Ensure(); err != nil {
-		fmt.Fprintf(os.Stderr, "cata server: %v\n", err)
-		os.Exit(1)
+	// remote 模式不拉起本机 cata server：worker 在各机器上由 `cata agent` 自持隧道。
+	if !remote {
+		srvMgr := gateway.NewServerManager(cfg)
+		if err := srvMgr.Ensure(); err != nil {
+			fmt.Fprintf(os.Stderr, "cata server: %v\n", err)
+			os.Exit(1)
+		}
+		defer srvMgr.Stop()
 	}
-	defer srvMgr.Stop()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
+
+	if remote {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := tunnel.Run(ctx, cfg.ResolvedTunnelListen(), reg, tunnel.HandlerOptions{
+				Token:         cfg.GatewayToken,
+				AllowAgentIDs: cfg.AllowAgentIDs,
+			}); err != nil && ctx.Err() == nil {
+				log.Printf("tunnel stopped: %v", err)
+				errCh <- fmt.Errorf("tunnel: %w", err)
+			}
+		}()
+	}
 
 	if wantUI {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			srv := ui.NewServer(cfg, ui.DefaultHub)
+			var srv *ui.Server
+			if remote {
+				srv = ui.NewServerWithRegistry(cfg, ui.DefaultHub, reg)
+			} else {
+				srv = ui.NewServer(cfg, ui.DefaultHub)
+			}
 			if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("ui stopped: %v", err)
 				errCh <- fmt.Errorf("ui: %w", err)
@@ -206,6 +247,13 @@ func runGateway(only string) {
 		go func() {
 			defer wg.Done()
 			bot := telegram.NewBot(cfg)
+			if remote {
+				if sessions, err := gateway.RemoteSessionManagerForDefaultAgent(cfg, reg); err == nil {
+					bot = telegram.NewBotWithSessions(cfg, sessions)
+				} else {
+					log.Printf("telegram: remote sessions unavailable: %v", err)
+				}
+			}
 			if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("telegram channel stopped: %v", err)
 				errCh <- fmt.Errorf("telegram: %w", err)
@@ -217,6 +265,13 @@ func runGateway(only string) {
 		go func() {
 			defer wg.Done()
 			bot := qq.NewBot(cfg)
+			if remote {
+				if sessions, err := gateway.RemoteSessionManagerForDefaultAgent(cfg, reg); err == nil {
+					bot = qq.NewBotWithSessions(cfg, sessions)
+				} else {
+					log.Printf("qq: remote sessions unavailable: %v", err)
+				}
+			}
 			if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("qq channel stopped: %v", err)
 				errCh <- fmt.Errorf("qq: %w", err)
@@ -224,7 +279,7 @@ func runGateway(only string) {
 		}()
 	}
 
-	if !wantTG && !wantQQ {
+	if !remote && !wantTG && !wantQQ {
 		log.Printf("cata-gateway: UI-only mode (no Telegram/QQ credentials)")
 	}
 

@@ -16,6 +16,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/link"
 )
 
 const (
@@ -93,10 +94,12 @@ func (i pickItem) Title() string       { return i.title }
 func (i pickItem) Description() string { return i.desc }
 
 type model struct {
-	sess   *session
-	cwd    string
-	width  int
-	height int
+	sess      *session
+	cwd       string
+	wsID      string // per-ws agent 模式绑定的工作空间 id（空 = legacy 单 server）
+	agentMode bool   // true = 拨 per-ws agent socket
+	width     int
+	height    int
 
 	vp        viewport.Model
 	sidebarVP viewport.Model
@@ -196,23 +199,74 @@ func RunChat(opts ChatOptions) {
 	}
 	defer release()
 
-	if err := EnsureServer(); err != nil {
-		fatal(err)
+	// 扁平化：一个工作空间 = 一个 agent 进程 = 一个 LLM loop（per-ws socket）。
+	// 本地未注册工作空间按需拉起、空闲回收；注册（cata link add）的常驻。
+	wsID := ""
+	if ws, rerr := brain.ResolveWorkspace(cwd); rerr == nil && ws != nil {
+		wsID = ws.ID
 	}
-	s, err := dial()
-	if err != nil {
-		fatal(err)
+	agentMode := false
+	var s *session
+	if wsID != "" {
+		if err := link.EnsureAgent(wsID); err == nil {
+			if as, aerr := dialAgent(wsID); aerr == nil {
+				agentMode = true
+				s = as
+			}
+		}
+	}
+	if !agentMode {
+		if err := EnsureServer(); err != nil {
+			fatal(err)
+		}
+		s, err = dial()
+		if err != nil {
+			fatal(err)
+		}
 	}
 	defer s.conn.Close()
 
 	bindStats(cwd)
 	m := newModel(s, cwd)
+	m.wsID = wsID
+	m.agentMode = agentMode
 	m.displayMode = opts.displayMode()
 	m.showThinking = opts.ShowThinking
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
 	}
+}
+
+// reconnect 断线后重连（agent 模式重拨 per-ws socket，否则 legacy cata.sock）。
+func (m *model) reconnect() error {
+	if m.agentMode {
+		if err := link.EnsureAgent(m.wsID); err != nil {
+			return err
+		}
+		ns, err := dialAgent(m.wsID)
+		if err != nil {
+			return err
+		}
+		m.swapSession(ns)
+		return nil
+	}
+	if err := EnsureServer(); err != nil {
+		return err
+	}
+	ns, err := dial()
+	if err != nil {
+		return err
+	}
+	m.swapSession(ns)
+	return nil
+}
+
+func (m *model) swapSession(ns *session) {
+	if old := m.sess; old != nil && old.conn != nil {
+		_ = old.conn.Close()
+	}
+	m.sess = ns
 }
 
 func (m *model) Init() tea.Cmd {
@@ -338,13 +392,9 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
 			m.appendLog(styledLogLine(styleDim, "disconnected — try again"), true)
-			if err := EnsureServer(); err != nil {
+			if err := m.reconnect(); err != nil {
 				m.appendLog(styleErr.Render("! server: "+err.Error())+"\n", true)
-			} else if ns, e := dial(); e == nil {
-				if old := m.sess; old != nil && old.conn != nil {
-					_ = old.conn.Close()
-				}
-				m.sess = ns
+			} else {
 				m.appendLog(styledLogLine(styleDim, "reconnected"), true)
 			}
 		}

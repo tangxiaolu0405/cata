@@ -1,6 +1,7 @@
 # Gateway — 渠道适配与部署
 
-> **当前实现范围：模式一（同机）**。模式二、三仅保留设计，模式一稳定后再扩展。
+> **模式一（同机）** 与 **remote（云端注册中心 + WSS 隧道）** 均已实现。
+> 详见 [`docs/tunnel.md`](tunnel.md)（远程部署的正式设计）。
 
 ## 角色边界
 
@@ -77,12 +78,13 @@ gateway 发给 cata 的 `cwd` 固定布局：
 |---------|------|-------------|
 | **base** | 基础版：gateway + 本机 worker 一体 | 默认 `cata_server.auto_start: true`，启动时拉起 `cata run` |
 | **channel** | 渠道版：仅适配器 | 默认不拉起；需单独运行 `cata run` |
+| **remote** | 云端版：注册中心 + 隧道路由 | 不拉起本机 server；worker 由各机器 `cata agent --link` 提供 |
 
 `cata_server` 字段（base 版核心）：
 
 | 字段 | 说明 |
 |------|------|
-| `mode` | `socket`（本机 socket，base 默认）、`external`（仅连接已有 socket）、`remote`（预留 HTTP） |
+| `mode` | `socket`（本机 socket，base 默认）、`external`（仅连接已有 socket）、`remote`（云端注册中心 + WSS 隧道，见 [tunnel.md](tunnel.md)） |
 | `binary` | cata 可执行路径；空则 `CATA_BIN` 或 PATH |
 | `auto_start` | 是否在 gateway 启动时确保 server 运行 |
 | `managed` | 拉起时是否 `cata run --managed` |
@@ -95,6 +97,7 @@ gateway 发给 cata 的 `cwd` 固定布局：
 ```bash
 cata-gateway init                    # base 模板 → ~/.cata/gateway.json
 cata-gateway init --edition channel  # channel 模板
+cata-gateway init --edition remote   # remote（云端隧道）模板
 cata-gateway init --force            # 覆盖已有文件
 ```
 
@@ -118,8 +121,9 @@ cata-gateway init --force            # 覆盖已有文件
 | 模式 | gateway | cata worker | 传输 | 状态 |
 |------|---------|-------------|------|------|
 | **一、同机** | 本机 | 本机 | Unix socket `~/.cata/cata.sock` | **当前实现** |
-| **二、安全隔离** | 公网/云端 | 内网或用户本机 | HTTPS → worker HTTP API（`CATA_URL`） | 设计预留 |
-| **三、全云端** | 云端 A | 云端 B（或同机） | HTTP API 或 VPC 内 socket | 设计预留 |
+| **四、remote（云端隧道）** | 任意位置（云端） | 各机器 `cata agent --link` | WSS 隧道（cata-tunnel.v1） | **当前实现** |
+| **二、安全隔离** | 公网/云端 | 内网或用户本机 | HTTPS → worker HTTP API（`CATA_URL`） | 由模式四取代（设计归档） |
+| **三、全云端** | 云端 A | 云端 B（或同机） | HTTP API 或 VPC 内 socket | 由模式四取代（设计归档） |
 
 ### 模式一（当前）
 
@@ -153,20 +157,25 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 
 ## 配置字段
 
-| 字段 | 模式一 | 模式二/三 |
+| 字段 | 模式一 | remote（模式四） |
 |------|--------|-----------|
-| `edition` | `base` \| `channel` | 同左 |
-| `cata_server` | base 版自动拉起 | channel 或 remote |
-| `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 通常关闭 |
+| `edition` | `base` \| `channel` | `remote` |
+| `cata_server` | base 版自动拉起 | `mode: remote`（不拉起本机 server） |
+| `gateway_token` / `CATA_GATEWAY_TOKEN` | — | **必需**（隧道共享 Bearer token） |
+| `tunnel_listen` / `CATA_TUNNEL_LISTEN` | — | 隧道端点，默认 `0.0.0.0:8799` |
+| `allow_agent_ids` / `CATA_GATEWAY_ALLOW_AGENTS` | — | agent 白名单（空 = 放行所有） |
+| `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | — | 通道会话默认路由 agent |
+| `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 项目 = 在线 agent |
 | `projects` | （可选遗留；UI 列表改读 brain/workspaces） | — |
-| `socket_path` / `CATA_SOCKET` | ✓ | 同机时 ✓ |
-| `cata_url` / `CATA_URL` | 忽略 | worker HTTP 基址 |
-| `worker_root` / `CATA_WORKER_ROOT` | ✓（渠道沙箱） | ✓（worker 侧路径） |
+| `socket_path` / `CATA_SOCKET` | ✓ | 本地模式专用 |
+| `cata_url` / `CATA_URL` | 忽略 | 设置即进入 remote 模式 |
+| `worker_root` / `CATA_WORKER_ROOT` | ✓（渠道沙箱） | ✓（远端 cwd 基址） |
 
 见 `gateway.example.json`、`gateway.example.channel.json`、`README.md` Gateway 节。
 
 ## 扩展顺序（建议）
 
 1. ✅ 模式一：Telegram + socket + per-chat worker 目录
-2. 模式一完善：更多 Telegram 能力（附件、/status）、渠道插件结构
-3. 模式二/三：cata HTTP API 契约 → gateway 远端客户端 → 认证与部署文档
+2. ✅ 模式四（remote）：WSS 隧道注册中心 + 路由（`cata agent --link` / `cata link` / `cata supervisor`），见 [tunnel.md](tunnel.md)
+3. 模式一完善：更多 Telegram 能力（附件、/status）、渠道插件结构
+4. v2：逐 agent token、按项目路由（web 会话已按项目；渠道可扩展 per-channel agent）
