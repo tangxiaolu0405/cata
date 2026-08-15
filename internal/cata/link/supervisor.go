@@ -140,28 +140,29 @@ func (s *Supervisor) ensureAll() error {
 	return nil
 }
 
-// autoLinkExistingWorkspaces 扫描 registry 里 kind 为 git/marked 的工作空间，
-// 把尚未注册到 link.json 的自动 Add（keep-alive 常驻），使本机已有项目自动接入 gateway。
-// ephemeral（临时目录）不接入——它们不是稳定项目。
+// autoLinkExistingWorkspaces 扫描 ~/.cata/brain/workspaces 下的所有工作空间
+// （新旧项目都算，跳过 .cata_worker 渠道沙箱），把尚未注册到 link.json 的自动
+// Add（keep-alive），使本机已有项目自动接入 gateway，避免逐个手动接入。
 func autoLinkExistingWorkspaces(cfg Config) error {
-	entries, err := brain.ListRegistryEntries()
+	wsList, err := brain.ListHomeWorkspaces()
 	if err != nil {
 		return err
 	}
 	linked := cfg.Agents
 	added := 0
-	for _, e := range entries {
-		if e.Kind != brain.KindGit && e.Kind != brain.KindMarked {
+	for _, w := range wsList {
+		if w.ID == "" || w.RootPath == "" {
 			continue
 		}
-		if _, exists := linked[e.ID]; exists {
+		if isHomeRootPath(w.RootPath) {
+			log.Printf("supervisor: auto-link skip %s (root_path is home dir)", w.ID)
 			continue
 		}
-		if st, err := os.Stat(e.RootPath); err != nil || !st.IsDir() {
-			continue // 目录已不存在，跳过
+		if _, exists := linked[w.ID]; exists {
+			continue
 		}
-		if _, err := Add(e.RootPath, true); err != nil {
-			log.Printf("supervisor: auto-link %s: %v", e.ID, err)
+		if _, err := Add(w.RootPath, true); err != nil {
+			log.Printf("supervisor: auto-link %s: %v", w.ID, err)
 			continue
 		}
 		added++
@@ -544,4 +545,19 @@ func supervisorAdd(subpath string) error {
 		return fmt.Errorf("supervisor add: %s", resp.Message)
 	}
 	return nil
+}
+
+// isHomeRootPath 判断 root_path 是否就是用户 home 目录本身（或 CATA_HOME）。
+// 这类"整个家目录当工作空间"的格子（如 users-lucas）不该自动接入——接入后
+// agent 会绑定到 home，能读写 ~/.ssh、~/.cata 等敏感内容。
+func isHomeRootPath(rootPath string) bool {
+	p := filepath.Clean(rootPath)
+	home, err := os.UserHomeDir()
+	if err == nil && filepath.Clean(home) == p {
+		return true
+	}
+	if cata := config.CataHome(); cata != "" && filepath.Clean(cata) == p {
+		return true
+	}
+	return false
 }

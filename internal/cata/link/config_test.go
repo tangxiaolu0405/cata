@@ -185,3 +185,18 @@ func TestMachineID(t *testing.T) {
 		t.Fatal("MachineID should be non-empty")
 	}
 }
+
+// TestIsHomeRootPath 验证 home 目录 / CATA_HOME 被识别为"不该自动接入"的根路径。
+func TestIsHomeRootPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	if !isHomeRootPath(home) {
+		t.Fatalf("home %q should be home-root", home)
+	}
+	// 子目录不算。
+	if isHomeRootPath(filepath.Join(home, "projects", "foo")) {
+		t.Fatal("subdir should not be home-root")
+	}
+}
