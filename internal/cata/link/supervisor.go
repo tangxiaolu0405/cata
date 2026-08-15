@@ -443,7 +443,7 @@ func addWorkspaceRemote(subpath string) error {
 		return fmt.Errorf("workspace dir: %w", err)
 	}
 	// 注册进 link.json（keep-alive 常驻），并立即拉起 agent + supervisor。
-	entry, err := Add(dir, true, "", "")
+	entry, err := Add(dir, true)
 	if err != nil {
 		return fmt.Errorf("link add: %w", err)
 	}
@@ -472,7 +472,7 @@ func HandleRemoteRegister(subpath string) error {
 	if SupervisorAlive() {
 		return supervisorAdd(subpath)
 	}
-	entry, err := Add(dir, true, "", "")
+	entry, err := Add(dir, true)
 	if err != nil {
 		return err
 	}

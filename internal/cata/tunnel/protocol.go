@@ -43,6 +43,9 @@ type Frame struct {
 	// MachineID 机器标识（hello 帧携带）：gateway 用它把在线 agent 按机器分组，
 	// 并向同一机器下发 register 控制帧。worker 侧生成并填充。
 	MachineID string `json:"machine_id,omitempty"`
+	// MachineToken 逐机器凭证（hello 帧携带）：join 流程签发的本机独立 token。
+	// gateway 按 machine_id 查表比对 hash，单机泄露可单独吊销（替代 v1 共享 token）。
+	MachineToken string `json:"machine_token,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
 	Version   int    `json:"version,omitempty"`
 	Stream    uint64 `json:"stream,omitempty"`

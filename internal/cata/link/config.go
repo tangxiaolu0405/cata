@@ -36,8 +36,9 @@ type AgentEntry struct {
 type Config struct {
 	// GatewayURL 网关地址（如 https://gw.example.com 或 ws://127.0.0.1:8788）。空 = 未配置网关。
 	GatewayURL string `json:"gateway_url,omitempty"`
-	// Token 与网关共享的 Bearer token（v1 共享 token；逐 agent token 留 v2）。
-	Token string `json:"token,omitempty"`
+	// GatewayToken 网关准入口令（HTTP 握手层第一道门，join 时提供）。与网关 gateway.json 的
+	// gateway_token 一致。逐机器凭证见 MachineToken。
+	GatewayToken string `json:"gateway_token,omitempty"`
 	// AllowAgentIDs 网关卡白名单（v1 预留：空 = 服务端放行）。
 	AllowAgentIDs []string `json:"allow_agent_ids,omitempty"`
 	// DefaultAgentID 通道类会话（telegram/qq）在远端默认路由到的 agent（空 = 第一个在线）。
@@ -45,6 +46,11 @@ type Config struct {
 	// WorkspaceRoot 机器级工作空间根前缀：网关下发的 register 控制帧只能在此前缀之下
 	// 注册工作空间（防越界，gateway 不暴露机器内部路径）。空 = 拒绝远程 register。
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	// MachineID 本机稳定标识（join 时生成并持久化，用于逐机器 token 的键）。
+	// 空 = 未 join，MachineID() 回退 hostname。
+	MachineID string `json:"machine_id,omitempty"`
+	// MachineToken 本机逐机器凭证（join 后由网关签发）。空 = 未 join。
+	MachineToken string `json:"machine_token,omitempty"`
 	// Agents 已注册的工作空间（agent_id → 注册项）。
 	Agents map[string]AgentEntry `json:"agents,omitempty"`
 }
@@ -87,9 +93,11 @@ func SaveConfig(cfg Config) error {
 	return os.Rename(tmp, path)
 }
 
-// GatewayConfigured 是否已配置网关（gateway_url + token）。
+// GatewayConfigured 是否已配置网关（gateway_url + 准入口令 + 逐机器 token）。
 func (c Config) GatewayConfigured() bool {
-	return strings.TrimSpace(c.GatewayURL) != "" && strings.TrimSpace(c.Token) != ""
+	return strings.TrimSpace(c.GatewayURL) != "" &&
+		strings.TrimSpace(c.GatewayToken) != "" &&
+		strings.TrimSpace(c.MachineToken) != ""
 }
 
 // HasAgent 是否注册了某工作空间。
@@ -122,7 +130,8 @@ func (c Config) LinkedAgentIDs() []string {
 // Add 注册一个工作空间（由 cata link add 调用）：
 //   - 解析目录 → 工作空间（注册进 registry + 落盘 link.json）
 //   - 默认 keep-alive（注册即常驻）
-func Add(dir string, keepAlive bool, gatewayURL, token string) (AgentEntry, error) {
+// 注意：网关地址与逐机器 token 由 `cata link join` 预先写入 link.json，本函数不再接收。
+func Add(dir string, keepAlive bool) (AgentEntry, error) {
 	if err := brain.EnsureCataLayout(); err != nil {
 		return AgentEntry{}, err
 	}
@@ -133,12 +142,6 @@ func Add(dir string, keepAlive bool, gatewayURL, token string) (AgentEntry, erro
 	cfg, err := LoadConfig()
 	if err != nil {
 		return AgentEntry{}, err
-	}
-	if g := strings.TrimSpace(gatewayURL); g != "" {
-		cfg.GatewayURL = g
-	}
-	if t := strings.TrimSpace(token); t != "" {
-		cfg.Token = t
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]AgentEntry{}
@@ -231,9 +234,14 @@ func AgentAlive(agentID string) bool {
 	return PingAgentSocket(config.ResolvedAgentSocketPath(agentID)) == nil
 }
 
-// MachineID 返回本机稳定标识（hostname；失败回退 "unknown"）。
-// 用于 hello 帧携带，gateway 据此把在线 agent 按机器分组并路由 register 控制帧。
+// MachineID 返回本机稳定标识：优先 link.json 持久化的 machine_id（join 时生成），
+// 回退 hostname。用于 hello 帧携带，gateway 据此按机器分组、校验逐机器 token。
 func MachineID() string {
+	if cfg, err := LoadConfig(); err == nil {
+		if m := strings.TrimSpace(cfg.MachineID); m != "" {
+			return m
+		}
+	}
 	h, err := os.Hostname()
 	if err != nil || strings.TrimSpace(h) == "" {
 		return "unknown"

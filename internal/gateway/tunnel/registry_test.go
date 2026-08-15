@@ -274,8 +274,8 @@ func TestRegistryMachineGrouping(t *testing.T) {
 	}
 
 	a := reg.FindAgentByMachine("m1")
-	if a == nil || a.info.AgentID != "ws-a" {
-		t.Fatalf("FindAgentByMachine(m1) should return an m1 agent")
+	if a == nil || (a.info.AgentID != "ws-a" && a.info.AgentID != "ws-b") {
+		t.Fatalf("FindAgentByMachine(m1) should return an m1 agent, got %+v", a)
 	}
 	if reg.FindAgentByMachine("m2").info.AgentID != "ws-c" {
 		t.Fatalf("FindAgentByMachine(m2) should return ws-c")

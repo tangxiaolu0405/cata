@@ -13,8 +13,9 @@ func TestConfigSaveLoadRoundtrip(t *testing.T) {
 	t.Setenv(config.EnvCataHome, home)
 
 	cfg := Config{
-		GatewayURL:     "https://gw.example.com",
-		Token:          "secret-token",
+		GatewayURL:    "https://gw.example.com",
+		GatewayToken:  "secret-token",
+		MachineToken:  "machine-secret",
 		DefaultAgentID: "ws-1",
 		Agents: map[string]AgentEntry{
 			"ws-1": {AgentID: "ws-1", RootPath: "/proj/a", Name: "Project A", KeepAlive: true, Enabled: true, LinkedAt: "2026-01-01T00:00:00Z"},
@@ -29,7 +30,7 @@ func TestConfigSaveLoadRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got.GatewayURL != cfg.GatewayURL || got.Token != cfg.Token || got.DefaultAgentID != cfg.DefaultAgentID {
+	if got.GatewayURL != cfg.GatewayURL || got.GatewayToken != cfg.GatewayToken || got.MachineToken != cfg.MachineToken || got.DefaultAgentID != cfg.DefaultAgentID {
 		t.Fatalf("roundtrip mismatch: %+v", got)
 	}
 	if !got.HasAgent("ws-1") || !got.HasAgent("ws-2") {
@@ -81,7 +82,7 @@ func TestAddRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry, err := Add(dir, true, "https://gw.example.com", "tok")
+	entry, err := Add(dir, true)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -95,8 +96,9 @@ func TestAddRemove(t *testing.T) {
 	if !cfg.HasAgent(entry.AgentID) {
 		t.Fatalf("agent %q not registered", entry.AgentID)
 	}
-	if !cfg.GatewayConfigured() {
-		t.Fatal("gateway should be configured after add with url+token")
+	// Add 不再配置网关（join 才配置），故 add 后 GatewayConfigured 应为 false。
+	if cfg.GatewayConfigured() {
+		t.Fatal("add alone should not configure gateway (join does)")
 	}
 
 	if err := Remove(entry.AgentID); err != nil {

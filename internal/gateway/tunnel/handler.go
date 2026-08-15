@@ -22,10 +22,14 @@ var upgrader = websocket.Upgrader{
 
 // HandlerOptions 隧道端点配置。
 type HandlerOptions struct {
-	// Token 共享 Bearer token（v1）。空 = 拒绝所有（必须显式配置）。
+	// Token 网关准入口令（HTTP 握手层；v2 仍作为第一道门）。空 = 拒绝所有（必须显式配置）。
 	Token string
 	// AllowAgentIDs 白名单；空 = 放行所有（仍要求 token）。
 	AllowAgentIDs []string
+	// Machines 逐机器 token 表（hello 层校验）；nil = 跳过逐机器校验（兼容本地/测试）。
+	Machines *MachinesStore
+	// Join join 流程管理器；nil = 不挂载 /cata/v1/join/* 端点。
+	Join *JoinManager
 }
 
 // Handler 返回 /cata/v1/tunnel 端点处理器。
@@ -85,6 +89,17 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		ac.info.MachineID = hello.MachineID
 		ac.info.Protocol = hello.Protocol
 		ac.info.Version = hello.Version
+
+		// hello 层逐机器 token 校验：machine_id + machine_token 必须匹配 machines.json
+		// 里该机器的 hash。单机泄露可单独吊销，替代 v1 全网共享 token。
+		if opts.Machines != nil {
+			if !opts.Machines.ValidateMachine(hello.MachineID, hello.MachineToken) {
+				_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Message: "machine token invalid"})
+				_ = ws.Close()
+				return
+			}
+			opts.Machines.TouchSeen(hello.MachineID)
+		}
 
 		// hello 校验通过后清除握手读超时，避免隧道 10s 后必然断线。
 		_ = ws.SetReadDeadline(time.Time{})

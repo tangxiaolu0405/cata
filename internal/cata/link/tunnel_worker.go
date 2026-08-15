@@ -91,7 +91,7 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 		log.Printf("cata agent %s: WARNING: gateway url is ws:// (token sent in plaintext); use wss:// in production", agentID)
 	}
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+cfg.Token)
+	header.Set("Authorization", "Bearer "+cfg.GatewayToken)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, resp, err := dialer.Dial(wsURL, header)
@@ -104,13 +104,14 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 	defer conn.Close()
 
 	hello := tunnel.Frame{
-		Type:      tunnel.FrameHello,
-		AgentID:   agentID,
-		Name:      entry.Name,
-		RootPath:  entry.RootPath,
-		MachineID: MachineID(),
-		Protocol:  tunnel.ProtocolName,
-		Version:   tunnel.Version,
+		Type:         tunnel.FrameHello,
+		AgentID:      agentID,
+		Name:         entry.Name,
+		RootPath:     entry.RootPath,
+		MachineID:    cfg.MachineID,
+		MachineToken: cfg.MachineToken,
+		Protocol:     tunnel.ProtocolName,
+		Version:      tunnel.Version,
 	}
 	if err := conn.WriteJSON(hello); err != nil {
 		return err

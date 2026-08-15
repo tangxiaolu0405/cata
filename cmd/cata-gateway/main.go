@@ -160,12 +160,16 @@ func runGateway(only string) {
 
 	remote := cfg.RemoteMode()
 	var reg *tunnel.Registry
+	var machines *tunnel.MachinesStore
+	var join *tunnel.JoinManager
 	if remote {
 		if !cfg.TunnelEnabled() {
 			fmt.Fprintf(os.Stderr, "remote mode requires gateway_token (env CATA_GATEWAY_TOKEN or gateway.json gateway_token)\n")
 			os.Exit(1)
 		}
 		reg = tunnel.NewRegistry()
+		machines = tunnel.NewMachinesStore(tunnel.MachinesPath())
+		join = tunnel.NewJoinManager(machines)
 		log.Printf("cata-gateway: remote mode: tunnel listen=%s (allow_agents=%d)", cfg.ResolvedTunnelListen(), len(cfg.AllowAgentIDs))
 	}
 
@@ -213,6 +217,8 @@ func runGateway(only string) {
 			if err := tunnel.Run(ctx, cfg.ResolvedTunnelListen(), reg, tunnel.HandlerOptions{
 				Token:         cfg.GatewayToken,
 				AllowAgentIDs: cfg.AllowAgentIDs,
+				Machines:      machines,
+				Join:          join,
 			}); err != nil && ctx.Err() == nil {
 				log.Printf("tunnel stopped: %v", err)
 				errCh <- fmt.Errorf("tunnel: %w", err)

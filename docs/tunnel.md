@@ -42,7 +42,9 @@
 ```json
 {
   "gateway_url": "wss://gw.example.com",
-  "token": "共享 Bearer token（v1）",
+  "gateway_token": "网关准入口令（join 时提供，HTTP 握手层）",
+  "machine_id": "本机稳定标识（join 生成）",
+  "machine_token": "本机逐机器凭证（join 签发）",
   "workspace_root": "/home/user/projects",
   "default_agent_id": "",
   "agents": {
@@ -53,7 +55,8 @@
 
 | 命令 | 作用 |
 |------|------|
-| `cata link add --dir <path> [--gateway <url>] [--token <token>]` | 注册工作空间；写 link.json 并拉起 agent + supervisor |
+| `cata link join --gateway <url> --token <gateway_token>` | 机器首次接入：join 拿逐机器 token（一次性 code 经网关 UI 批准） |
+| `cata link add --dir <path>` | 注册工作空间（join 后）；写 link.json 并拉起 agent + supervisor |
 | `cata link remove <agent_id>` | 注销并停止 agent |
 | `cata link list` / `cata link status` | 查看注册与运行状态 |
 | `cata supervisor` | 每机器守护：启动时确保全部注册 agent 在跑，每 30s 复查补拉；控制 socket `~/.cata/supervisor.sock` |
@@ -69,13 +72,13 @@ agent 启动参数：
 
 ## 隧道协议（cata-tunnel.v1）
 
-- 传输：WebSocket（wss），端点 `GET /cata/v1/tunnel?agent=<agent_id>`，`Authorization: Bearer <token>`。
+- 传输：WebSocket（wss），端点 `GET /cata/v1/tunnel?agent=<agent_id>`，`Authorization: Bearer <gateway_token>`。
 - 帧：JSON text message。`stream` 是网关侧分配的递增 id，标识一条「逻辑 socket 连接」。
 - `line` 帧的 `data` 为 base64，逐字节透传（不含行尾约定），因此 NDJSON chat 协议无需任何改动。
 
 | 帧 | 方向 | 含义 |
 |----|------|------|
-| `hello` | worker → gateway | 注册：agent_id / name / root_path / **machine_id** / protocol / version（必须第一帧） |
+| `hello` | worker → gateway | 注册：agent_id / name / root_path / **machine_id** / **machine_token** / protocol / version（必须第一帧） |
 | `open` | gateway → worker | 打开一条新 stream |
 | `opened` | worker → gateway | stream 已建立（本地 per-ws socket 已拨通） |
 | `line` | 双向 | stream 上的原始字节（base64） |
@@ -86,6 +89,25 @@ agent 启动参数：
 | `detach` | 预留 | — |
 
 单帧上限 8 MiB（`MaxFrameBytes`），超过断开。
+
+### 逐机器 token（两层鉴权）
+
+- **HTTP 握手层**：`Authorization: Bearer <gateway_token>`（网关准入口令，共享），挡掉互联网乱扫。
+- **hello 帧层**：`machine_id + machine_token`，网关按 machine_id 查表比对 sha256 hash——**每机器独立 token**，
+  单机泄露可单独吊销，不影响其它机器（替代 v1 全网共享 token）。
+- token 落盘 `~/.cata/machines.json`（网关侧，0600），**只存 hash 不存明文**。
+
+### join 流程（机器首次接入）
+
+机器侧 `cata link join --gateway <url> --token <gateway_token>`：
+
+1. POST `/cata/v1/join/request {machine_id}` → 网关发一次性 join code（10 分钟有效，内存态）；
+2. 机器打印 code，管理员在网关 UI 批准；
+3. 网关签发 machine_token（machines.json 存 hash），状态改 approved；
+4. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
+5. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
+
+**首次引导**：一台机器首次接入需本机 `cata link join`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程 register。
 
 ### 动态注册工作空间（register 控制帧）
 
@@ -100,8 +122,6 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 **安全边界**：不配置 `workspace_root` 时，worker **拒绝一切远程 register**。gateway 即使被攻破/误操作，
 也只能在机器声明的前缀下建工作空间，无法读 `/etc`、`~/.ssh` 等机器内部内容——agent 的 LLM loop 只在该前缀内跑。
-
-**首次引导**：一台机器首次接入仍需本机 `cata link add`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程。
 
 ## 网关 remote 模式
 
@@ -127,7 +147,7 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 - `edition: remote` 或 `cata_server.mode: remote`（或设了 `cata_url`）进入 remote 模式。
 - remote 模式**不**拉起本机 cata server；worker 在各机器由 `cata agent --link` 自持隧道。
-- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/agents`（GET 在线 agent 列表，Web UI 远程项目列表用）。
+- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/agents`（GET 在线 agent 列表）、`/cata/v1/join/*`（机器首次接入）。
 
 ## 会话路由
 
@@ -137,7 +157,8 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 ## 安全
 
-- v1 共享 Bearer token（`constant-time` 比较）；逐 agent token 留 v2。
+- 两层鉴权：HTTP 层 `gateway_token`（准入口令）+ hello 层 `machine_token`（逐机器，hash 存储、可单独吊销）。
+- token 只存 sha256 hash（`~/.cata/machines.json`，0600），不落明文。
 - `allow_agent_ids` 白名单（可选）。
 - 隧道端点 `CheckOrigin` 放行（可能经 nginx/caddy 反代），鉴权靠 token；建议网关部署走 HTTPS。
 

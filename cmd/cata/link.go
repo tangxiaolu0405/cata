@@ -11,7 +11,8 @@ import (
 
 // runLink 管理「本地工作空间 → 远程网关」注册：
 //
-//	cata link add --dir <path> [--gateway <url>] [--token <token>]
+//	cata link join --gateway <url>          # 机器首次接入：join 拿逐机器 token
+//	cata link add --dir <path>              # 注册工作空间（join 后）
 //	cata link remove <agent_id>
 //	cata link list
 //	cata link status
@@ -23,6 +24,8 @@ func runLink(args []string) {
 		os.Exit(1)
 	}
 	switch args[0] {
+	case "join":
+		runLinkJoin(args[1:])
 	case "add":
 		runLinkAdd(args[1:])
 	case "remove", "rm":
@@ -42,22 +45,62 @@ func runLink(args []string) {
 
 func printLinkUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  cata link add --dir <path> [--gateway <url>] [--token <token>]")
+	fmt.Println("  cata link join --gateway <url>")
+	fmt.Println("  cata link add --dir <path>")
 	fmt.Println("  cata link remove <agent_id>")
 	fmt.Println("  cata link list")
 	fmt.Println("  cata link status")
 	fmt.Println()
 	fmt.Println("Register a local workspace to a remote cata-gateway. agent_id = workspace id.")
-	fmt.Println("Registered workspaces run a keep-alive `cata agent` (one LLM loop per workspace)")
-	fmt.Println("and, when a gateway is configured, hold a WSS tunnel to the gateway.")
+	fmt.Println("First join the gateway (one-time) to get a per-machine token; then add workspaces.")
+	fmt.Println("Registered workspaces run a keep-alive `cata agent` and hold a WSS tunnel to the gateway.")
 	fmt.Println()
-	fmt.Println("Config: ~/.cata/link.json  (gateway_url / token / agents)")
+	fmt.Println("Config: ~/.cata/link.json  (gateway_url / machine_id / machine_token / workspace_root / agents)")
+}
+
+// runLinkJoin 机器首次接入网关：join 拿逐机器 token。
+// 需提供网关准入口令 gateway_token（与 gateway.json 的 gateway_token 一致），
+// 用于 join 端点鉴权 + 之后隧道 HTTP 握手层的第一道门。
+func runLinkJoin(args []string) {
+	gatewayURL := ""
+	gatewayToken := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--gateway" && i+1 < len(args):
+			gatewayURL = args[i+1]
+			i++
+		case a == "--token" && i+1 < len(args):
+			gatewayToken = args[i+1]
+			i++
+		case a == "-h" || a == "--help":
+			fmt.Println("Usage: cata link join --gateway <url> --token <gateway_token>")
+			fmt.Println("  gateway_token = 网关准入口令（gateway.json 的 gateway_token）")
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "cata link join: unknown flag %q\n", a)
+			os.Exit(2)
+		}
+	}
+	if strings.TrimSpace(gatewayURL) == "" {
+		fmt.Fprintln(os.Stderr, "cata link join: --gateway <url> required")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(gatewayToken) == "" {
+		fmt.Fprintln(os.Stderr, "cata link join: --token <gateway_token> required")
+		os.Exit(2)
+	}
+	res, err := link.Join(gatewayURL, gatewayToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata link join: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("joined: machine_id=%s\n", res.MachineID)
+	fmt.Println("next: cata link add --dir <path>   (register a workspace)")
 }
 
 func runLinkAdd(args []string) {
 	dir := ""
-	gatewayURL := ""
-	token := ""
 	keepAlive := true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -65,16 +108,11 @@ func runLinkAdd(args []string) {
 		case a == "--dir" && i+1 < len(args):
 			dir = args[i+1]
 			i++
-		case a == "--gateway" && i+1 < len(args):
-			gatewayURL = args[i+1]
-			i++
-		case a == "--token" && i+1 < len(args):
-			token = args[i+1]
-			i++
 		case a == "--no-keep-alive":
 			keepAlive = false
 		case a == "-h" || a == "--help":
-			fmt.Println("Usage: cata link add --dir <path> [--gateway <url>] [--token <token>] [--no-keep-alive]")
+			fmt.Println("Usage: cata link add --dir <path> [--no-keep-alive]")
+			fmt.Println("Requires a prior `cata link join` (per-machine token).")
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "cata link add: unknown flag %q\n", a)
@@ -86,7 +124,7 @@ func runLinkAdd(args []string) {
 		os.Exit(2)
 	}
 
-	entry, err := link.Add(dir, keepAlive, gatewayURL, token)
+	entry, err := link.Add(dir, keepAlive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cata link add: %v\n", err)
 		os.Exit(1)

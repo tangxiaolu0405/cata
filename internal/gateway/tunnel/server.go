@@ -9,12 +9,84 @@ import (
 	"time"
 )
 
-// NewHandler 挂载隧道端点（/cata/v1/tunnel）与在线 agent API（/cata/v1/agents）。
+// NewHandler 挂载隧道端点（/cata/v1/tunnel）、在线 agent API（/cata/v1/agents）、
+// 与 join 流程（/cata/v1/join/request|status|approve）。
 func NewHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/cata/v1/tunnel", Handler(reg, opts))
 	mux.Handle("/cata/v1/agents", AgentsHandler(reg, opts))
+	if opts.Join != nil {
+		mux.Handle("/cata/v1/join/request", JoinRequestHandler(opts.Join))
+		mux.Handle("/cata/v1/join/status", JoinStatusHandler(opts.Join))
+		mux.Handle("/cata/v1/join/approve", JoinApproveHandler(opts.Join, opts))
+	}
 	return mux
+}
+
+// JoinRequestHandler POST /cata/v1/join/request → 机器举手，返回一次性 join code。
+// 无鉴权：code 本身无权限，还需管理员批准；刷请求只是骚扰（可后加 rate limit）。
+func JoinRequestHandler(j *JoinManager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			MachineID string `json:"machine_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		code, err := j.RequestJoin(body.MachineID)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		writeJSON(w, map[string]any{"join_code": code})
+	})
+}
+
+// JoinStatusHandler GET /cata/v1/join/status?code=xxx → 机器轮询是否已批准并领取 token。
+// 鉴权靠 code 本身（一次性、短时）。
+func JoinStatusHandler(j *JoinManager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		approved, token, err := j.Status(code)
+		if err != nil {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		writeJSON(w, map[string]any{"approved": approved, "machine_token": token})
+	})
+}
+
+// JoinApproveHandler POST /cata/v1/join/approve → 管理员批准，签发逐机器 token。
+// 管理动作，要求 gateway_token 鉴权（与隧道同口令），或由 UI 内部（LAN）调用。
+func JoinApproveHandler(j *JoinManager, opts HandlerOptions) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !validToken(r.Header.Get("Authorization"), opts.Token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		machineID, err := j.ApproveJoin(body.Code)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "machine_id": machineID})
+	})
 }
 
 // AgentsHandler GET /cata/v1/agents → 在线 agent 列表 JSON（Web UI 远程项目列表用）。
