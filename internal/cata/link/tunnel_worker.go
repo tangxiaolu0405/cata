@@ -104,12 +104,13 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 	defer conn.Close()
 
 	hello := tunnel.Frame{
-		Type:     tunnel.FrameHello,
-		AgentID:  agentID,
-		Name:     entry.Name,
-		RootPath: entry.RootPath,
-		Protocol: tunnel.ProtocolName,
-		Version:  tunnel.Version,
+		Type:      tunnel.FrameHello,
+		AgentID:   agentID,
+		Name:      entry.Name,
+		RootPath:  entry.RootPath,
+		MachineID: MachineID(),
+		Protocol:  tunnel.ProtocolName,
+		Version:   tunnel.Version,
 	}
 	if err := conn.WriteJSON(hello); err != nil {
 		return err
@@ -204,6 +205,16 @@ func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
 		// 避免无限静默重连看不到根因。
 		log.Printf("cata agent %s: tunnel error from gateway: %s", agentID, f.Message)
 		t.notifyError(fmt.Errorf("gateway error: %s", f.Message))
+	case tunnel.FrameRegister:
+		// 网关下发的「注册新工作空间」控制帧：校验子路径在 workspace_root 下，
+		// 经 supervisor.sock 转交 supervisor 执行 Add + EnsureAgent。
+		// 新 agent 进程自带 --link 回连网关，网关 registry 即出现新 agent。
+		if err := HandleRemoteRegister(f.RootPath); err != nil {
+			log.Printf("cata agent %s: remote register %q: %v", agentID, f.RootPath, err)
+			_ = t.send(tunnel.Frame{Type: tunnel.FrameError, Message: fmt.Sprintf("register: %v", err)})
+		} else {
+			log.Printf("cata agent %s: remote register %q accepted", agentID, f.RootPath)
+		}
 	case tunnel.FramePing:
 		_ = t.send(tunnel.Frame{Type: tunnel.FramePong})
 	case tunnel.FramePong:

@@ -259,3 +259,28 @@ func TestReRegisterReplacesStaleConnection(t *testing.T) {
 		t.Fatal("expected stale ws1 to be closed by gateway")
 	}
 }
+
+// TestRegistryMachineGrouping 验证机器标识分组：Machines 去重、FindAgentByMachine 按机器找 agent。
+func TestRegistryMachineGrouping(t *testing.T) {
+	reg := NewRegistry()
+	// 直接注入 agentConn（同包测试可访问内部字段）。
+	reg.agents["ws-a"] = &agentConn{info: AgentInfo{AgentID: "ws-a", MachineID: "m1"}}
+	reg.agents["ws-b"] = &agentConn{info: AgentInfo{AgentID: "ws-b", MachineID: "m1"}}
+	reg.agents["ws-c"] = &agentConn{info: AgentInfo{AgentID: "ws-c", MachineID: "m2"}}
+
+	machines := reg.Machines()
+	if len(machines) != 2 {
+		t.Fatalf("Machines() = %v, want 2 unique machines", machines)
+	}
+
+	a := reg.FindAgentByMachine("m1")
+	if a == nil || a.info.AgentID != "ws-a" {
+		t.Fatalf("FindAgentByMachine(m1) should return an m1 agent")
+	}
+	if reg.FindAgentByMachine("m2").info.AgentID != "ws-c" {
+		t.Fatalf("FindAgentByMachine(m2) should return ws-c")
+	}
+	if reg.FindAgentByMachine("m3") != nil {
+		t.Fatal("FindAgentByMachine(m3) should be nil")
+	}
+}

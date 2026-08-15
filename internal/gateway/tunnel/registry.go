@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +26,7 @@ type AgentInfo struct {
 	AgentID     string `json:"agent_id"`
 	Name        string `json:"name"`
 	RootPath    string `json:"root_path,omitempty"`
+	MachineID   string `json:"machine_id,omitempty"` // 机器标识（hello 帧携带），用于按机器分组/路由 register
 	Protocol    string `json:"protocol,omitempty"`
 	Version     int    `json:"version,omitempty"`
 	ConnectedAt string `json:"connected_at,omitempty"`
@@ -98,6 +101,51 @@ func (r *Registry) FindAgent(agentID string) (AgentInfo, bool) {
 		return AgentInfo{}, false
 	}
 	return a.infoSnapshot(), true
+}
+
+// FindAgentByMachine 返回某机器（machine_id）当前在线的任意一个 agent 连接（用于下发
+// register 控制帧：register 是机器级操作，经该机器任一在线 agent 转交本机 supervisor）。
+// 返回 nil 表示该机器当前无在线 agent（如首次接入，需机器侧手动 cata link add）。
+func (r *Registry) FindAgentByMachine(machineID string) *agentConn {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.agents {
+		if a.info.MachineID == machineID {
+			return a
+		}
+	}
+	return nil
+}
+
+// Machines 返回当前在线的机器标识列表（去重、稳定排序），供 UI 按机器分组。
+func (r *Registry) Machines() []string {
+	r.mu.Lock()
+	seen := map[string]bool{}
+	for _, a := range r.agents {
+		if m := strings.TrimSpace(a.info.MachineID); m != "" {
+			seen[m] = true
+		}
+	}
+	r.mu.Unlock()
+	out := make([]string, 0, len(seen))
+	for m := range seen {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SendRegister 向某机器下发 register 控制帧（subpath 相对该机 workspace_root）。
+func (r *Registry) SendRegister(machineID, subpath string) error {
+	a := r.FindAgentByMachine(machineID)
+	if a == nil {
+		return fmt.Errorf("machine %q has no online agent", machineID)
+	}
+	return a.send(tunnel.Frame{Type: tunnel.FrameRegister, RootPath: subpath})
 }
 
 // DialAgent 打开一条到某在线 agent 的逻辑连接（stream）。返回的 net.Conn

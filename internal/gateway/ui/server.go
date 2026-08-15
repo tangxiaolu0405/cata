@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"cata/internal/cata/brain"
+	"cata/internal/cata/link"
 	"cata/internal/gateway"
 	"cata/internal/gateway/tunnel"
 )
@@ -59,6 +59,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProjectAction)
+	mux.HandleFunc("/api/machines", s.handleMachines)
+	mux.HandleFunc("/api/machines/", s.handleMachineAction)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
 	mux.HandleFunc("/api/events", s.handleEventsSSE)
@@ -186,6 +188,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			Name        string `json:"name"`
 			Path        string `json:"path"`
 			Kind        string `json:"kind,omitempty"`
+			MachineID   string `json:"machine_id,omitempty"`
 			HomeDir     string `json:"home_dir,omitempty"`
 			LastSeen    string `json:"last_seen_at,omitempty"`
 			ConnectedAt string `json:"connected_at,omitempty"`
@@ -203,6 +206,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				Name:        name,
 				Path:        a.RootPath,
 				Kind:        "agent",
+				MachineID:   a.MachineID,
 				HomeDir:     a.RootPath,
 				ConnectedAt: a.ConnectedAt,
 				RemoteAddr:  a.RemoteAddr,
@@ -211,28 +215,37 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, out)
 		return
 	}
-	list, err := brain.ListHomeWorkspaces()
+	// 本地模式：项目 = link.json 里注册的工作空间（agent 注册表），
+	// 与 remote 的「在线 agent」同构——不再扫描 ~/.cata/brain/workspaces（legacy 读取已废弃）。
+	type row struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		Kind      string `json:"kind,omitempty"`
+		MachineID string `json:"machine_id,omitempty"`
+		Enabled   bool   `json:"enabled,omitempty"`
+		KeepAlive bool   `json:"keep_alive,omitempty"`
+	}
+	entries, err := link.List()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	type row struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		Path     string `json:"path"`
-		Kind     string `json:"kind,omitempty"`
-		HomeDir  string `json:"home_dir,omitempty"`
-		LastSeen string `json:"last_seen_at,omitempty"`
-	}
-	out := make([]row, 0, len(list))
-	for _, ws := range list {
+	machine := link.MachineID()
+	out := make([]row, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name
+		if name == "" {
+			name = e.AgentID
+		}
 		out = append(out, row{
-			ID:       ws.ID,
-			Name:     ws.Name,
-			Path:     ws.RootPath,
-			Kind:     string(ws.Kind),
-			HomeDir:  ws.HomeDir,
-			LastSeen: ws.LastSeenAt,
+			ID:        e.AgentID,
+			Name:      name,
+			Path:      e.RootPath,
+			Kind:      "agent",
+			MachineID: machine,
+			Enabled:   e.Enabled,
+			KeepAlive: e.KeepAlive,
 		})
 	}
 	writeJSON(w, out)
@@ -250,15 +263,21 @@ func (s *Server) resolveProject(id string) (gateway.Project, bool) {
 		}
 		return gateway.Project{ID: a.AgentID, Name: name, Path: a.RootPath}, true
 	}
-	ws, ok := brain.FindHomeWorkspace(id)
-	if !ok {
+	// 本地模式：从 agent 注册表（link.json）按 id 查，与 remote 对称。
+	entries, err := link.List()
+	if err != nil {
 		return gateway.Project{}, false
 	}
-	name := ws.Name
-	if name == "" {
-		name = ws.ID
+	for _, e := range entries {
+		if e.AgentID == id {
+			name := e.Name
+			if name == "" {
+				name = e.AgentID
+			}
+			return gateway.Project{ID: e.AgentID, Name: name, Path: e.RootPath}, true
+		}
 	}
-	return gateway.Project{ID: ws.ID, Name: name, Path: ws.RootPath}, true
+	return gateway.Project{}, false
 }
 
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
@@ -445,4 +464,54 @@ func writeJSON(w http.ResponseWriter, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// handleMachines GET /api/machines → 在线机器列表（remote 模式；本地模式返回空）。
+// 机器 = 分组维度：register 控制帧按 machine_id 路由到该机器任一在线 agent。
+func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.reg == nil {
+		writeJSON(w, []string{})
+		return
+	}
+	writeJSON(w, s.reg.Machines())
+}
+
+// handleMachineAction POST /api/machines/:id/register → 向该机器下发注册工作空间控制帧。
+// body: {"subpath": "相对该机 workspace_root 的子路径"}。校验与越界防护在 worker 侧完成。
+func (s *Server) handleMachineAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/machines/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	machineID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	if action != "register" || r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.reg == nil {
+		http.Error(w, "remote mode only", 400)
+		return
+	}
+	var body struct {
+		Subpath string `json:"subpath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.reg.SendRegister(machineID, body.Subpath); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }

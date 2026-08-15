@@ -110,3 +110,55 @@ func TestAddRemove(t *testing.T) {
 		t.Fatal("agent still registered after remove")
 	}
 }
+
+// TestResolveWorkspacePath 验证 register 子路径的越界防护：必须严格落在 workspace_root 下。
+func TestResolveWorkspacePath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+
+	cases := []struct {
+		name    string
+		subpath string
+		want    string
+		wantErr bool
+	}{
+		{"empty uses root", "", root, false},
+		{"normal subdir", "foo", filepath.Join(root, "foo"), false},
+		{"nested subdir", "a/b/c", filepath.Join(root, "a", "b", "c"), false},
+		{"absolute rejected", "/etc", "", true},
+		{"dotdot escape rejected", "../evil", "", true},
+		{"dotdot nested escape rejected", "a/../../evil", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{WorkspaceRoot: root}
+			got, err := ResolveWorkspacePath(cfg, tc.subpath)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("subpath=%q: expected error, got %q", tc.subpath, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("subpath=%q: %v", tc.subpath, err)
+			}
+			if got != tc.want {
+				t.Fatalf("subpath=%q: got %q want %q", tc.subpath, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveWorkspacePathRequiresRoot 无 workspace_root 时拒绝一切远程 register。
+func TestResolveWorkspacePathRequiresRoot(t *testing.T) {
+	if _, err := ResolveWorkspacePath(Config{}, "x"); err == nil {
+		t.Fatal("expected error without workspace_root")
+	}
+}
+
+// TestMachineID 验证机器标识稳定非空。
+func TestMachineID(t *testing.T) {
+	if MachineID() == "" {
+		t.Fatal("MachineID should be non-empty")
+	}
+}

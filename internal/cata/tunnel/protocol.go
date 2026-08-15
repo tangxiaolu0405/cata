@@ -22,15 +22,16 @@ const (
 
 // FrameType 帧类型。
 const (
-	FrameHello  = "hello"  // worker → gateway：注册 agent（agent_id/name/root_path/protocol）
-	FrameOpen   = "open"   // gateway → worker：打开一条新 stream（逻辑 socket 连接）
-	FrameOpened = "opened" // worker → gateway：stream 已建立（本地 per-ws socket 已拨通）
-	FrameLine   = "line"   // 双向：stream 上的原始字节（base64，不含行尾约定，原样透传）
-	FrameClose  = "close"  // 双向：关闭 stream
-	FrameError  = "error"  // worker → gateway：stream 错误
-	FramePing   = "ping"   // 双向：保活
-	FramePong   = "pong"   // 双向：保活应答
-	FrameDetach = "detach" // 预留
+	FrameHello    = "hello"    // worker → gateway：注册 agent（agent_id/name/root_path/machine_id/protocol）
+	FrameOpen     = "open"     // gateway → worker：打开一条新 stream（逻辑 socket 连接）
+	FrameOpened   = "opened"   // worker → gateway：stream 已建立（本地 per-ws socket 已拨通）
+	FrameLine     = "line"     // 双向：stream 上的原始字节（base64，不含行尾约定，原样透传）
+	FrameClose    = "close"    // 双向：关闭 stream
+	FrameError    = "error"    // worker → gateway：stream 错误
+	FramePing     = "ping"     // 双向：保活
+	FramePong     = "pong"     // 双向：保活应答
+	FrameRegister = "register" // gateway → worker：命令本机注册一个新工作空间（相对 workspace_root 的子路径）
+	FrameDetach   = "detach"   // 预留
 )
 
 // Frame 隧道帧（JSON over WebSocket text message）。
@@ -39,11 +40,14 @@ type Frame struct {
 	AgentID  string `json:"agent_id,omitempty"`
 	Name     string `json:"name,omitempty"`
 	RootPath string `json:"root_path,omitempty"`
-	Protocol string `json:"protocol,omitempty"`
-	Version  int    `json:"version,omitempty"`
-	Stream   uint64 `json:"stream,omitempty"`
-	Data     string `json:"data,omitempty"` // base64（line 帧）
-	Message  string `json:"message,omitempty"`
+	// MachineID 机器标识（hello 帧携带）：gateway 用它把在线 agent 按机器分组，
+	// 并向同一机器下发 register 控制帧。worker 侧生成并填充。
+	MachineID string `json:"machine_id,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+	Version   int    `json:"version,omitempty"`
+	Stream    uint64 `json:"stream,omitempty"`
+	Data      string `json:"data,omitempty"` // base64（line 帧）
+	Message   string `json:"message,omitempty"`
 }
 
 // EncodeData 字节 → base64 字符串。

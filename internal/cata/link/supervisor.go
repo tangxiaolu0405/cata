@@ -146,6 +146,7 @@ func (s *Supervisor) handleConn(conn net.Conn) {
 		var req struct {
 			Command string `json:"command"`
 			AgentID string `json:"agent_id"`
+			Subpath string `json:"subpath,omitempty"` // add 命令：相对 workspace_root 的子路径
 		}
 		if err := json.Unmarshal(line, &req); err != nil {
 			_ = writeSupervisorResp(conn, false, "invalid request", nil)
@@ -155,6 +156,13 @@ func (s *Supervisor) handleConn(conn net.Conn) {
 		switch req.Command {
 		case "ping":
 			resp = respBody{Success: true, Message: "pong"}
+		case "add":
+			// 注册一个新工作空间：校验 subpath 在 workspace_root 下，写 link.json 并拉起 agent。
+			if err := addWorkspaceRemote(req.Subpath); err != nil {
+				resp = respBody{Success: false, Message: err.Error()}
+			} else {
+				resp = respBody{Success: true, Message: "registered"}
+			}
 		case "ensure":
 			agentID := strings.TrimSpace(req.AgentID)
 			if agentID == "" {
@@ -417,5 +425,81 @@ func (b *ensureBackoff) ensure(agentID string) error {
 		return err
 	}
 	b.failCount[agentID] = 0
+	return nil
+}
+
+// addWorkspaceRemote 校验 subpath 在 workspace_root 下，注册工作空间并拉起 agent。
+// 由 supervisor 控制接口的 add 命令调用（也经 worker 隧道 register 帧转交）。
+func addWorkspaceRemote(subpath string) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	dir, err := ResolveWorkspacePath(cfg, subpath)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("workspace dir: %w", err)
+	}
+	// 注册进 link.json（keep-alive 常驻），并立即拉起 agent + supervisor。
+	entry, err := Add(dir, true, "", "")
+	if err != nil {
+		return fmt.Errorf("link add: %w", err)
+	}
+	if err := EnsureAgent(entry.AgentID); err != nil {
+		return fmt.Errorf("ensure agent: %w", err)
+	}
+	return nil
+}
+
+// HandleRemoteRegister worker 侧处理网关 register 控制帧：校验子路径后经
+// supervisor.sock 转交 supervisor 执行 add（写 link.json + 拉起 agent）。
+// 之所以经 supervisor 而非直接 Add，是为了复用 supervisor 已有的保活/退避/生命周期语义。
+func HandleRemoteRegister(subpath string) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	dir, err := ResolveWorkspacePath(cfg, subpath)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("workspace dir: %w", err)
+	}
+	// 经 supervisor 控制接口执行 add（若 supervisor 未跑则直接本地 Add + Ensure）。
+	if SupervisorAlive() {
+		return supervisorAdd(subpath)
+	}
+	entry, err := Add(dir, true, "", "")
+	if err != nil {
+		return err
+	}
+	return EnsureAgent(entry.AgentID)
+}
+
+// supervisorAdd 通过 supervisor.sock 下发 add 命令。
+func supervisorAdd(subpath string) error {
+	conn, err := net.DialTimeout("unix", config.SupervisorSocketPath(), 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	req, _ := json.Marshal(map[string]string{"command": "add", "subpath": subpath})
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+	var resp respBody
+	if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("supervisor add: %s", resp.Message)
+	}
 	return nil
 }

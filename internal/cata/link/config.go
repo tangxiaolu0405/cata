@@ -11,7 +11,9 @@ package link
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -40,6 +42,9 @@ type Config struct {
 	AllowAgentIDs []string `json:"allow_agent_ids,omitempty"`
 	// DefaultAgentID 通道类会话（telegram/qq）在远端默认路由到的 agent（空 = 第一个在线）。
 	DefaultAgentID string `json:"default_agent_id,omitempty"`
+	// WorkspaceRoot 机器级工作空间根前缀：网关下发的 register 控制帧只能在此前缀之下
+	// 注册工作空间（防越界，gateway 不暴露机器内部路径）。空 = 拒绝远程 register。
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	// Agents 已注册的工作空间（agent_id → 注册项）。
 	Agents map[string]AgentEntry `json:"agents,omitempty"`
 }
@@ -224,4 +229,44 @@ func EnsureAll() (started int, err error) {
 // AgentAlive 探测某工作空间 agent 的 per-ws socket 是否存活。
 func AgentAlive(agentID string) bool {
 	return PingAgentSocket(config.ResolvedAgentSocketPath(agentID)) == nil
+}
+
+// MachineID 返回本机稳定标识（hostname；失败回退 "unknown"）。
+// 用于 hello 帧携带，gateway 据此把在线 agent 按机器分组并路由 register 控制帧。
+func MachineID() string {
+	h, err := os.Hostname()
+	if err != nil || strings.TrimSpace(h) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(h)
+}
+
+// ResolveWorkspacePath 校验 register 下发的子路径并解析出绝对工作空间路径。
+// 规则：机器必须配置 WorkspaceRoot；subpath 必须严格落在 WorkspaceRoot 之下
+// （拒绝绝对路径、拒绝 .. 逃逸）。subpath 为空时使用 WorkspaceRoot 自身。
+func ResolveWorkspacePath(cfg Config, subpath string) (string, error) {
+	root := strings.TrimSpace(cfg.WorkspaceRoot)
+	if root == "" {
+		return "", fmt.Errorf("workspace_root not configured; remote register disabled")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("workspace_root: %w", err)
+	}
+	sub := strings.TrimSpace(subpath)
+	if sub == "" {
+		return absRoot, nil
+	}
+	if filepath.IsAbs(sub) {
+		return "", fmt.Errorf("subpath must be relative to workspace_root")
+	}
+	joined := filepath.Join(absRoot, sub)
+	rel, err := filepath.Rel(absRoot, joined)
+	if err != nil {
+		return "", fmt.Errorf("resolve subpath: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("subpath escapes workspace_root")
+	}
+	return joined, nil
 }

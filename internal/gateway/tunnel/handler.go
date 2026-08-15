@@ -82,6 +82,7 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		}
 		ac.info.Name = hello.Name
 		ac.info.RootPath = hello.RootPath
+		ac.info.MachineID = hello.MachineID
 		ac.info.Protocol = hello.Protocol
 		ac.info.Version = hello.Version
 

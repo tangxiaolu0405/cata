@@ -43,9 +43,10 @@
 {
   "gateway_url": "wss://gw.example.com",
   "token": "共享 Bearer token（v1）",
+  "workspace_root": "/home/user/projects",
   "default_agent_id": "",
   "agents": {
-    "ws-xxxx": { "agent_id": "ws-xxxx", "root_path": "/path/to/proj", "name": "proj", "keep_alive": true, "enabled": true }
+    "ws-xxxx": { "agent_id": "ws-xxxx", "root_path": "/home/user/projects/proj-a", "name": "proj-a", "keep_alive": true, "enabled": true }
   }
 }
 ```
@@ -74,16 +75,33 @@ agent 启动参数：
 
 | 帧 | 方向 | 含义 |
 |----|------|------|
-| `hello` | worker → gateway | 注册：agent_id / name / root_path / protocol / version（必须第一帧） |
+| `hello` | worker → gateway | 注册：agent_id / name / root_path / **machine_id** / protocol / version（必须第一帧） |
 | `open` | gateway → worker | 打开一条新 stream |
 | `opened` | worker → gateway | stream 已建立（本地 per-ws socket 已拨通） |
 | `line` | 双向 | stream 上的原始字节（base64） |
 | `close` | 双向 | 关闭 stream |
 | `error` | 双向 | stream 错误 |
+| `register` | gateway → worker | 命令本机注册新工作空间（`root_path` = 相对该机 `workspace_root` 的子路径） |
 | `ping` / `pong` | 双向 | 保活 |
 | `detach` | 预留 | — |
 
 单帧上限 8 MiB（`MaxFrameBytes`），超过断开。
+
+### 动态注册工作空间（register 控制帧）
+
+gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注册一个新工作空间**，无需 ssh 回机器手动 `cata link add`：
+
+1. 机器侧在 `link.json` 配置 `workspace_root`（固定前缀，机器级）；
+2. gateway UI 按 `machine_id` 分组，选择目标机器 + 填**相对子路径**（gateway 不知道机器绝对路径）；
+3. gateway 经该机器任一在线 agent 下发 `register{root_path=子路径}`；
+4. worker 侧校验子路径**严格落在 `workspace_root` 之下**（拒绝绝对路径 / `..` 逃逸 / 符号链接逃逸），
+   校验通过后经 supervisor.sock 转交 supervisor 执行 `Add + EnsureAgent`；
+5. 新 agent 进程自带 `--link` 回连网关，网关 registry 出现新 agent。
+
+**安全边界**：不配置 `workspace_root` 时，worker **拒绝一切远程 register**。gateway 即使被攻破/误操作，
+也只能在机器声明的前缀下建工作空间，无法读 `/etc`、`~/.ssh` 等机器内部内容——agent 的 LLM loop 只在该前缀内跑。
+
+**首次引导**：一台机器首次接入仍需本机 `cata link add`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程。
 
 ## 网关 remote 模式
 
