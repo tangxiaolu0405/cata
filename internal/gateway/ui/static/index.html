@@ -341,11 +341,11 @@
   <div class="overlay" id="addWsDlg">
     <div class="dialog">
       <h3>远程注册工作空间</h3>
-      <p class="sub">向目标机器下发 register，子路径相对该机 workspace_root。</p>
+      <p class="sub">向目标机器下发 register。填项目名（自动建在 workspace_root 下）或绝对路径（已存在则绑定，不存在且在工作区根下才创建）。</p>
       <label class="field"><span>目标机器（machine_id）</span>
         <select id="addWsMachine"></select>
       </label>
-      <label class="field"><span>子路径（相对 workspace_root，可空）</span><input id="addWsSubpath" type="text" placeholder="如 my-project 或留空" /></label>
+      <label class="field"><span>项目名 或 绝对路径</span><input id="addWsSubpath" type="text" placeholder="如 my-project 或 /path/to/proj" /></label>
       <div class="row">
         <button type="button" id="btnAddWsConfirm">注册</button>
         <button type="button" class="ghost" id="btnAddWsCancel">取消</button>

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 )
 
@@ -116,6 +117,14 @@ func (s *Supervisor) ensureAll() error {
 	if err != nil {
 		return err
 	}
+	// 自动接入本机已有工作空间（git/marked），避免用户逐个手动 link add。
+	if err := autoLinkExistingWorkspaces(cfg); err != nil {
+		log.Printf("supervisor: auto-link: %v", err)
+		cfg, err = LoadConfig() // 重载，纳入刚自动注册的 agent
+		if err != nil {
+			return err
+		}
+	}
 	ids := cfg.LinkedAgentIDs()
 	for _, id := range ids {
 		e := cfg.Agents[id]
@@ -127,6 +136,38 @@ func (s *Supervisor) ensureAll() error {
 			log.Printf("supervisor: ensure agent %s: %v", id, err)
 			continue
 		}
+	}
+	return nil
+}
+
+// autoLinkExistingWorkspaces 扫描 registry 里 kind 为 git/marked 的工作空间，
+// 把尚未注册到 link.json 的自动 Add（keep-alive 常驻），使本机已有项目自动接入 gateway。
+// ephemeral（临时目录）不接入——它们不是稳定项目。
+func autoLinkExistingWorkspaces(cfg Config) error {
+	entries, err := brain.ListRegistryEntries()
+	if err != nil {
+		return err
+	}
+	linked := cfg.Agents
+	added := 0
+	for _, e := range entries {
+		if e.Kind != brain.KindGit && e.Kind != brain.KindMarked {
+			continue
+		}
+		if _, exists := linked[e.ID]; exists {
+			continue
+		}
+		if st, err := os.Stat(e.RootPath); err != nil || !st.IsDir() {
+			continue // 目录已不存在，跳过
+		}
+		if _, err := Add(e.RootPath, true); err != nil {
+			log.Printf("supervisor: auto-link %s: %v", e.ID, err)
+			continue
+		}
+		added++
+	}
+	if added > 0 {
+		log.Printf("supervisor: auto-linked %d existing workspace(s)", added)
 	}
 	return nil
 }
@@ -428,7 +469,7 @@ func (b *ensureBackoff) ensure(agentID string) error {
 	return nil
 }
 
-// addWorkspaceRemote 校验 subpath 在 workspace_root 下，注册工作空间并拉起 agent。
+// addWorkspaceRemote 解析 register 路径、确保目录存在（不存在则创建）、注册工作空间并拉起 agent。
 // 由 supervisor 控制接口的 add 命令调用（也经 worker 隧道 register 帧转交）。
 func addWorkspaceRemote(subpath string) error {
 	cfg, err := LoadConfig()
@@ -439,8 +480,9 @@ func addWorkspaceRemote(subpath string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("workspace dir: %w", err)
+	// 幂等：目录已存在则跳过创建；不存在则创建（仅限 workspace_root 下，越界已在 ResolveWorkspacePath 拦截）。
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create workspace dir: %w", err)
 	}
 	// 注册进 link.json（keep-alive 常驻），并立即拉起 agent + supervisor。
 	entry, err := Add(dir, true)
@@ -453,8 +495,8 @@ func addWorkspaceRemote(subpath string) error {
 	return nil
 }
 
-// HandleRemoteRegister worker 侧处理网关 register 控制帧：校验子路径后经
-// supervisor.sock 转交 supervisor 执行 add（写 link.json + 拉起 agent）。
+// HandleRemoteRegister worker 侧处理网关 register 控制帧：解析路径、确保目录存在、
+// 经 supervisor.sock 转交 supervisor 执行 add（写 link.json + 拉起 agent）。
 // 之所以经 supervisor 而非直接 Add，是为了复用 supervisor 已有的保活/退避/生命周期语义。
 func HandleRemoteRegister(subpath string) error {
 	cfg, err := LoadConfig()
@@ -465,8 +507,8 @@ func HandleRemoteRegister(subpath string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("workspace dir: %w", err)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create workspace dir: %w", err)
 	}
 	// 经 supervisor 控制接口执行 add（若 supervisor 未跑则直接本地 Add + Ensure）。
 	if SupervisorAlive() {

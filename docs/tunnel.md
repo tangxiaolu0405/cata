@@ -118,14 +118,27 @@ agent 启动参数：
 gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注册一个新工作空间**，无需 ssh 回机器手动 `cata link add`：
 
 1. 机器侧在 `link.json` 配置 `workspace_root`（固定前缀，机器级）；
-2. gateway UI 按 `machine_id` 分组，选择目标机器 + 填**相对子路径**（gateway 不知道机器绝对路径）；
-3. gateway 经该机器任一在线 agent 下发 `register{root_path=子路径}`；
-4. worker 侧校验子路径**严格落在 `workspace_root` 之下**（拒绝绝对路径 / `..` 逃逸 / 符号链接逃逸），
-   校验通过后经 supervisor.sock 转交 supervisor 执行 `Add + EnsureAgent`；
+2. gateway UI 按 `machine_id` 分组，选择目标机器 + 填**项目名**（如 `abc`）或**绝对路径**；
+3. gateway 经该机器任一在线 agent 下发 `register{root_path=输入}`；
+4. worker 侧解析路径（见下），确保目录存在（不存在则创建），经 supervisor.sock 转交 supervisor 执行 `Add + EnsureAgent`；
 5. 新 agent 进程自带 `--link` 回连网关，网关 registry 出现新 agent。
 
-**安全边界**：不配置 `workspace_root` 时，worker **拒绝一切远程 register**。gateway 即使被攻破/误操作，
-也只能在机器声明的前缀下建工作空间，无法读 `/etc`、`~/.ssh` 等机器内部内容——agent 的 LLM loop 只在该前缀内跑。
+**路径语义**：
+
+| 输入 | 行为 |
+|------|------|
+| 项目名（相对，如 `abc`） | 拼到 `workspace_root/abc`；目录不存在则 `MkdirAll` 创建 |
+| 绝对路径，已存在 | 直接绑定（允许在 workspace_root 之外，用于接入本机已有项目） |
+| 绝对路径，不存在 | 必须严格落在 workspace_root 下才创建，否则拒绝 |
+
+**幂等**：目录/工作空间已存在或已注册时，不重复创建、不重复拉 agent。
+
+**自动接入**：supervisor 启动/复查时，扫描 registry 里 kind 为 git/marked 的工作空间，
+把尚未注册到 link.json 的自动 Add（keep-alive），使本机已有项目自动接入 gateway，避免逐个手动接入。
+
+**安全边界**：不配置 `workspace_root` 时，worker 拒绝相对名 register（绝对路径仅当目录已存在才可绑定，
+不允许创建）。gateway 即使被攻破/误操作，也只能在机器声明的前缀下**新建**工作空间，无法读 `/etc`、
+`~/.ssh` 等机器内部内容——agent 的 LLM loop 只在该前缀内跑。
 
 ## 网关 remote 模式
 

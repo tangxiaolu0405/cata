@@ -127,9 +127,10 @@ func (c Config) LinkedAgentIDs() []string {
 	return ids
 }
 
-// Add 注册一个工作空间（由 cata link add 调用）：
+// Add 注册一个工作空间（由 cata link add / register 调用）：
 //   - 解析目录 → 工作空间（注册进 registry + 落盘 link.json）
 //   - 默认 keep-alive（注册即常驻）
+//   - 幂等：同一 root_path 已注册时直接返回既有条目（不重复写、不刷新 linked_at）
 // 注意：网关地址与逐机器 token 由 `cata link join` 预先写入 link.json，本函数不再接收。
 func Add(dir string, keepAlive bool) (AgentEntry, error) {
 	if err := brain.EnsureCataLayout(); err != nil {
@@ -145,6 +146,10 @@ func Add(dir string, keepAlive bool) (AgentEntry, error) {
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]AgentEntry{}
+	}
+	// 幂等：已注册同一工作空间则直接返回，避免重复写盘 / 刷新 linked_at。
+	if existing, ok := cfg.Agents[ws.ID]; ok {
+		return existing, nil
 	}
 	name := ws.Name
 	if name == "" {
@@ -249,32 +254,60 @@ func MachineID() string {
 	return strings.TrimSpace(h)
 }
 
-// ResolveWorkspacePath 校验 register 下发的子路径并解析出绝对工作空间路径。
-// 规则：机器必须配置 WorkspaceRoot；subpath 必须严格落在 WorkspaceRoot 之下
-// （拒绝绝对路径、拒绝 .. 逃逸）。subpath 为空时使用 WorkspaceRoot 自身。
+// ResolveWorkspacePath 解析 register 下发的路径，返回最终要绑定的绝对目录。
+//
+// 语义（gateway 作为入口，worker 侧校验）：
+//   - 相对名（如 "abc"）→ 拼到 workspace_root 下（workspace_root/abc）；必须已配置 workspace_root
+//   - 绝对路径 → 若目录已存在，直接绑定（允许在 workspace_root 之外，用于接入本机已有项目）；
+//     若不存在，必须严格落在 workspace_root 之下才允许（防止 gateway 越界创建目录）
+//   - 空输入 → 使用 workspace_root 自身
+//
+// 越界防护：拒绝 `..` 逃逸；未配置 workspace_root 时拒绝一切（除非是已存在的绝对路径目录）。
 func ResolveWorkspacePath(cfg Config, subpath string) (string, error) {
 	root := strings.TrimSpace(cfg.WorkspaceRoot)
+	sub := strings.TrimSpace(subpath)
+
+	// 相对名（或空）：必须配 workspace_root，拼前缀。
+	if !filepath.IsAbs(sub) {
+		if root == "" {
+			return "", fmt.Errorf("workspace_root not configured; remote register disabled")
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", fmt.Errorf("workspace_root: %w", err)
+		}
+		if sub == "" {
+			return absRoot, nil
+		}
+		joined := filepath.Join(absRoot, sub)
+		rel, err := filepath.Rel(absRoot, joined)
+		if err != nil {
+			return "", fmt.Errorf("resolve subpath: %w", err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("subpath escapes workspace_root")
+		}
+		return joined, nil
+	}
+
+	// 绝对路径：已存在 → 直接绑定（不管是否在 root 下）；不存在 → 必须在 root 下才允许创建。
+	abs := filepath.Clean(sub)
+	if st, err := os.Stat(abs); err == nil && st.IsDir() {
+		return abs, nil
+	}
 	if root == "" {
-		return "", fmt.Errorf("workspace_root not configured; remote register disabled")
+		return "", fmt.Errorf("workspace_root not configured; cannot create absolute path outside it")
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("workspace_root: %w", err)
 	}
-	sub := strings.TrimSpace(subpath)
-	if sub == "" {
-		return absRoot, nil
-	}
-	if filepath.IsAbs(sub) {
-		return "", fmt.Errorf("subpath must be relative to workspace_root")
-	}
-	joined := filepath.Join(absRoot, sub)
-	rel, err := filepath.Rel(absRoot, joined)
+	rel, err := filepath.Rel(absRoot, abs)
 	if err != nil {
-		return "", fmt.Errorf("resolve subpath: %w", err)
+		return "", fmt.Errorf("resolve absolute path: %w", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("subpath escapes workspace_root")
+		return "", fmt.Errorf("absolute path outside workspace_root and does not exist; cannot create")
 	}
-	return joined, nil
+	return abs, nil
 }

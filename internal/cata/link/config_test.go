@@ -116,6 +116,16 @@ func TestAddRemove(t *testing.T) {
 // TestResolveWorkspacePath 验证 register 子路径的越界防护：必须严格落在 workspace_root 下。
 func TestResolveWorkspacePath(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
+	// 预建一个 root 下的目录（绝对路径绑定测试用）。
+	existingInRoot := filepath.Join(root, "existing")
+	if err := os.MkdirAll(existingInRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// root 之外的一个已存在目录（绝对路径绑定测试用）。
+	outside := filepath.Join(t.TempDir(), "outside-proj")
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name    string
@@ -126,9 +136,15 @@ func TestResolveWorkspacePath(t *testing.T) {
 		{"empty uses root", "", root, false},
 		{"normal subdir", "foo", filepath.Join(root, "foo"), false},
 		{"nested subdir", "a/b/c", filepath.Join(root, "a", "b", "c"), false},
-		{"absolute rejected", "/etc", "", true},
 		{"dotdot escape rejected", "../evil", "", true},
 		{"dotdot nested escape rejected", "a/../../evil", "", true},
+		// 绝对路径：已存在 → 绑定（允许在 root 之外）
+		{"absolute existing in root binds", existingInRoot, existingInRoot, false},
+		{"absolute existing outside root binds", outside, outside, false},
+		// 绝对路径：不存在且不在 root 下 → 拒绝创建
+		{"absolute missing outside root rejected", filepath.Join(t.TempDir(), "nope", "x"), "", true},
+		// 绝对路径：不存在但在 root 下 → 允许创建
+		{"absolute missing under root allowed", filepath.Join(root, "new-abs"), filepath.Join(root, "new-abs"), false},
 	}
 
 	for _, tc := range cases {
@@ -151,10 +167,15 @@ func TestResolveWorkspacePath(t *testing.T) {
 	}
 }
 
-// TestResolveWorkspacePathRequiresRoot 无 workspace_root 时拒绝一切远程 register。
+// TestResolveWorkspacePathRequiresRoot 无 workspace_root 时：相对名拒绝、已存在绝对路径仍可绑定。
 func TestResolveWorkspacePathRequiresRoot(t *testing.T) {
 	if _, err := ResolveWorkspacePath(Config{}, "x"); err == nil {
-		t.Fatal("expected error without workspace_root")
+		t.Fatal("expected error for relative name without workspace_root")
+	}
+	// 已存在的绝对路径即使无 workspace_root 也应可绑定。
+	dir := t.TempDir()
+	if got, err := ResolveWorkspacePath(Config{}, dir); err != nil || got != dir {
+		t.Fatalf("existing abs path should bind without workspace_root: got=%q err=%v", got, err)
 	}
 }
 
