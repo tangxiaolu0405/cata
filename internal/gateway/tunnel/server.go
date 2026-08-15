@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -16,11 +17,27 @@ func NewHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	mux.Handle("/cata/v1/tunnel", Handler(reg, opts))
 	mux.Handle("/cata/v1/agents", AgentsHandler(reg, opts))
 	if opts.Join != nil {
-		mux.Handle("/cata/v1/join/request", JoinRequestHandler(opts.Join))
-		mux.Handle("/cata/v1/join/status", JoinStatusHandler(opts.Join))
+		mux.Handle("/cata/v1/join/request", rateLimitJoin(opts.Limiter, JoinRequestHandler(opts.Join)))
+		mux.Handle("/cata/v1/join/status", rateLimitJoin(opts.Limiter, JoinStatusHandler(opts.Join)))
 		mux.Handle("/cata/v1/join/approve", JoinApproveHandler(opts.Join, opts))
 	}
 	return mux
+}
+
+// rateLimitJoin 对 join 端点套 IP 限流中间件（limiter 为 nil 时透传）。
+// 拉黑期间返回 429，带 Retry-After 提示。
+func rateLimitJoin(limiter *RateLimiter, next http.Handler) http.Handler {
+	if limiter == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if remain := limiter.Allow(clientIP(r)); remain > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(remain.Seconds())+1))
+			http.Error(w, "too many requests, retry later", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // JoinRequestHandler POST /cata/v1/join/request → 机器举手，返回一次性 join code。

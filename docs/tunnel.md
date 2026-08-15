@@ -107,6 +107,10 @@ agent 启动参数：
 4. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
 5. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
 
+**join 端点 IP 限流**：`request`/`status` 无鉴权，套内存态 RateLimiter（默认 60s 窗口最多 10 次，
+超限拉黑 60s，返回 429 + Retry-After）。拉黑池为临时态，网关重启清空（攻击者继续刷会再次被拉黑，
+故不持久化）。
+
 **首次引导**：一台机器首次接入需本机 `cata link join`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程 register。
 
 ### 动态注册工作空间（register 控制帧）

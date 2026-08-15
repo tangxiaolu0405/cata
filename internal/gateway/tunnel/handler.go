@@ -30,6 +30,8 @@ type HandlerOptions struct {
 	Machines *MachinesStore
 	// Join join 流程管理器；nil = 不挂载 /cata/v1/join/* 端点。
 	Join *JoinManager
+	// Limiter join 端点 IP 限流器；nil = 不限流（join 端点本就用 code 一次性保护）。
+	Limiter *RateLimiter
 }
 
 // Handler 返回 /cata/v1/tunnel 端点处理器。
