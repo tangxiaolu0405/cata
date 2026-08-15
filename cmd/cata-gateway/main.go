@@ -235,7 +235,7 @@ func runGateway(only string) {
 			defer wg.Done()
 			var srv *ui.Server
 			if remote {
-				srv = ui.NewServerWithRegistry(cfg, ui.DefaultHub, reg)
+				srv = ui.NewServerWithRegistryAndJoin(cfg, ui.DefaultHub, reg, join)
 			} else {
 				srv = ui.NewServer(cfg, ui.DefaultHub)
 			}

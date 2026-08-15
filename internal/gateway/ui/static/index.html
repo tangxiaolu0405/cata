@@ -88,6 +88,15 @@
     }
     .item strong { display: block; font-size: 0.95rem; }
     .item small { color: var(--muted); font-size: 0.75rem; word-break: break-all; }
+    .group-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin: 0.75rem 0 0.35rem;
+      padding-left: 0.2rem;
+    }
     .side-foot { padding: 0.75rem; border-top: 1px solid var(--line); }
     input, button, textarea {
       font: inherit;
@@ -267,7 +276,9 @@
       <div class="list" id="projectList"></div>
       <div class="side-foot">
         <div class="row">
-          <button type="button" class="ghost" id="btnRefresh" style="flex:1">刷新工作区</button>
+          <button type="button" class="ghost" id="btnRefresh" style="flex:1">刷新</button>
+          <button type="button" class="ghost" id="btnJoin" title="批准机器接入（remote）">接入</button>
+          <button type="button" class="ghost" id="btnAddWs" title="远程注册工作空间（remote）">+工作区</button>
           <button type="button" class="ghost" id="btnSettings" title="设置">设置</button>
         </div>
       </div>
@@ -312,6 +323,33 @@
     <div class="dialog">
       <h3 id="choicePrompt">请选择</h3>
       <div id="choiceOpts"></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="joinDlg">
+    <div class="dialog">
+      <h3>批准机器接入</h3>
+      <p class="sub">机器侧运行 <code>cata link join</code> 会打印一个 code，输入后批准。</p>
+      <label class="field"><span>join code</span><input id="joinCode" type="text" placeholder="如 a1b2c3d4e5f6" /></label>
+      <div class="row">
+        <button type="button" id="btnJoinApprove">批准</button>
+        <button type="button" class="ghost" id="btnJoinCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="addWsDlg">
+    <div class="dialog">
+      <h3>远程注册工作空间</h3>
+      <p class="sub">向目标机器下发 register，子路径相对该机 workspace_root。</p>
+      <label class="field"><span>目标机器（machine_id）</span>
+        <select id="addWsMachine"></select>
+      </label>
+      <label class="field"><span>子路径（相对 workspace_root，可空）</span><input id="addWsSubpath" type="text" placeholder="如 my-project 或留空" /></label>
+      <div class="row">
+        <button type="button" id="btnAddWsConfirm">注册</button>
+        <button type="button" class="ghost" id="btnAddWsCancel">取消</button>
+      </div>
     </div>
   </div>
 
@@ -472,13 +510,37 @@
         el.innerHTML = '<div class="empty">暂无可用工作区<br/>用 <code>cata chat</code> 打开项目后会在 ~/.cata/brain/workspaces 出现</div>';
         return;
       }
-      for (const p of projects) {
-        const d = document.createElement("div");
-        d.className = "item" + (p.id === activeId ? " active" : "");
-        d.innerHTML = `<strong>${esc(p.name || p.id)}</strong><small>${esc(p.path)}</small>`;
-        d.onclick = () => selectProject(p.id);
-        el.appendChild(d);
+      // remote 模式按 machine_id 分组，本地模式（无 machine_id）平铺。
+      const hasMachine = projects.some((p) => p.machine_id);
+      if (!hasMachine) {
+        for (const p of projects) {
+          el.appendChild(projectItem(p));
+        }
+        return;
       }
+      const byMachine = new Map();
+      for (const p of projects) {
+        const m = p.machine_id || "(unknown)";
+        if (!byMachine.has(m)) byMachine.set(m, []);
+        byMachine.get(m).push(p);
+      }
+      for (const [machine, list] of byMachine) {
+        const h = document.createElement("div");
+        h.className = "group-label";
+        h.textContent = "机器 · " + machine;
+        el.appendChild(h);
+        for (const p of list) {
+          el.appendChild(projectItem(p));
+        }
+      }
+    }
+
+    function projectItem(p) {
+      const d = document.createElement("div");
+      d.className = "item" + (p.id === activeId ? " active" : "");
+      d.innerHTML = `<strong>${esc(p.name || p.id)}</strong><small>${esc(p.path)}</small>`;
+      d.onclick = () => selectProject(p.id);
+      return d;
     }
 
     function saveActiveTranscript() {
@@ -1059,6 +1121,80 @@
     document.querySelectorAll("#settingsDlg .tab").forEach((b) => {
       b.onclick = () => setSettingsTab(b.dataset.tab);
     });
+
+    // ---- 机器接入（join approve）+ 远程注册工作空间（remote 模式）----
+
+    // 拉取在线机器列表（remote 模式；本地模式返回空）。
+    async function loadMachines() {
+      try {
+        const list = await api("/api/machines");
+        const sel = $("addWsMachine");
+        sel.innerHTML = "";
+        if (!list || !list.length) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "（无在线机器）";
+          sel.appendChild(o);
+          return list;
+        }
+        for (const m of list) {
+          const o = document.createElement("option");
+          o.value = m;
+          o.textContent = m;
+          sel.appendChild(o);
+        }
+        return list;
+      } catch (_) {
+        return [];
+      }
+    }
+
+    // 批准机器接入：POST 到同源 UI 端口（进程内调 JoinManager，免跨域/免 token）。
+    async function approveJoin(code) {
+      return api("/api/join/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+    }
+
+    $("btnJoin").onclick = () => {
+      $("joinCode").value = "";
+      $("joinDlg").classList.add("show");
+    };
+    $("btnJoinCancel").onclick = () => $("joinDlg").classList.remove("show");
+    $("btnJoinApprove").onclick = async () => {
+      const code = $("joinCode").value.trim();
+      if (!code) { alert("请输入 join code"); return; }
+      try {
+        const r = await approveJoin(code);
+        $("joinDlg").classList.remove("show");
+        toast("已批准机器 " + (r.machine_id || ""));
+        loadProjects();
+      } catch (e) { alert(e.message || e); }
+    };
+
+    $("btnAddWs").onclick = async () => {
+      await loadMachines();
+      $("addWsSubpath").value = "";
+      $("addWsDlg").classList.add("show");
+    };
+    $("btnAddWsCancel").onclick = () => $("addWsDlg").classList.remove("show");
+    $("btnAddWsConfirm").onclick = async () => {
+      const machine = $("addWsMachine").value;
+      const subpath = $("addWsSubpath").value.trim();
+      if (!machine) { alert("请选择目标机器（无在线机器）"); return; }
+      try {
+        await api("/api/machines/" + encodeURIComponent(machine) + "/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subpath }),
+        });
+        $("addWsDlg").classList.remove("show");
+        toast("已下发注册指令");
+        loadProjects();
+      } catch (e) { alert(e.message || e); }
+    };
 
     loadProjects();
     refreshChannels();

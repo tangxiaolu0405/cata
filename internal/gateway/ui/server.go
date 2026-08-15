@@ -29,7 +29,8 @@ type Server struct {
 	web     *WebChat
 	hub     *Hub
 	httpSrv *http.Server
-	reg     *tunnel.Registry // 非 nil = remote 模式：项目列表/路由来自在线 agent
+	reg     *tunnel.Registry     // 非 nil = remote 模式：项目列表/路由来自在线 agent
+	join    *tunnel.JoinManager  // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
 }
 
 // NewServer 创建 UI 服务器（本地模式）。
@@ -49,6 +50,14 @@ func NewServerWithRegistry(cfg gateway.Config, hub *Hub, reg *tunnel.Registry) *
 	return &Server{cfg: cfg, web: NewWebChat(cfg), hub: hub}
 }
 
+// NewServerWithRegistryAndJoin 同 NewServerWithRegistry，并绑定 join 管理器（remote 模式
+// UI 批准机器接入用）。本地模式 join 为 nil。
+func NewServerWithRegistryAndJoin(cfg gateway.Config, hub *Hub, reg *tunnel.Registry, join *tunnel.JoinManager) *Server {
+	s := NewServerWithRegistry(cfg, hub, reg)
+	s.join = join
+	return s
+}
+
 // Run 监听直到 ctx 取消。
 func (s *Server) Run(ctx context.Context) error {
 	addr := s.cfg.ResolvedUIListen()
@@ -61,6 +70,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/projects/", s.handleProjectAction)
 	mux.HandleFunc("/api/machines", s.handleMachines)
 	mux.HandleFunc("/api/machines/", s.handleMachineAction)
+	mux.HandleFunc("/api/join/approve", s.handleJoinApprove)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
 	mux.HandleFunc("/api/events", s.handleEventsSSE)
@@ -514,4 +524,30 @@ func (s *Server) handleMachineAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleJoinApprove POST /api/join/approve → UI 批准机器接入（remote 模式）。
+// 走 UI 端口、进程内调 JoinManager，无需 gateway_token、无跨域；防护靠 lanOrLocalOnly。
+func (s *Server) handleJoinApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.join == nil {
+		http.Error(w, "remote mode only", 400)
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	machineID, err := s.join.ApproveJoin(body.Code)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "machine_id": machineID})
 }
