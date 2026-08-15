@@ -60,7 +60,7 @@ type Terminal struct {
 	out io.Reader
 
 	debug, focused                         bool
-	bell                                  atomic.Bool
+	bell                                   atomic.Bool
 	bold, italic, underline, strikethrough bool
 	currentFG, currentBG                   color.Color
 	cursorRow, cursorCol                   int

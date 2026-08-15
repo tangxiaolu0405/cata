@@ -65,8 +65,8 @@ type Config struct {
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	// UIPassword 控制台访问口令（HTTP Basic）。空 = 不启用（仍受 LAN-only 限制）。
 	// 局域网内有其他设备时建议设置，避免任何人驱动对话/批准 exec 确认。
-	UIPassword string `json:"ui_password,omitempty"`
-	Projects   []Project        `json:"projects,omitempty"`
+	UIPassword string    `json:"ui_password,omitempty"`
+	Projects   []Project `json:"projects,omitempty"`
 	// remote 模式（cata_server.mode=remote）：本网关作为云端注册中心 + 路由。
 	// GatewayToken 隧道共享 Bearer token（v1；逐 agent token 留 v2）。空 = 拒绝所有隧道。
 	GatewayToken string `json:"gateway_token,omitempty"`

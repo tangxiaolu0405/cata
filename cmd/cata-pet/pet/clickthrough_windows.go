@@ -9,15 +9,15 @@ import (
 )
 
 var (
-	user32             = syscall.NewLazyDLL("user32.dll")
-	procGetForeground  = user32.NewProc("GetForegroundWindow")
-	procGetWindowLong  = user32.NewProc("GetWindowLongW")
-	procSetWindowLong  = user32.NewProc("SetWindowLongW")
-	procSetLayeredAttr = user32.NewProc("SetLayeredWindowAttributes")
-	procEnumWindows    = user32.NewProc("EnumWindows")
+	user32              = syscall.NewLazyDLL("user32.dll")
+	procGetForeground   = user32.NewProc("GetForegroundWindow")
+	procGetWindowLong   = user32.NewProc("GetWindowLongW")
+	procSetWindowLong   = user32.NewProc("SetWindowLongW")
+	procSetLayeredAttr  = user32.NewProc("SetLayeredWindowAttributes")
+	procEnumWindows     = user32.NewProc("EnumWindows")
 	procIsWindowVisible = user32.NewProc("IsWindowVisible")
 
-	kernel32               = syscall.NewLazyDLL("kernel32.dll")
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
 	procGetCurrentProcessID = kernel32.NewProc("GetCurrentProcessId")
 
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
