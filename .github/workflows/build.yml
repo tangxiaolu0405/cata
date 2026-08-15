@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version: "1.22"
 
       - name: Build and package
         shell: bash
@@ -108,7 +108,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version: "1.22"
 
       - name: gofmt check
         shell: bash
@@ -120,11 +120,14 @@ jobs:
             exit 1
           fi
 
+      # vet/test 只覆盖核心与 gateway：cata-desktop（Fyne/OpenGL，需 CGO）与
+      # cata-pet（Wails，需 npm 前端产物 + CGO）是 GUI 卫星应用，在 CI 的 Linux
+      # 无头环境下无法编译，且不在发布矩阵内（build job 只构建 cata + cata-gateway）。
       - name: go vet
-        run: go vet ./...
+        run: go vet ./internal/... ./cmd/cata/... ./cmd/cata-gateway/...
 
       - name: go test
-        run: go test ./...
+        run: go test ./internal/... ./cmd/cata/... ./cmd/cata-gateway/...
 
       - name: go test -race (core)
         run: go test -race ./internal/cata/brain/ ./internal/cata/server/ ./internal/cata/evolve/ ./internal/llm/
