@@ -13,15 +13,20 @@ import (
 func NewHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/cata/v1/tunnel", Handler(reg, opts))
-	mux.Handle("/cata/v1/agents", AgentsHandler(reg))
+	mux.Handle("/cata/v1/agents", AgentsHandler(reg, opts))
 	return mux
 }
 
 // AgentsHandler GET /cata/v1/agents → 在线 agent 列表 JSON（Web UI 远程项目列表用）。
-func AgentsHandler(reg *Registry) http.Handler {
+// 与隧道端点共用 Bearer token 鉴权：泄露 agent 列表会暴露各项目路径与拓扑。
+func AgentsHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !validToken(r.Header.Get("Authorization"), opts.Token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		writeJSON(w, map[string]any{"agents": reg.OnlineAgents()})

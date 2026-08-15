@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -96,6 +97,7 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 // lanOrLocalOnly 允许本机与 RFC1918/链路本地局域网；拒绝公网直连作轻量防护。
+// 配置 UIPassword 时叠加 HTTP Basic 口令：LAN-only 只是「够得着」限制，不是授权。
 func (s *Server) lanOrLocalOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -107,8 +109,35 @@ func (s *Server) lanOrLocalOnly(next http.Handler) http.Handler {
 			http.Error(w, "LAN or localhost only", http.StatusForbidden)
 			return
 		}
+		if s.uiPasswordRequired() && !s.checkUIPassword(r) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="cata-gateway"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// uiPasswordRequired 是否配置了 UI 访问口令。
+func (s *Server) uiPasswordRequired() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return strings.TrimSpace(s.cfg.UIPassword) != ""
+}
+
+// checkUIPassword 校验 HTTP Basic 口令（常量时间比较）。
+func (s *Server) checkUIPassword(r *http.Request) bool {
+	s.cfgMu.RLock()
+	want := s.cfg.UIPassword
+	s.cfgMu.RUnlock()
+	if want == "" {
+		return true
+	}
+	_, pass, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(pass), []byte(want)) == 1
 }
 
 func isAllowedUIClient(ip net.IP) bool {

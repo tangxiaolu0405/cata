@@ -8,6 +8,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/protocol"
 	"cata/internal/llm"
 )
 
@@ -31,7 +32,7 @@ func resolveWorkspaceFile(ctx context.Context, rel string) (string, error) {
 }
 
 func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
-	if err := contextErr(ctx); err != nil {
+	if err := protocol.ContextErr(ctx); err != nil {
 		return "", err
 	}
 	var p struct {
@@ -50,7 +51,7 @@ func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
 		return "", err
 	}
 	maxRead, _ := workspaceFileLimits()
-	data, err := readFileWithContext(ctx, full, maxRead+1)
+	data, err := protocol.ReadFileWithContext(ctx, full, maxRead+1)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +78,7 @@ func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
 }
 
 func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
-	if err := contextErr(ctx); err != nil {
+	if err := protocol.ContextErr(ctx); err != nil {
 		return "", err
 	}
 	var p struct {
@@ -102,7 +103,7 @@ func toolListFiles(ctx context.Context, argsJSON string) (string, error) {
 	b.WriteString(fmt.Sprintf("list_files %s (%d entries)\n", rel, len(entries)))
 	for i, e := range entries {
 		if i&31 == 0 {
-			if err := contextErr(ctx); err != nil {
+			if err := protocol.ContextErr(ctx); err != nil {
 				return "", err
 			}
 		}

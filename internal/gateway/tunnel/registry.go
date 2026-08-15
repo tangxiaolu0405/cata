@@ -4,9 +4,11 @@ package tunnel
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -39,12 +41,15 @@ func NewRegistry() *Registry {
 	return &Registry{agents: map[string]*agentConn{}}
 }
 
-// registerConn 注册一个 agent 的 WSS 连接。agent_id 已在线时拒绝（第二个 hello 冲突）。
+// registerConn 注册一个 agent 的 WSS 连接。agent_id 已在线时，若旧连接是陈旧的
+// （半开/静默断线）则由新连接顶替：先关闭旧连接再注册新连接，避免 worker 重连被拒
+// 形成「无限重连被拒」死锁。
 func (r *Registry) registerConn(a *agentConn) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.agents[a.info.AgentID]; ok {
-		return fmt.Errorf("agent %q already connected", a.info.AgentID)
+	if old, ok := r.agents[a.info.AgentID]; ok {
+		log.Printf("registry: agent %q re-registering; replacing stale connection", a.info.AgentID)
+		old.closeFromGateway()
 	}
 	r.agents[a.info.AgentID] = a
 	return nil
@@ -124,6 +129,9 @@ type agentConn struct {
 	streamsMu  sync.Mutex
 	streams    map[uint64]*streamConn
 	closed     atomic.Bool
+
+	// pingInterval 心跳周期（>0 时网关主动发 ping 并设读 deadline 检测半开连接）。
+	pingInterval time.Duration
 }
 
 func newAgentConn(ws *websocket.Conn, info AgentInfo) *agentConn {
@@ -224,9 +232,21 @@ func (a *agentConn) handleFrame(f tunnel.Frame) {
 			sc.pushError(fmt.Errorf("bad line data: %w", err))
 			return
 		}
+		// 背压：非阻塞入队 + 字节配额。慢消费者（本地 socket 读得慢）填满配额时
+		// 只关闭该流，绝不阻塞 agentConn.readLoop（否则该 agent 的所有流一起停摆）。
+		if sc.queuedBytes.Load() > maxStreamQueuedBytes {
+			log.Printf("registry: stream %d over byte quota (%d), closing slow stream", sc.id, sc.queuedBytes.Load())
+			sc.closeFromRemote(fmt.Errorf("stream over byte quota"))
+			return
+		}
 		select {
 		case sc.rch <- data:
+			sc.queuedBytes.Add(int64(len(data)))
 		case <-sc.done:
+		default:
+			// rch 满但未超字节配额（条目上限）：仍关闭慢流，避免 readLoop 阻塞。
+			log.Printf("registry: stream %d channel full, closing slow stream", sc.id)
+			sc.closeFromRemote(fmt.Errorf("stream channel full"))
 		}
 	case tunnel.FrameClose:
 		if sc := a.getStream(f.Stream); sc != nil {
@@ -249,13 +269,22 @@ func (a *agentConn) getStream(id uint64) *streamConn {
 	return a.streams[id]
 }
 
-// readLoop 消费 worker 帧直到断开。
+// readLoop 消费 worker 帧直到断开。设读 deadline 检测半开连接：
+// 网关周期 ping，若超时未收到任何帧（pong/数据）即判定连接死亡并关闭。
 func (a *agentConn) readLoop() {
 	defer a.ws.Close()
+	if a.pingInterval > 0 {
+		_ = a.ws.SetReadDeadline(time.Now().Add(3 * a.pingInterval))
+	}
 	for {
+		_ = a.ws.SetReadDeadline(time.Now().Add(3 * maxInt64(a.pingInterval, 10*time.Second)))
 		_, msg, err := a.ws.ReadMessage()
 		if err != nil {
 			return
+		}
+		// 收到任何帧都说明连接活着，刷新 deadline。
+		if a.pingInterval > 0 {
+			_ = a.ws.SetReadDeadline(time.Now().Add(3 * a.pingInterval))
 		}
 		var f tunnel.Frame
 		if err := json.Unmarshal(msg, &f); err != nil {
@@ -264,6 +293,51 @@ func (a *agentConn) readLoop() {
 		a.handleFrame(f)
 	}
 }
+
+// startHeartbeat 周期向 worker 发送 ping，配合 readLoop 的读 deadline 检测半开连接。
+// 只在网关侧启用（worker 侧重连退避由 RunTunnelWorker 负责）。
+func (a *agentConn) startHeartbeat(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	a.pingInterval = interval
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if a.closed.Load() {
+					return
+				}
+				if err := a.send(tunnel.Frame{Type: tunnel.FramePing}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+}
+
+// closeFromGateway 关闭本连接及其所有流（新 hello 顶替旧连接时调用）。
+func (a *agentConn) closeFromGateway() {
+	if a.closed.CompareAndSwap(false, true) {
+		a.closeAllStreams()
+		_ = a.ws.Close()
+	}
+}
+
+func maxInt64(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// maxStreamQueuedBytes 单流未消费字节配额上限（16 MiB）。慢消费者超过即断流重连，
+// 防止一条慢流把整个 agent 连接的多路复用拖死（旧实现 rch 满后阻塞 readLoop）。
+const maxStreamQueuedBytes = 16 << 20
 
 // streamConn net.Conn 适配器：把隧道 stream 变成可读写的字节流。
 type streamConn struct {
@@ -278,6 +352,10 @@ type streamConn struct {
 	closed atomic.Bool
 	done   chan struct{}
 	once   sync.Once
+
+	// 背压：每流有界字节配额。FrameLine 入队非阻塞（不拖死 agentConn.readLoop），
+	// 队列字节数超限时关闭该流（慢消费者断流重连），而不是阻塞整个多路复用器。
+	queuedBytes atomic.Int64
 }
 
 func (c *streamConn) Read(p []byte) (int, error) {
@@ -287,6 +365,7 @@ func (c *streamConn) Read(p []byte) (int, error) {
 		select {
 		case chunk := <-c.rch:
 			c.rbuf.Write(chunk)
+			c.queuedBytes.Add(-int64(len(chunk)))
 		case err := <-c.errCh:
 			return 0, err
 		case <-c.done:

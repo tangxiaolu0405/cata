@@ -9,10 +9,6 @@ import (
 	"cata/internal/llm"
 )
 
-func buildWorkerSystemPrompt(task, parentContext string) string {
-	return buildWorkerSystemPromptFor(task, parentContext, brain.OutputCwd(), brain.ActiveRuntimeEnv())
-}
-
 // buildWorkerSystemPromptFor 显式指定产出区与运行环境（多 chat 并行勿依赖全局 OutputCwd/ActiveRuntimeEnv）。
 func buildWorkerSystemPromptFor(task, parentContext string, out string, env *brain.RuntimeEnv) string {
 	var b strings.Builder

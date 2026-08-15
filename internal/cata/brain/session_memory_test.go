@@ -27,7 +27,7 @@ func TestFinalizeShortTermAfterConsolidate_writesArchive(t *testing.T) {
 	SetActive(ws)
 	defer SetActive(nil)
 
-	rel, err := FinalizeShortTermAfterConsolidate(512)
+	rel, err := FinalizeShortTermAfterConsolidate(ws, 512)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,6 +53,12 @@ func AgentLogPath(wsID string) string {
 	return filepath.Join(LogsDir(), "agent-"+SanitizeSocketID(wsID)+".log")
 }
 
+// SupervisorLogPath supervisor 守护进程日志（CATA_HOME/logs/supervisor.log）。
+// 守护化（EnsureSupervisorDaemon，stdout/stderr 为 nil）后日志必须落盘，否则全丢。
+func SupervisorLogPath() string {
+	return filepath.Join(LogsDir(), "supervisor.log")
+}
+
 // AgentPIDPath 某 agent 进程的 pid 文件（CATA_HOME/run/agent-<id>.pid）。
 func AgentPIDPath(wsID string) string {
 	return filepath.Join(CataHome(), "run", "agent-"+SanitizeSocketID(wsID)+".pid")

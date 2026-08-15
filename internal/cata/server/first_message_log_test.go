@@ -77,7 +77,7 @@ func TestFirstMessageSnapshotRenderTruncatesLongMsg(t *testing.T) {
 func TestBuildFirstMessageDiagnostics(t *testing.T) {
 	ss := &SocketServer{tools: NewToolRegistry()}
 	ws := &brain.Workspace{ID: "ws-1", RootPath: "/tmp/proj", ActiveMode: "default"}
-	out := ss.buildFirstMessageDiagnostics(nil, ws, "hi")
+	out := ss.buildFirstMessageDiagnosticsWithOutCwd(nil, ws, "/tmp/proj", "hi")
 	if !strings.Contains(out, "ws=ws-1 focus=/tmp/proj mode=default") {
 		t.Fatalf("buildFirstMessageDiagnostics missing ws block:\n%s", out)
 	}
@@ -92,7 +92,7 @@ func TestEmitFirstMessageDiagnosticsWritesLogEvent(t *testing.T) {
 	defer clientConn.Close()
 
 	ss := &SocketServer{tools: NewToolRegistry()}
-	go ss.emitFirstMessageDiagnostics(serverConn, nil, &brain.Workspace{ID: "ws-1", RootPath: "/tmp/proj", ActiveMode: "default"}, "hello")
+	go ss.emitFirstMessageDiagnosticsWithOutCwd(serverConn, nil, &brain.Workspace{ID: "ws-1", RootPath: "/tmp/proj", ActiveMode: "default"}, "/tmp/proj", "hello")
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	line, err := bufio.NewReader(clientConn).ReadBytes('\n')

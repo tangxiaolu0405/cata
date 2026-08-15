@@ -17,6 +17,7 @@ import (
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 	"cata/internal/cata/execcmd"
+	"cata/internal/cata/protocol"
 	"cata/internal/llm"
 )
 
@@ -142,7 +143,7 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 	}
 	cmdLine := execcmd.FormatLine(p.Argv)
 	if config.ExecNeedsConfirm(p.Argv) {
-		id := newConfirmID()
+		id := protocol.NewConfirmID()
 		_ = t.ss.emitStreamLine(conn, map[string]interface{}{
 			"type":         "exec_confirm_required",
 			"confirm_id":   id,
@@ -154,7 +155,7 @@ func (t *runCommandTool) Execute(ctx context.Context, conn net.Conn, argsJSON st
 				{"id": "cancel", "label": "Cancel"},
 			},
 		})
-		approved, err := t.ss.waitExecClientConfirm(ctx, id)
+		approved, err := protocol.WaitExecClientConfirm(ctx, id)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "[run_command] cancelled", nil
@@ -388,7 +389,7 @@ func (t *askUserTool) Execute(ctx context.Context, conn net.Conn, argsJSON strin
 	if len(p.Options) < 2 {
 		return "", fmt.Errorf("ask_user: at least 2 options required")
 	}
-	choiceID := newConfirmID()
+	choiceID := protocol.NewConfirmID()
 	_ = t.ss.emitStreamLine(conn, map[string]interface{}{
 		"type":    "user_choice",
 		"id":      choiceID,
@@ -397,7 +398,7 @@ func (t *askUserTool) Execute(ctx context.Context, conn net.Conn, argsJSON strin
 		"multi":   p.Multi,
 		"options": p.Options,
 	})
-	selected, err := t.ss.waitUserChoice(ctx, choiceID)
+	selected, err := protocol.WaitUserChoice(ctx, choiceID)
 	if err != nil {
 		return "", err
 	}

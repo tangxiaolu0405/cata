@@ -241,7 +241,7 @@ func (p *subagentPool) start(parentCtx context.Context, opts subagentStartOpts) 
 	if len(toolFilter) == 0 {
 		toolFilter = config.DefaultSubagentTools()
 	}
-	allTools := p.ss.workerToolsFor(cc.OutputCwd, cc.Runtime)
+	allTools := p.ss.workerToolsFor(cc.WS, cc.OutputCwd, cc.Runtime)
 	tools, err := filterWorkerTools(allTools, toolFilter)
 	if err != nil {
 		return "", "", err

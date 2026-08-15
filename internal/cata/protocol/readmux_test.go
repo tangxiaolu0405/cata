@@ -1,4 +1,4 @@
-package server
+package protocol
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 func TestConnLineReaderSurvivesIdlePast30s(t *testing.T) {
 	client, server := net.Pipe()
 	br := bufio.NewReader(server)
-	lr := newConnLineReader(br, server, nil)
+	lr := NewConnLineReader(br, server, nil)
 	defer lr.Stop()
 
 	done := make(chan struct{})
@@ -24,7 +24,7 @@ func TestConnLineReaderSurvivesIdlePast30s(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	raw, err := lr.waitLine(ctx, time.Now().Add(2*time.Second))
+	raw, err := lr.WaitLine(ctx, time.Now().Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("waitLine: %v", err)
 	}

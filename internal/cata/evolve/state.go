@@ -39,13 +39,10 @@ func (s *Snapshot) Fingerprint() string {
 }
 
 // Observe 读取指定 workspace 脑子元数据（不读 workflow/core 全文）。
+// ws 必须显式指定（多 cata 并行勿依赖全局 MustActive，后台 evolve 会改写全局）。
 func Observe(ws *brain.Workspace) (*Snapshot, error) {
 	if ws == nil {
-		var err error
-		ws, err = brain.MustActive()
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("Observe: workspace required (parallel-safe: pass explicit ws)")
 	}
 	s := &Snapshot{
 		ObservedAt:    clock.RFC3339(),

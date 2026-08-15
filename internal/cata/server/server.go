@@ -148,7 +148,13 @@ func (s *Server) Start() error {
 		if interval <= 0 {
 			interval = 10 * time.Minute
 		}
-		s.evolve = evolve.NewEngine(interval)
+		// 进程内共享演进引擎单例：chat 触发的 session compress / crystallize 与后台
+		// ticker 复用同一实例（指纹/冷却共享、runCycle 互斥），避免重复提炼与并发写。
+		s.evolve = evolve.SharedEngine()
+		// agent（per-ws 进程）模式：只演进绑定工作空间，绝不遍历全机其它 workspace。
+		if s.workspace != nil {
+			s.evolve.SetBoundWorkspace(s.workspace)
+		}
 		s.evolve.Start(s.ctx)
 		log.Println("✓ Autonomous evolution started")
 	} else {

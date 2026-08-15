@@ -3,7 +3,6 @@ package mcp
 import (
 	"testing"
 
-	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 )
 
@@ -14,7 +13,7 @@ func TestReloadDisabledConfig(t *testing.T) {
 	config.Config = &config.AppConfig{}
 	config.Config.MCP.Enabled = false
 
-	Reload(brain.Capabilities{MCP: []string{"browser"}})
+	Reload()
 	if global == nil {
 		t.Fatal("global should be non-nil (empty manager)")
 	}

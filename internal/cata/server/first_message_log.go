@@ -13,15 +13,12 @@ import (
 	"cata/internal/mcp"
 )
 
-// emitFirstMessageDiagnostics 在每条连接的首条 chat 消息时输出诊断，便于定位
+// emitFirstMessageDiagnosticsWithOutCwd 在每条连接的首条 chat 消息时输出诊断，便于定位
 // 「cata 没处理 / 无响应」的问题来源：
 //  1. 写入 server 日志（managed 模式落在 cata-server.log）；
 //  2. 向客户端发 type=log 事件，TUI 直接展示。
-func (ss *SocketServer) emitFirstMessageDiagnostics(conn net.Conn, client *llm.Client, ws *brain.Workspace, userText string) {
-	ss.emitFirstMessageDiagnosticsWithOutCwd(conn, client, ws, brain.OutputCwd(), userText)
-}
-
-// emitFirstMessageDiagnosticsWithOutCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
+//
+// outCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
 func (ss *SocketServer) emitFirstMessageDiagnosticsWithOutCwd(conn net.Conn, client *llm.Client, ws *brain.Workspace, outCwd, userText string) {
 	diag := ss.buildFirstMessageDiagnosticsWithOutCwd(client, ws, outCwd, userText)
 	log.Printf("first message diagnostics:\n%s", diag)
@@ -119,12 +116,8 @@ func (s firstMessageSnapshot) render() string {
 	return b.String()
 }
 
-// buildFirstMessageDiagnostics 收集首条消息处理链路的状态快照并渲染。
-func (ss *SocketServer) buildFirstMessageDiagnostics(client *llm.Client, ws *brain.Workspace, userText string) string {
-	return ss.buildFirstMessageDiagnosticsWithOutCwd(client, ws, brain.OutputCwd(), userText)
-}
-
-// buildFirstMessageDiagnosticsWithOutCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
+// buildFirstMessageDiagnosticsWithOutCwd 收集首条消息处理链路的状态快照并渲染。
+// outCwd 显式指定产出区（多 cata 并行勿依赖全局 OutputCwd）。
 func (ss *SocketServer) buildFirstMessageDiagnosticsWithOutCwd(client *llm.Client, ws *brain.Workspace, outCwd, userText string) string {
 	snap := firstMessageSnapshot{}
 	if ss.server != nil && !ss.server.startedAt.IsZero() {

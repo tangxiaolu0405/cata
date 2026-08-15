@@ -13,6 +13,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/protocol"
 )
 
 // setupManageMCPTest 写临时 config + workspace，返回清理函数。
@@ -222,11 +223,11 @@ func TestManageMCPInstallNewServerWritesGlobalAndEnables(t *testing.T) {
 
 	client, conn := net.Pipe()
 	br := bufio.NewReader(conn)
-	lr := newConnLineReader(br, conn, nil)
+	lr := protocol.NewConnLineReader(br, conn, nil)
 	defer lr.Stop()
 
 	ctx := withChatWorkspace(context.Background(), ws)
-	ctx = withChatConnReader(ctx, lr)
+	ctx = protocol.WithChatConnReader(ctx, lr)
 	go confirmClient(t, client, true)
 
 	tool := &manageMCPTool{ss: &SocketServer{}}
@@ -254,11 +255,11 @@ func TestManageMCPInstallNewServerCancelledWritesNothing(t *testing.T) {
 
 	client, conn := net.Pipe()
 	br := bufio.NewReader(conn)
-	lr := newConnLineReader(br, conn, nil)
+	lr := protocol.NewConnLineReader(br, conn, nil)
 	defer lr.Stop()
 
 	ctx := withChatWorkspace(context.Background(), ws)
-	ctx = withChatConnReader(ctx, lr)
+	ctx = protocol.WithChatConnReader(ctx, lr)
 	go confirmClient(t, client, false)
 
 	tool := &manageMCPTool{ss: &SocketServer{}}

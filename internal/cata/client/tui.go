@@ -149,7 +149,7 @@ func newChatTextarea() textarea.Model {
 	return ta
 }
 
-func newModel(s *session, cwd string) model {
+func newModel(s *session, cwd string, ws *brain.Workspace) model {
 	ti := newChatTextarea()
 
 	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste") + "\n"
@@ -167,12 +167,12 @@ func newModel(s *session, cwd string) model {
 		width:     100,
 		height:    24,
 	}
-	if w := brain.Active(); w != nil {
-		m.stats.wsID = w.ID
-		m.stats.focusPath = w.RootPath
-		m.stats.projectCata = w.ProjectCataRoot()
+	if ws != nil {
+		m.stats.wsID = ws.ID
+		m.stats.focusPath = ws.RootPath
+		m.stats.projectCata = ws.ProjectCataRoot()
 		m.stats.cataHome = brain.CataHome()
-		m.stats.mode = w.ActiveMode
+		m.stats.mode = ws.ActiveMode
 	}
 	m.loadEvolve()
 	m.setChatContent(true)
@@ -201,8 +201,9 @@ func RunChat(opts ChatOptions) {
 
 	// 扁平化：一个工作空间 = 一个 agent 进程 = 一个 LLM loop（per-ws socket）。
 	// 本地未注册工作空间按需拉起、空闲回收；注册（cata link add）的常驻。
+	ws, _ := brain.ResolveWorkspace(cwd)
 	wsID := ""
-	if ws, rerr := brain.ResolveWorkspace(cwd); rerr == nil && ws != nil {
+	if ws != nil {
 		wsID = ws.ID
 	}
 	agentMode := false
@@ -226,8 +227,7 @@ func RunChat(opts ChatOptions) {
 	}
 	defer s.conn.Close()
 
-	bindStats(cwd)
-	m := newModel(s, cwd)
+	m := newModel(s, cwd, ws)
 	m.wsID = wsID
 	m.agentMode = agentMode
 	m.displayMode = opts.displayMode()

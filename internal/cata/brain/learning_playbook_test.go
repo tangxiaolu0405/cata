@@ -106,7 +106,7 @@ func TestSyncMemoryIndexAfterEvolution_playbookNotFragments(t *testing.T) {
 	defer SetActive(nil)
 
 	learn := strings.Repeat("x", 30)
-	if err := SyncMemoryIndexAfterEvolution(nil, learn, ""); err != nil {
+	if err := SyncMemoryIndexAfterEvolution(ws, nil, learn, ""); err != nil {
 		t.Fatal(err)
 	}
 	frag := filepath.Join(ws.LongTermDir(), "learnings")

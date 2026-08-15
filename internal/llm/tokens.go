@@ -1,10 +1,12 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
 
+	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 )
 
@@ -61,8 +63,14 @@ func ContextCompressThreshold(window int) int {
 }
 
 // EstimatedChatInputTokens 估算发往 API 前的输入 token（含 boot-leader + brain 节选注入）。
-func (c *Client) EstimatedChatInputTokens(messages []Message, tools []Tool) int {
-	wired := withBootLeaderSystemMessage(messages)
+// ctx 携带本轮 ChatContext（Profile/WS），保证多 chat 并行时按各自档位估算，
+// 勿走全局 ActivePromptProfile（后台 evolve 会临时改写全局）。
+func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Message, tools []Tool) int {
+	profile := brain.ActivePromptProfile()
+	if cc := brain.ChatContextFrom(ctx); cc != nil && cc.Profile != "" {
+		profile = cc.Profile
+	}
+	wired := withBootLeaderSystemMessageForCtx(ctx, messages, profile)
 	n := estimateMessagesTokens(wired)
 	n += estimateToolsTokens(tools)
 	// 预留生成空间（与 max_tokens 无关，只避免把窗口算满）

@@ -164,10 +164,6 @@ func (t *delegateModeTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 	})
 }
 
-func buildModeWorkerPrompt(modeID, caseID, task, parentContext, modeBundle string, readArts, writeArts []string) string {
-	return buildModeWorkerPromptFor(modeID, caseID, task, parentContext, modeBundle, readArts, writeArts, brain.OutputCwd())
-}
-
 // buildModeWorkerPromptFor 显式指定产出区（多 chat 并行勿依赖全局 OutputCwd）。
 func buildModeWorkerPromptFor(modeID, caseID, task, parentContext, modeBundle string, readArts, writeArts []string, outCwd string) string {
 	var b strings.Builder

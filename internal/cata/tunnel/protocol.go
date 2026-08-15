@@ -3,7 +3,10 @@
 // 底层 chat 协议（NDJSON 行）零改动——隧道只是逐字节透传。
 package tunnel
 
-import "encoding/base64"
+import (
+	"encoding/base64"
+	"time"
+)
 
 const (
 	// ProtocolName 协议标识（hello 帧携带）。
@@ -12,6 +15,9 @@ const (
 	Version = 1
 	// MaxFrameBytes 单帧上限（8 MiB）。超过即断开，防止异常大消息撑爆内存。
 	MaxFrameBytes = 8 << 20
+	// HeartbeatInterval 网关侧 ping 周期；读 deadline 为 3×该值。
+	// 用于检测 NAT 超时 / 静默断网的半开连接，使陈旧注册可自愈。
+	HeartbeatInterval = 20 * time.Second
 )
 
 // FrameType 帧类型。

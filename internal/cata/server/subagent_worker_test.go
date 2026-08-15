@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildWorkerSystemPrompt(t *testing.T) {
-	p := buildWorkerSystemPrompt("Run go test ./pkg/foo", "module root: ./pkg/foo")
+	p := buildWorkerSystemPromptFor("Run go test ./pkg/foo", "module root: ./pkg/foo", "", nil)
 	if !strings.Contains(p, "worker") || !strings.Contains(p, "STATUS:") {
 		t.Fatalf("missing worker contract: %q", p)
 	}

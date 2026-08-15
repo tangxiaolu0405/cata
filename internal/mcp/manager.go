@@ -26,7 +26,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	clients   map[string]*stdioClient
 	routes    map[string]*toolRoute
-	llmTools  []llm.Tool
+	llmTools  []llm.Tool // 全部已导出工具（含每个工具的来源 server，供 per-chat 过滤）
 	timeout   time.Duration
 	maxOutput int
 
@@ -63,8 +63,12 @@ func isToolAllowed(name string, allowed []string) bool {
 	return false
 }
 
-// Init 按配置与 capabilities 启动 MCP；失败的服务器仅记日志。
-func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
+// Init 按配置启动全部 enabled 的 MCP server；失败的服务器仅记日志。
+// 注意：stdio 子进程是进程级生命周期，与 workspace capabilities **解耦**——
+// 所有 enabled server 一律启动并注册全部工具路由；per-chat 工具集导出由
+// ToolsFor(caps) 按调用方的 workspace capabilities 过滤，避免多 workspace 并行
+// chat 互相 shutdown/重建子进程（旧实现按全局 Active 构建，跨 workspace 会互相踢）。
+func Init(cfg config.MCPConfig) *Manager {
 	mgr := &Manager{
 		clients:    make(map[string]*stdioClient),
 		routes:     make(map[string]*toolRoute),
@@ -83,9 +87,6 @@ func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
 	defer cancel()
 	for _, s := range cfg.Servers {
 		if !s.Enabled {
-			continue
-		}
-		if !caps.AllowsMCPServer(s.Name) {
 			continue
 		}
 		if err := connectServer(mgr, ctx, s); err != nil {
@@ -140,6 +141,30 @@ func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) e
 	return nil
 }
 
+// ToolsFor 返回该 workspace capabilities 允许导出的 MCP 工具列表（per-chat 快照）。
+// stdio 子进程与工具路由是进程级（与 workspace 解耦），这里只做导出过滤——
+// 多 chat 并行时各自按自己的 caps 取工具集，互不干扰、不触发子进程重建。
+func (mgr *Manager) ToolsFor(caps brain.Capabilities) []llm.Tool {
+	if mgr == nil {
+		return nil
+	}
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	var out []llm.Tool
+	for _, t := range mgr.llmTools {
+		name := t.Function.Name
+		route, ok := mgr.routes[name]
+		if !ok {
+			continue
+		}
+		if !caps.AllowsMCPServer(route.serverName) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func mcpCapsKey(caps brain.Capabilities) string {
 	return CapsKey(caps)
 }
@@ -154,7 +179,9 @@ func CapsKey(caps brain.Capabilities) string {
 	return strings.Join(parts, ",")
 }
 
-// EnsureInit 按 capabilities 延迟初始化 MCP；mcp 列表变化时重建。
+// EnsureInit 确保 MCP 已按配置启动（惰性）。stdio 子进程与 workspace 解耦：
+// 只按 config.MCP.Servers 的 enabled 列表判断，不依赖全局 Active capabilities，
+// 因此多 workspace 并行 chat 不会互相 shutdown/重建。
 func EnsureInit() {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -163,14 +190,25 @@ func EnsureInit() {
 		lastMCPKey = ""
 		return
 	}
-	caps := brain.LoadActiveCapabilitiesCached()
-	key := CapsKey(caps)
+	key := configServersKey(config.Config.MCP)
 	if global != nil && key == lastMCPKey {
 		return
 	}
 	shutdownLocked()
-	Init(config.Config.MCP, caps)
+	Init(config.Config.MCP)
 	lastMCPKey = key
+}
+
+// configServersKey 配置中 enabled server 列表的稳定键（MCP 重建判定用，不含 workspace）。
+func configServersKey(cfg config.MCPConfig) string {
+	var names []string
+	for _, s := range cfg.Servers {
+		if s.Enabled {
+			names = append(names, s.Name)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 
 func shutdownLocked() {
@@ -356,8 +394,10 @@ func Shutdown() {
 	lastMCPKey = ""
 }
 
-// Reload 强制按当前配置与指定 capabilities 重建 MCP（manage_mcp 改配置/capabilities 后调用，免重启）。
-func Reload(caps brain.Capabilities) {
+// Reload 强制按当前配置重建 MCP（manage_mcp 改配置后调用，免重启）。
+// 与 workspace capabilities 解耦：重建只由 config.MCP.Servers 决定；
+// 项目 caps 变更（enable/disable）只影响 ToolsFor 过滤，无需重建子进程。
+func Reload() {
 	initMu.Lock()
 	defer initMu.Unlock()
 	if config.Config == nil || !config.Config.MCP.Enabled {
@@ -366,11 +406,11 @@ func Reload(caps brain.Capabilities) {
 		return
 	}
 	shutdownLocked()
-	Init(config.Config.MCP, caps)
-	lastMCPKey = CapsKey(caps)
+	Init(config.Config.MCP)
+	lastMCPKey = configServersKey(config.Config.MCP)
 }
 
-// ForceInit 强制按当前活跃 capabilities 重建 MCP（配置变更后的兜底入口）。
+// ForceInit 强制按当前配置重建 MCP（配置变更后的兜底入口）。
 func ForceInit() {
-	Reload(brain.LoadActiveCapabilitiesCached())
+	Reload()
 }

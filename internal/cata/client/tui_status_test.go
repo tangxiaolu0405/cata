@@ -6,7 +6,7 @@ import (
 )
 
 func newTestModel() *model {
-	mm := newModel(&session{}, "/tmp/proj")
+	mm := newModel(&session{}, "/tmp/proj", nil)
 	mm.width = 120
 	mm.height = 30
 	mm.displayMode = ""

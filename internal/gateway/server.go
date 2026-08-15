@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"cata/internal/cata/brain"
@@ -149,6 +150,17 @@ func withSpawnLock(socketPath string, fn func() error) error {
 		}
 		if !os.IsNotExist(err) {
 			return err
+		}
+		// 陈旧锁回收：持有者进程已死则删除锁文件（崩溃遗留），避免永久死锁。
+		if data, rerr := os.ReadFile(path); rerr == nil {
+			var pid int
+			if _, serr := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); serr == nil && pid > 0 {
+				if proc, perr := os.FindProcess(pid); perr == nil && proc.Signal(syscall.Signal(0)) != nil {
+					log.Printf("withSpawnLock: removing stale lock %s (pid %d dead)", path, pid)
+					_ = os.Remove(path)
+					continue
+				}
+			}
 		}
 		if Ping(socketPath) == nil {
 			return nil

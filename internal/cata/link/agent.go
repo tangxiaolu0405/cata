@@ -2,9 +2,12 @@ package link
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"cata/internal/cata/brain"
@@ -65,6 +68,10 @@ func EnsureAgent(agentID string) error {
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
+		// 20s 未就绪：杀子进程，避免残留半启动状态的 agent 占着后续资源。
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		return fmt.Errorf("agent %s not ready after 20s (pid %d)", agentID, cmd.Process.Pid)
 	})
 }
@@ -76,6 +83,7 @@ func StopAgent(agentID string) error {
 }
 
 // withSpawnLock 每个 agent 一把独立 spawn 锁（不同工作空间可并行拉起）。
+// 锁文件内含持有者 pid；持有者已死（崩溃遗留）时回收陈旧锁，避免永久死锁。
 func withSpawnLock(agentID string, fn func() error) error {
 	dir := filepath.Join(brain.CataHome(), "locks")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -95,10 +103,38 @@ func withSpawnLock(agentID string, fn func() error) error {
 		if !os.IsExist(err) {
 			return err
 		}
+		// 陈旧锁回收：持有者进程已死则删除锁文件，下轮重试拿到锁。
+		if holder := readLockPID(path); holder > 0 && !processAlive(holder) {
+			log.Printf("withSpawnLock: removing stale lock %s (pid %d dead)", path, holder)
+			_ = os.Remove(path)
+			continue
+		}
 		if PingAgentSocket(socketPath) == nil {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("agent spawn lock timeout: %s", agentID)
+}
+
+// readLockPID 读取锁文件内的 pid；失败返回 0。
+func readLockPID(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// processAlive 用 signal 0 探测进程是否存活（跨平台：Unix 下有效，Windows 下 FindProcess 近似）。
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }

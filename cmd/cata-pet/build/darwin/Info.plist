@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleName</key>
+	<string>Cata Pet</string>
+	<key>CFBundleExecutable</key>
+	<string>{{.OutputFilename}}</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.cata.pet</string>
+	<key>CFBundleVersion</key>
+	<string>{{.Info.ProductVersion}}</string>
+	<key>CFBundleShortVersionString</key>
+	<string>{{.Info.ProductVersion}}</string>
+	<key>CFBundleIconFile</key>
+	<string>iconfile</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>{{.Info.Copyright}}</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cata Pet 需要麦克风以支持语音输入。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Cata Pet 需要语音识别，将你的话转成文字发给助手。</string>
+</dict>
+</plist>

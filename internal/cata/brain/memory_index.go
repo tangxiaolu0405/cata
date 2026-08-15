@@ -101,7 +101,11 @@ func SaveMemoryIndexFor(w *Workspace, idx *MemoryIndex) error {
 }
 
 // SyncMemoryIndexAfterEvolution 根据本轮演进 touched 文件、learning 与归档路径更新索引。
-func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel string) error {
+// ws 必须显式指定（多 cata 并行勿依赖全局 Active）。
+func SyncMemoryIndexAfterEvolution(w *Workspace, touched []string, learning, archivedRel string) error {
+	if w == nil {
+		return fmt.Errorf("SyncMemoryIndexAfterEvolution: workspace required")
+	}
 	idx, err := LoadMemoryIndex()
 	if err != nil {
 		return err
@@ -137,21 +141,17 @@ func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel strin
 			UpdatedAt:       now,
 			Keywords:        []string{"archive", "short-term", "session"},
 		}
-		if w := Active(); w != nil {
-			if b, err := os.ReadFile(w.Path(arch)); err == nil {
-				entry.Summary = truncateRunes(firstLineSummary(string(b)), maxIndexSummaryRunes)
-				entry.Keywords = extractKeywords(string(b), arch)
-			}
+		if b, err := os.ReadFile(w.Path(arch)); err == nil {
+			entry.Summary = truncateRunes(firstLineSummary(string(b)), maxIndexSummaryRunes)
+			entry.Keywords = extractKeywords(string(b), arch)
 		}
 		idx.Upsert(entry)
 	}
 
 	if learn := strings.TrimSpace(learning); utf8.RuneCountInString(learn) >= 24 {
-		if w := Active(); w != nil {
-			_ = appendLearningPlaybook(w, learn, now)
-			if entry, ok := indexEntryFromFile(RelMemoryLongLearnings, now); ok {
-				idx.Upsert(entry)
-			}
+		_ = appendLearningPlaybook(w, learn, now)
+		if entry, ok := indexEntryFromFile(RelMemoryLongLearnings, now); ok {
+			idx.Upsert(entry)
 		}
 	}
 

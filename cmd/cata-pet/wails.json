@@ -1,0 +1,20 @@
+{
+  "name": "cata-pet",
+  "outputfilename": "cata-pet",
+  "frontend:dir": "frontend",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "cata",
+    "email": ""
+  },
+  "info": {
+    "companyName": "cata",
+    "productName": "Cata Pet",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "Desktop companion for Cata"
+  }
+}

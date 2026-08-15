@@ -153,7 +153,7 @@ func tierToolNames(tier ContextTier) []string {
 	}
 }
 
-func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier, outCwd string, runtime *brain.RuntimeEnv) []llm.Tool {
+func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier, ws *brain.Workspace, outCwd string, runtime *brain.RuntimeEnv) []llm.Tool {
 	key := ss.chatToolsCacheKey() + "|tier:" + tier.String()
 	if outCwd != "" {
 		key += "|out:" + outCwd
@@ -161,6 +161,14 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier, outCwd s
 	if runtime != nil {
 		key += "|env:" + runtime.OS + "/" + runtime.Shell
 	}
+	// MCP 工具集按本轮 workspace capabilities 过滤：缓存 key 必须含 caps，
+	// 否则两个不同 caps 的 workspace 会命中同一缓存条目串工具。
+	if ws != nil {
+		key += "|caps:" + mcp.CapsKey(brain.LoadCapabilitiesCachedFor(ws))
+	}
+	// 缓存读写加锁：多 chat goroutine 并发构建工具集时保证 key/cache 成对一致。
+	ss.toolsCacheMu.Lock()
+	defer ss.toolsCacheMu.Unlock()
 	if key == ss.chatToolsKey && len(ss.chatToolsCache) > 0 {
 		out := make([]llm.Tool, len(ss.chatToolsCache))
 		copy(out, ss.chatToolsCache)
@@ -185,7 +193,11 @@ func (ss *SocketServer) buildTerminalChatToolsForTier(tier ContextTier, outCwd s
 	}
 	if tier == ContextTierFull {
 		if mgr := mcp.Global(); mgr != nil {
-			out = append(out, mgr.Tools()...)
+			if ws != nil {
+				out = append(out, mgr.ToolsFor(brain.LoadCapabilitiesCachedFor(ws))...)
+			} else {
+				out = append(out, mgr.Tools()...)
+			}
 		}
 	}
 	ss.chatToolsKey = key

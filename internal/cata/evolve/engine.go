@@ -20,6 +20,12 @@ import (
 // Engine 后台自主演进。
 type Engine struct {
 	interval time.Duration
+	// boundWS 非 nil 时（agent 模式：per-ws 进程）只演进该工作空间，不再遍历全机。
+	boundWS *brain.Workspace
+
+	// cycleMu 串行化所有演进执行（后台 ticker / chat 触发的 session compress /
+	// crystallize 共用同一引擎实例，禁止并发 runCycle 重复提炼或并发写同一文件）。
+	cycleMu sync.Mutex
 
 	mu              sync.Mutex
 	lastFingerprint map[string]string
@@ -36,6 +42,27 @@ func NewEngine(interval time.Duration) *Engine {
 		lastFingerprint: make(map[string]string),
 		cooldownUntil:   make(map[string]time.Time),
 	}
+}
+
+var (
+	sharedOnce sync.Once
+	sharedEng  *Engine
+)
+
+// SharedEngine 返回进程内共享演进引擎单例。
+// 所有入口（后台 Start、chat 触发的 RunSessionCompress、RunCrystallize）必须复用同一实例，
+// 共享指纹/冷却状态并互斥执行，避免「每次 NewEngine 导致状态全新、同一 short-term 重复提炼」。
+func SharedEngine() *Engine {
+	sharedOnce.Do(func() {
+		sharedEng = NewEngine(cycleInterval())
+	})
+	return sharedEng
+}
+
+// SetBoundWorkspace agent（per-ws 进程）模式：只演进绑定工作空间。
+// 传统多空间 server 不调用（boundWS 保持 nil，演进全机近期活跃工作空间）。
+func (e *Engine) SetBoundWorkspace(ws *brain.Workspace) {
+	e.boundWS = ws
 }
 
 // Start 周期执行；对每个已注册 workspace 分别门控与演进。
@@ -68,19 +95,23 @@ func (e *Engine) Start(ctx context.Context) {
 
 func (e *Engine) runAll(ctx context.Context) {
 	_ = brain.EnsureCataLayout()
-	list, err := brain.ListRecentlyActiveWorkspaces(brain.DefaultEvolveActiveWindow)
-	if err != nil {
-		log.Printf("Autonomous evolution: list workspaces: %v", err)
-		return
+	var list []*brain.Workspace
+	if e.boundWS != nil {
+		// agent（per-ws 进程）模式：只演进绑定工作空间，绝不遍历全机。
+		list = []*brain.Workspace{e.boundWS}
+	} else {
+		var err error
+		list, err = brain.ListRecentlyActiveWorkspaces(brain.DefaultEvolveActiveWindow)
+		if err != nil {
+			log.Printf("Autonomous evolution: list workspaces: %v", err)
+			return
+		}
 	}
 	if len(list) == 0 {
 		log.Printf("Autonomous evolution: no workspace active in last %s", brain.DefaultEvolveActiveWindow)
 		return
 	}
-	prev := brain.Active()
-	defer brain.SetActive(prev)
 	for _, ws := range list {
-		brain.SetActive(ws)
 		if err := e.runCycle(ctx, ws, false, false); err != nil {
 			log.Printf("Autonomous evolution [%s]: %v", ws.ID, err)
 		}
@@ -94,7 +125,12 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	brain.SetActive(ws)
+	if ws == nil {
+		return fmt.Errorf("runCycle: workspace required")
+	}
+	// 串行化所有演进执行：后台 ticker 与 chat 触发的 compress/crystallize 共用本引擎。
+	e.cycleMu.Lock()
+	defer e.cycleMu.Unlock()
 
 	snap, err := Observe(ws)
 	if err != nil {
@@ -255,7 +291,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		}
 	}
 	if shouldFinalizeShortTerm(dec, touched, snap, sessionCompress) {
-		if arch, err := brain.FinalizeShortTermAfterConsolidate(brain.DefaultKeepRecentAfterConsolidate); err != nil {
+		if arch, err := brain.FinalizeShortTermAfterConsolidate(ws, brain.DefaultKeepRecentAfterConsolidate); err != nil {
 			log.Printf("Autonomous evolution [%s]: short-term finalize: %v", ws.ID, err)
 		} else if arch != "" {
 			entry.DocTouched = append(entry.DocTouched, arch)
@@ -265,7 +301,7 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 			}
 		}
 	}
-	if err := brain.SyncMemoryIndexAfterEvolution(entry.DocTouched, learning, archRel(entry.DocTouched)); err != nil {
+	if err := brain.SyncMemoryIndexAfterEvolution(ws, entry.DocTouched, learning, archRel(entry.DocTouched)); err != nil {
 		log.Printf("Autonomous evolution [%s]: memory index: %v", ws.ID, err)
 	}
 	if err := AppendLog(ws, entry); err != nil {
@@ -431,13 +467,4 @@ func extractModeSeedFromUpdates(updates []DocUpdate, modeID string) (persona, be
 		}
 	}
 	return persona, behavior
-}
-
-// RunCycle 对当前活跃 workspace 执行一轮（测试用）。
-func RunCycle(ctx context.Context) error {
-	ws, err := brain.MustActive()
-	if err != nil {
-		return err
-	}
-	return NewEngine(cycleInterval()).runCycle(ctx, ws, false, false)
 }

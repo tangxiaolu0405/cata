@@ -40,7 +40,7 @@ func TestBuildWorkerToolsIncludesReadSkillAndRunCommand(t *testing.T) {
 	ss.tools = reg
 
 	names := map[string]bool{}
-	for _, tool := range ss.buildWorkerTools() {
+	for _, tool := range ss.buildWorkerToolsFor(nil, "", nil) {
 		names[tool.Function.Name] = true
 	}
 	for _, want := range []string{

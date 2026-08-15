@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -93,15 +94,23 @@ func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, erro
 
 // GetWithCwdDialer 获取或创建会话连接；dialer 非 nil 时该连接用自定义拨号
 // （remote 模式按项目路由到对应在线 agent），否则走默认 connFactory。
+// 缓存的连接若已失效（隧道抖动/断线后 socketclient 已标记失效），自动重建。
 func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer func() (net.Conn, error)) (*CataConn, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.sessions[key]; ok {
 		if c.Cwd() == cwd {
-			return c, nil
+			if !c.Healthy() {
+				log.Printf("session %s: cached conn unhealthy, rebuilding", key)
+				_ = c.Close()
+				delete(m.sessions, key)
+			} else {
+				return c, nil
+			}
+		} else {
+			_ = c.Close()
+			delete(m.sessions, key)
 		}
-		_ = c.Close()
-		delete(m.sessions, key)
 	}
 	var c *CataConn
 	if dialer != nil {

@@ -13,7 +13,7 @@ import (
 // "\n" 结尾，末尾空行会被补成空格，这些空格与后续追加的内容（如 "you: 继续"）合并，
 // 导致整行右移。styledLogLine 把行尾换行移到样式外，杜绝该泄漏。
 func TestStyledLogLineNoRightShift(t *testing.T) {
-	m := newModel(&session{}, "/tmp/proj")
+	m := newModel(&session{}, "/tmp/proj", nil)
 	m.width = 120
 	m.height = 30
 	m.displayMode = ""

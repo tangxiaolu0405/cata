@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -26,20 +27,27 @@ type Supervisor struct {
 	socketPath string
 	mu         sync.Mutex
 	ln         net.Listener
+	backoff    *ensureBackoff
 }
 
 // NewSupervisor 创建 supervisor 实例。
 func NewSupervisor() *Supervisor {
-	return &Supervisor{socketPath: config.SupervisorSocketPath()}
+	return &Supervisor{
+		socketPath: config.SupervisorSocketPath(),
+		backoff:    newEnsureBackoff(),
+	}
 }
 
 // RunSupervisor 前台运行 supervisor 守护（cata supervisor）。
 //   - 启动时确保所有启用+常驻的 agent 在运行
 //   - 监听 supervisor.sock 控制接口（ensure/stop/list/status/ping）
-//   - 每 30s 复查常驻 agent 并补拉
+//   - 每 30s 复查常驻 agent 并补拉（带失败退避：连续失败暂停该 agent）
 //
 // 阻塞直到 ctx 取消或收到 SIGINT/SIGTERM。
 func RunSupervisor(ctx context.Context) error {
+	// 守护化后 stdout/stderr 为 nil：日志必须落盘，否则排查问题只能靠猜。
+	redirectSupervisorLogs()
+
 	s := NewSupervisor()
 	if err := s.ensureAll(); err != nil {
 		log.Printf("cata supervisor: initial ensure: %v", err)
@@ -104,8 +112,23 @@ func RunSupervisor(ctx context.Context) error {
 }
 
 func (s *Supervisor) ensureAll() error {
-	_, err := EnsureAll()
-	return err
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	ids := cfg.LinkedAgentIDs()
+	for _, id := range ids {
+		e := cfg.Agents[id]
+		if !e.Enabled {
+			continue
+		}
+		// 带崩溃退避：单个失败不阻断其它 agent，连续失败暂停补拉。
+		if err := s.backoff.ensure(id); err != nil {
+			log.Printf("supervisor: ensure agent %s: %v", id, err)
+			continue
+		}
+	}
+	return nil
 }
 
 func (s *Supervisor) handleConn(conn net.Conn) {
@@ -244,6 +267,8 @@ func supervisorStopAgent(agentID string) error {
 }
 
 // killAgentProcess 读取 pid 文件并 SIGTERM 对应 agent 进程（等待退出后删除 pid 文件）。
+// 宽限期内未退出则升级 SIGKILL；只有确认进程退出才返回 nil，否则如实报错，
+// 避免「残留进程占着 per-ws socket，后续 ensure 新进程 bind 冲突」的假成功。
 func killAgentProcess(agentID string) error {
 	pidPath := config.AgentPIDPath(agentID)
 	data, err := os.ReadFile(pidPath)
@@ -273,8 +298,18 @@ func killAgentProcess(agentID string) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// SIGTERM 宽限超时：升级 SIGKILL，再等 2s 确认。
+	_ = proc.Signal(syscall.SIGKILL)
+	killDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(killDeadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			_ = os.Remove(pidPath)
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	_ = os.Remove(pidPath)
-	return nil
+	return fmt.Errorf("agent %s process %d did not exit after SIGTERM+SIGKILL", agentID, pid)
 }
 
 // SupervisorAlive 探测 supervisor 控制 socket 是否存活。
@@ -323,4 +358,64 @@ func EnsureSupervisorDaemon() error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("supervisor not ready after 15s")
+}
+
+// redirectSupervisorLogs 把标准 log 重定向到 ~/.cata/logs/supervisor.log。
+// EnsureSupervisorDaemon 以 stdout/stderr=nil 拉起守护进程，不重定向则所有日志丢失。
+func redirectSupervisorLogs() {
+	path := config.SupervisorLogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("supervisor: cannot open log file %s: %v", path, err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(f))
+	log.Printf("supervisor: log redirected to %s", path)
+}
+
+// ensureAllWithBackoff 补拉常驻 agent，带崩溃退避：
+// 同一 agent 连续失败 N 次后暂停补拉（sleep），防止「启动即崩」的 agent
+// （如工作空间路径被删）被 30s ticker 无限重生刷日志。
+type ensureBackoff struct {
+	failCount map[string]int
+	paused    map[string]time.Time
+}
+
+func newEnsureBackoff() *ensureBackoff {
+	return &ensureBackoff{
+		failCount: map[string]int{},
+		paused:    map[string]time.Time{},
+	}
+}
+
+// backoffPause 连续失败阈值与暂停时长。
+const (
+	backoffFailThreshold = 3
+	backoffPauseDuration = 10 * time.Minute
+)
+
+// ensure 对单 agent 执行 ensure，并在失败时更新退避状态。
+func (b *ensureBackoff) ensure(agentID string) error {
+	if until, ok := b.paused[agentID]; ok {
+		if time.Now().Before(until) {
+			return fmt.Errorf("agent %s paused until %s (repeated failures)", agentID, until.Format("15:04:05"))
+		}
+		delete(b.paused, agentID)
+		b.failCount[agentID] = 0
+	}
+	if err := EnsureAgent(agentID); err != nil {
+		b.failCount[agentID]++
+		if b.failCount[agentID] >= backoffFailThreshold {
+			b.paused[agentID] = time.Now().Add(backoffPauseDuration)
+			log.Printf("supervisor: agent %s failed %d times, pausing for %s", agentID, b.failCount[agentID], backoffPauseDuration)
+		} else {
+			log.Printf("supervisor: ensure agent %s: %v (fail %d/%d)", agentID, err, b.failCount[agentID], backoffFailThreshold)
+		}
+		return err
+	}
+	b.failCount[agentID] = 0
+	return nil
 }

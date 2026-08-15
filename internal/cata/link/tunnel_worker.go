@@ -87,6 +87,9 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	if strings.HasPrefix(wsURL, "ws://") {
+		log.Printf("cata agent %s: WARNING: gateway url is ws:// (token sent in plaintext); use wss:// in production", agentID)
+	}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+cfg.Token)
 
@@ -116,6 +119,7 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 	ws := &tunnelConn{
 		conn:    conn,
 		streams: map[uint64]*tunnelStream{},
+		errCh:   make(chan error, 1),
 	}
 	defer ws.closeAll()
 
@@ -124,8 +128,13 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-ws.errCh:
+			return err
 		default:
 		}
+		// 网关侧周期 ping（HeartbeatInterval）；读 deadline 设为 3×，
+		// 网关静默消失（NAT 超时等）时 worker 能自行感知并重连。
+		_ = conn.SetReadDeadline(time.Now().Add(3 * tunnel.HeartbeatInterval))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return err
@@ -144,13 +153,30 @@ type tunnelConn struct {
 	mu      sync.Mutex
 	conn    *websocket.Conn
 	streams map[uint64]*tunnelStream
+	errCh   chan error // 连接级错误（FrameError）→ 通知 readLoop 返回触发重连
+}
+
+// notifyError 非阻塞投递连接级错误（网关 FrameError）。
+func (t *tunnelConn) notifyError(err error) {
+	select {
+	case t.errCh <- err:
+	default:
+	}
 }
 
 func (t *tunnelConn) send(f tunnel.Frame) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.conn.WriteJSON(f)
+	// 写 deadline：网关端慢读导致 WebSocket 写缓冲满时，WriteJSON 会阻塞持锁，
+	// 拖住该 agent 的所有流。加短超时，超时即断开（连接级，触发重连）。
+	_ = t.conn.SetWriteDeadline(time.Now().Add(tunnelSendTimeout))
+	err := t.conn.WriteJSON(f)
+	_ = t.conn.SetWriteDeadline(time.Time{})
+	return err
 }
+
+// tunnelSendTimeout 隧道帧写出超时（WebSocket 写缓冲满时的保护）。
+const tunnelSendTimeout = 15 * time.Second
 
 func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
 	switch f.Type {
@@ -173,6 +199,11 @@ func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
 		if s := t.removeStream(f.Stream); s != nil {
 			s.close()
 		}
+	case tunnel.FrameError:
+		// 连接级错误（如重复注册被顶替、协议不匹配）：记录并触发重连，
+		// 避免无限静默重连看不到根因。
+		log.Printf("cata agent %s: tunnel error from gateway: %s", agentID, f.Message)
+		t.notifyError(fmt.Errorf("gateway error: %s", f.Message))
 	case tunnel.FramePing:
 		_ = t.send(tunnel.Frame{Type: tunnel.FramePong})
 	case tunnel.FramePong:

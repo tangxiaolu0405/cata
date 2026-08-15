@@ -123,6 +123,7 @@
 | `cata chat` TUI | **核心**交互 |
 | `cata-gateway`（Telegram / QQ / Web UI） | 渠道适配 → 同一 socket |
 | `cata-pet` | 桌面宠物 UI → 同一 socket |
+| `cata-desktop` | 桌面工作空间浏览器（Fyne：工作空间树 + 文件查看器 + 内嵌终端），只读 link.json/文件系统，不参与对话；见 `docs/desktop.md` |
 
 改核心优先 `internal/cata/{server,client,evolve,brain}` + `internal/llm`；渠道与 pet 默认不进必读路径。
 

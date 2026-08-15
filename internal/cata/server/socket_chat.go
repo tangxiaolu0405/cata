@@ -17,6 +17,7 @@ import (
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 	"cata/internal/cata/evolve"
+	"cata/internal/cata/protocol"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -46,7 +47,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	cc := brain.ChatContextFrom(ctx)
-	var lr *connLineReader
+	var lr *protocol.ConnLineReader
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("chat stream panic: %v\n%s", r, debug.Stack())
@@ -83,7 +84,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	}
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
-	if len(ss.buildTerminalChatToolsForTier(ContextTierLight, cc.OutputCwd, cc.Runtime)) == 0 {
+	if len(ss.buildTerminalChatToolsForTier(ContextTierLight, cc.WS, cc.OutputCwd, cc.Runtime)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
@@ -91,8 +92,8 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	lr = newConnLineReader(br, conn, cancel)
-	ctx = withChatConnReader(ctx, lr)
+	lr = protocol.NewConnLineReader(br, conn, cancel)
+	ctx = protocol.WithChatConnReader(ctx, lr)
 	pool := newSubagentPool(ctx, ss, conn)
 	ctx = withChatSubagentPool(ctx, pool)
 	ctx = withChatWorkspace(ctx, chatWS)
@@ -135,7 +136,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			*promptPeak = brain.PromptProfileMax(*promptPeak, roundProfile)
 			roundProfile = *promptPeak
 		}
-		tools := ss.buildTerminalChatToolsForTier(tier, cc.OutputCwd, cc.Runtime)
+		tools := ss.buildTerminalChatToolsForTier(tier, cc.WS, cc.OutputCwd, cc.Runtime)
 		ss.maybeContextCompress(ctx, conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
 
@@ -181,7 +182,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			}
 			log.Printf("chat stream round %d attempt %d: %v", round, attempt, err)
 		}
-		ss.emitChatStats(conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, roundProfile, cc.OutputCwd, "", chatWS, subagentRunningFrom(ctx))
+		ss.emitChatStats(ctx, conn, client, history, tools, round, roundUsage, &sessPromptTok, &sessCompletionTok, roundProfile, cc.OutputCwd, "", chatWS, subagentRunningFrom(ctx))
 		if strings.EqualFold(finishReason, "length") {
 			_ = ss.emitStreamLine(conn, map[string]interface{}{
 				"type":    "error",
@@ -285,7 +286,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	}
 }
 
-func (ss *SocketServer) emitChatLoopFailure(conn net.Conn, lr *connLineReader, chatWS *brain.Workspace, task *brain.TaskState, guard *chatLoopGuard, round int, brk *chatLoopBreak) error {
+func (ss *SocketServer) emitChatLoopFailure(conn net.Conn, lr *protocol.ConnLineReader, chatWS *brain.Workspace, task *brain.TaskState, guard *chatLoopGuard, round int, brk *chatLoopBreak) error {
 	lastTool := ""
 	fp := ""
 	consec, stale := 0, 0
@@ -312,7 +313,7 @@ func (ss *SocketServer) emitChatLoopFailure(conn net.Conn, lr *connLineReader, c
 	return ss.emitChatDone(conn, lr, false, false, brk.Code, brk.Reason)
 }
 
-func (ss *SocketServer) emitChatDone(conn net.Conn, lr *connLineReader, success, cancelled bool, code, reason string) error {
+func (ss *SocketServer) emitChatDone(conn net.Conn, lr *protocol.ConnLineReader, success, cancelled bool, code, reason string) error {
 	if lr != nil {
 		lr.Stop()
 	}
@@ -329,7 +330,7 @@ func (ss *SocketServer) emitChatDone(conn net.Conn, lr *connLineReader, success,
 	return ss.emitStreamLine(conn, ev)
 }
 
-func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *connLineReader) error {
+func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *protocol.ConnLineReader) error {
 	if lr != nil {
 		lr.Stop()
 	}
@@ -339,13 +340,15 @@ func (ss *SocketServer) emitChatCancelled(conn net.Conn, lr *connLineReader) err
 
 // maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。
 // history 指本连接内存中的多轮 user/assistant/tool，不是 short-term 文件；short-term 由 AppendChatTurn 写入磁盘供 evolve 提炼。
+// consolidate 在后台异步执行（TriggerSessionCompressAsync），本函数只做即时 history 裁剪，
+// 避免把完整 evolve 周期（Observe→LLM→patch→crystallize）同步嵌进 chat 轮次阻塞用户等待。
 func (ss *SocketServer) maybeContextCompress(ctx context.Context, conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool) {
 	if config.Config == nil || !config.Config.Evolution.Enabled {
 		return
 	}
 	window := client.ContextWindowTokens()
 	threshold := llm.ContextCompressThreshold(window)
-	est := client.EstimatedChatInputTokens(*history, tools)
+	est := client.EstimatedChatInputTokens(ctx, *history, tools)
 	if est < threshold {
 		return
 	}
@@ -354,12 +357,10 @@ func (ss *SocketServer) maybeContextCompress(ctx context.Context, conn net.Conn,
 		"message": fmt.Sprintf("context ~%d/%d tokens (≥%.0f%%), consolidating memory...", est, window, llm.ContextCompressRatioValue()*100),
 	})
 	cc := brain.ChatContextFrom(ctx)
-	if err := evolve.RunSessionCompress(ctx, cc.WS); err != nil {
-		log.Printf("session compress: %v", err)
-		return
-	}
+	// 异步 consolidate（后台排队，与后台 ticker 演进互斥），不阻塞本轮 chat。
+	evolve.TriggerSessionCompressAsync(ctx, cc.WS)
 	budget := int(float64(window) * historyBudgetAfterCompressRatio)
-	*history = trimHistoryToTokenBudget(client, *history, tools, budget)
+	*history = trimHistoryToTokenBudget(ctx, client, *history, tools, budget)
 }
 
 func (ss *SocketServer) chatToolsCacheKey() string {
@@ -509,12 +510,12 @@ func isFatalBrowserError(err error, output string) bool {
 }
 
 // trimHistoryToTokenBudget 从最早的用户/助手/tool 消息裁掉，使估算 token ≤ budget。
-func trimHistoryToTokenBudget(client *llm.Client, msgs []llm.Message, tools []llm.Tool, budget int) []llm.Message {
+func trimHistoryToTokenBudget(ctx context.Context, client *llm.Client, msgs []llm.Message, tools []llm.Tool, budget int) []llm.Message {
 	if budget <= 0 || len(msgs) == 0 {
 		return msgs
 	}
 	out := append([]llm.Message(nil), msgs...)
-	for len(out) > 1 && client.EstimatedChatInputTokens(out, tools) > budget {
+	for len(out) > 1 && client.EstimatedChatInputTokens(ctx, out, tools) > budget {
 		drop := firstDroppableIndex(out)
 		if drop < 0 {
 			break
@@ -534,7 +535,7 @@ func firstDroppableIndex(msgs []llm.Message) int {
 	return -1
 }
 
-func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, roundProfile brain.PromptProfile, outCwd string, lastTool string, chatWS *brain.Workspace, subagentRunning int) {
+func (ss *SocketServer) emitChatStats(ctx context.Context, conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool, round int, usage llm.StreamUsage, sessIn, sessOut *int, roundProfile brain.PromptProfile, outCwd string, lastTool string, chatWS *brain.Workspace, subagentRunning int) {
 	in := usage.PromptTokens
 	out := usage.CompletionTokens
 	if in == 0 && out == 0 && usage.TotalTokens > 0 {
@@ -546,7 +547,7 @@ func (ss *SocketServer) emitChatStats(conn net.Conn, client *llm.Client, history
 	if out > 0 {
 		*sessOut += out
 	}
-	ctxEst := client.EstimatedChatInputTokens(*history, tools)
+	ctxEst := client.EstimatedChatInputTokens(ctx, *history, tools)
 	ev := map[string]interface{}{
 		"type":               "stats",
 		"round":              round,

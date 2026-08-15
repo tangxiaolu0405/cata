@@ -13,7 +13,20 @@ import (
 )
 
 // ResolveWorkspace 用产出区 cwd 解析脑子分区（focus_path），并设置 exec 产出目录。
+// 注意：本函数会写进程级全局（SetOutputCwd/SetActive），仅供单会话客户端/工具链等
+// 单线程路径调用。server 多 chat 并行路径请用 ResolveWorkspaceNoGlobal（显式 ChatContext）。
 func ResolveWorkspace(clientCwd string) (*Workspace, error) {
+	return resolveWorkspace(clientCwd, true)
+}
+
+// ResolveWorkspaceNoGlobal 与 ResolveWorkspace 相同，但不写进程级全局
+// （SetOutputCwd/SetActive）。多 cata 并行（server chat / 后台 evolve）必须用此入口，
+// 配合 ChatContext 显式传递 WS/OutputCwd/Runtime，避免全局被其它会话改写。
+func ResolveWorkspaceNoGlobal(clientCwd string) (*Workspace, error) {
+	return resolveWorkspace(clientCwd, false)
+}
+
+func resolveWorkspace(clientCwd string, applyGlobal bool) (*Workspace, error) {
 	if err := EnsureCataLayout(); err != nil {
 		return nil, err
 	}
@@ -29,8 +42,10 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	SetOutputCwd(outputCwd)
-	syncOutputDir(outputCwd)
+	if applyGlobal {
+		SetOutputCwd(outputCwd)
+		syncOutputDir(outputCwd)
+	}
 
 	focus, kind, err := resolveFocusPath(outputCwd)
 	if err != nil {
@@ -53,7 +68,9 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 		_ = ws.EnsureScaffold()
 		touchRegistryEntry(ent.ID)
 		_ = upsertRegistryEntry(workspaceToEntry(ws))
-		SetActive(ws)
+		if applyGlobal {
+			SetActive(ws)
+		}
 		log.Printf("cata binding: %s", LogBinding())
 		return ws, nil
 	}
@@ -84,7 +101,9 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 	}); err != nil {
 		return nil, err
 	}
-	SetActive(ws)
+	if applyGlobal {
+		SetActive(ws)
+	}
 	log.Printf("cata binding: %s", LogBinding())
 	return ws, nil
 }

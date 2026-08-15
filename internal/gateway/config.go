@@ -63,7 +63,10 @@ type Config struct {
 	SocketPath         string           `json:"socket_path,omitempty"`
 	CataURL            string           `json:"cata_url,omitempty"`  // 模式二/三预留
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
-	Projects           []Project        `json:"projects,omitempty"`
+	// UIPassword 控制台访问口令（HTTP Basic）。空 = 不启用（仍受 LAN-only 限制）。
+	// 局域网内有其他设备时建议设置，避免任何人驱动对话/批准 exec 确认。
+	UIPassword string `json:"ui_password,omitempty"`
+	Projects   []Project        `json:"projects,omitempty"`
 	// remote 模式（cata_server.mode=remote）：本网关作为云端注册中心 + 路由。
 	// GatewayToken 隧道共享 Bearer token（v1；逐 agent token 留 v2）。空 = 拒绝所有隧道。
 	GatewayToken string `json:"gateway_token,omitempty"`
@@ -137,6 +140,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv("CATA_GATEWAY_UI"); ok {
 		cfg.UIListen = strings.TrimSpace(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_UI_PASSWORD")); v != "" {
+		cfg.UIPassword = v
 	}
 	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_TOKEN")); v != "" {
 		cfg.GatewayToken = v
@@ -366,7 +372,7 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	out = append(out, '\n')
-	return os.WriteFile(path, out, 0644)
+	return os.WriteFile(path, out, 0600)
 }
 
 // rawMessageDoc 把 RawMessage map 转成可 MarshalIndent 的 any map。
@@ -470,7 +476,7 @@ func SaveGatewayDocument(cfg Config, extras map[string]json.RawMessage) error {
 		return err
 	}
 	out = append(out, '\n')
-	return os.WriteFile(path, out, 0644)
+	return os.WriteFile(path, out, 0600)
 }
 
 // SaveProjects 仅更新 projects 字段后写回（先读盘再合并，避免丢密钥与未知键）。

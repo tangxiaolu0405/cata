@@ -53,13 +53,11 @@ var workerExcludedBuiltinTools = map[string]bool{
 	// case_artifact allowed for mode workers writing drafts
 }
 
-func (ss *SocketServer) buildWorkerTools() []llm.Tool {
-	return ss.buildWorkerToolsFor(brain.OutputCwd(), brain.ActiveRuntimeEnv())
-}
-
-// buildWorkerToolsFor 显式指定产出区/运行环境的 worker 工具集（多 chat 并行勿依赖全局 OutputCwd/RuntimeEnv）。
-// run_command 的说明内嵌产出区与 shell 提示，必须按本轮 chat 重建，不能复用全局 Schema()。
-func (ss *SocketServer) buildWorkerToolsFor(out string, env *brain.RuntimeEnv) []llm.Tool {
+// buildWorkerToolsFor 显式指定 workspace/产出区/运行环境的 worker 工具集
+// （多 chat 并行勿依赖全局 OutputCwd/RuntimeEnv/Active）。
+// run_command 的说明内嵌产出区与 shell 提示，必须按本轮 chat 重建，不能复用全局 Schema()；
+// MCP 工具按本轮 workspace capabilities 过滤（per-chat 快照）。
+func (ss *SocketServer) buildWorkerToolsFor(ws *brain.Workspace, out string, env *brain.RuntimeEnv) []llm.Tool {
 	var outTools []llm.Tool
 	for _, t := range ss.tools.Schemas() {
 		name := t.Function.Name
@@ -76,7 +74,11 @@ func (ss *SocketServer) buildWorkerToolsFor(out string, env *brain.RuntimeEnv) [
 	}
 	mcp.EnsureInit()
 	if mgr := mcp.Global(); mgr != nil {
-		outTools = append(outTools, mgr.Tools()...)
+		if ws != nil {
+			outTools = append(outTools, mgr.ToolsFor(brain.LoadCapabilitiesCachedFor(ws))...)
+		} else {
+			outTools = append(outTools, mgr.Tools()...)
+		}
 	}
 	return outTools
 }
@@ -97,25 +99,27 @@ func (ss *SocketServer) workerToolsCacheKey() string {
 	return b.String()
 }
 
-func (ss *SocketServer) workerTools() []llm.Tool {
-	return ss.workerToolsFor(brain.OutputCwd(), brain.ActiveRuntimeEnv())
-}
-
-// workerToolsFor 显式指定产出区/运行环境的 worker 工具集（带缓存；key 含 out/env）。
-func (ss *SocketServer) workerToolsFor(out string, env *brain.RuntimeEnv) []llm.Tool {
+// workerToolsFor 显式指定 workspace/产出区/运行环境的 worker 工具集（带缓存；key 含 ws caps/out/env）。
+func (ss *SocketServer) workerToolsFor(ws *brain.Workspace, out string, env *brain.RuntimeEnv) []llm.Tool {
 	key := ss.workerToolsCacheKey()
+	if ws != nil {
+		key += "|caps:" + mcp.CapsKey(brain.LoadCapabilitiesCachedFor(ws))
+	}
 	if out != "" {
 		key += "|out:" + out
 	}
 	if env != nil {
 		key += "|env:" + env.OS + "/" + env.Shell
 	}
+	// 缓存读写加锁：多 chat goroutine 并发构建 worker 工具集时保证 key/cache 成对一致。
+	ss.toolsCacheMu.Lock()
+	defer ss.toolsCacheMu.Unlock()
 	if key == ss.workerToolsKey && len(ss.workerToolsCache) > 0 {
 		outTools := make([]llm.Tool, len(ss.workerToolsCache))
 		copy(outTools, ss.workerToolsCache)
 		return outTools
 	}
-	outTools := ss.buildWorkerToolsFor(out, env)
+	outTools := ss.buildWorkerToolsFor(ws, out, env)
 	ss.workerToolsKey = key
 	ss.workerToolsCache = outTools
 	return outTools

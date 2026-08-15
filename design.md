@@ -574,6 +574,6 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 - 无手动演进命令（纯后台自主运行）
 - 无任务队列（有轻量定时触发 `internal/cata/scheduler`，见 `docs/schedules.md`）；调度 CLI 仅 `cata schedule [--once] [--dir] [--tick]` 守护/一次性扫描（无任务编排）
 - 无内置 git 操作
-- 无 Web UI
-- 无多机分布式
+- 无独立 TUI Web UI（终端为主；`cata-gateway` 自带本机管理控制台与远程模式，见 `docs/gateway.md`）
+- 无多机分布式（网关 remote 模式为「云端注册中心 + 各机 agent 回连」，见 `docs/tunnel.md`）
 - 无 `catacli` 独立二进制（统一 `cata` TUI）

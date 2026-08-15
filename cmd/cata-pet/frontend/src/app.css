@@ -1,0 +1,250 @@
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Wails macOS: alpha 0 lets WebviewIsTransparent show the desktop. */
+  background: rgba(0, 0, 0, 0) !important;
+  background-color: rgba(0, 0, 0, 0) !important;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px;
+  box-sizing: border-box;
+  font-family: "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  color: #1a1a1a;
+  pointer-events: none;
+}
+
+.shell > * {
+  pointer-events: auto;
+}
+
+.pet-stage {
+  position: relative;
+  z-index: 2;
+}
+
+.cat-hit {
+  position: relative;
+  cursor: pointer;
+  width: 120px;
+  height: 144px;
+  will-change: transform;
+  /* line-only sketch; reads on most desktop wallpapers */
+  color: #1a1a1a;
+}
+
+.cat-svg {
+  display: block;
+  overflow: visible;
+}
+
+.cat-svg .tail-wag {
+  transform-origin: 62px 98px;
+  animation: wag 0.35s ease-in-out infinite alternate;
+}
+
+@keyframes wag {
+  from {
+    transform: rotate(-8deg);
+  }
+  to {
+    transform: rotate(10deg);
+  }
+}
+
+.cat-svg.mood-error {
+  color: #b42318;
+}
+
+.cat-svg.mood-confirm {
+  color: #b54708;
+}
+
+.cat-svg.mood-tool {
+  color: #175cd3;
+}
+
+.cat-svg.mood-listening,
+.cat-svg.mood-thinking {
+  color: #6941c6;
+}
+
+.bubble-mini {
+  position: absolute;
+  right: -4px;
+  top: 8px;
+  background: #fff;
+  border: 1.5px solid currentColor;
+  border-radius: 10px;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.panel {
+  margin-top: 8px;
+  width: min(340px, 100%);
+  max-height: calc(100% - 140px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.panel-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+}
+
+.panel-bar .title {
+  font-weight: 650;
+  margin-right: auto;
+}
+
+.top-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.8;
+}
+
+.ghost {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #555;
+}
+
+.messages {
+  flex: 1;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+  max-height: 220px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: #eef4ff;
+  padding: 6px 10px;
+  border-radius: 12px 12px 4px 12px;
+  max-width: 90%;
+}
+
+.msg.assistant {
+  align-self: flex-start;
+  background: #f5f5f5;
+  padding: 6px 10px;
+  border-radius: 12px 12px 12px 4px;
+  max-width: 90%;
+  white-space: pre-wrap;
+}
+
+.msg.system {
+  align-self: center;
+  color: #667;
+  font-size: 11px;
+}
+
+.composer {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.composer input {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+}
+
+.composer button {
+  border: none;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #222;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.composer button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.composer .mic {
+  background: #f3f3f3;
+  color: #222;
+  min-width: 36px;
+}
+
+.hint {
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: #888;
+}
+
+.overlay {
+  margin: 0 10px 8px;
+  padding: 10px;
+  background: #fff8eb;
+  border: 1px solid #f5d0a0;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.overlay code {
+  display: block;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.overlay button {
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  background: #222;
+  color: #fff;
+  cursor: pointer;
+}

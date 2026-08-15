@@ -50,6 +50,15 @@ func NewConnWithDialer(socketPath, cwd string, dialFunc func() (net.Conn, error)
 // Cwd 返回该连接绑定的产出区。
 func (c *Conn) Cwd() string { return c.cwd }
 
+// Healthy 报告缓存连接是否仍可用（conn 非 nil）。
+// 连接在读写错误后由 invalidate 置 nil，因此 nil 即失效（隧道抖动自愈后需重建）。
+// 不做在线 ping——保持轻量，避免与进行中的 ChatAs 竞争同一连接。
+func (c *Conn) Healthy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn != nil
+}
+
 // SetAuditWriter 设置原始 NDJSON 审计写入器（每个收到的行原样写入）。
 func (c *Conn) SetAuditWriter(w io.Writer) {
 	c.mu.Lock()
@@ -97,14 +106,39 @@ func (c *Conn) write(v any) error {
 	if err != nil {
 		return err
 	}
+	if c.conn == nil {
+		return fmt.Errorf("not connected")
+	}
 	_, err = c.conn.Write(append(b, '\n'))
+	if err != nil {
+		// 写失败说明连接已死：使连接失效，下次 Chat 自动重拨（隧道抖动自愈）。
+		c.invalidate()
+	}
 	return err
+}
+
+// invalidate 标记当前连接失效（读写错误后调用），下次 ensureConn 重新拨号。
+// 注意：write/readLine 在 ChatAs 持 c.mu 时调用，这里不能再 Lock——
+// 只关闭底层 conn 并清引用；若调用方未持锁（Close 路径），先取锁再调用。
+func (c *Conn) invalidate() {
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+	c.conn = nil
+	c.br = nil
+}
+
+func (c *Conn) invalidateLocked() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invalidate()
 }
 
 func (c *Conn) readLine() ([]byte, error) {
 	for {
 		line, err := c.br.ReadBytes('\n')
 		if err != nil {
+			c.invalidate()
 			return nil, err
 		}
 		line = bytes.ReplaceAll(line, []byte{0}, nil)

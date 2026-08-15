@@ -152,12 +152,12 @@ func EnsureShortTermFileFor(w *Workspace) error {
 	return err
 }
 
-// FinalizeShortTermAfterConsolidate 将当前 short-term 归档到 memory/archive/ 并重置文件，避免演进重复喂同一段原文。
+// FinalizeShortTermAfterConsolidate 将指定 workspace 的 short-term 归档到 memory/archive/ 并重置文件，
+// 避免演进重复喂同一段原文。ws 必须显式指定（多 cata 并行勿依赖全局 MustActive）。
 // keepRecentBytes 为 0 时使用 DefaultKeepRecentAfterConsolidate。
-func FinalizeShortTermAfterConsolidate(keepRecentBytes int) (archivedRel string, err error) {
-	w, err := MustActive()
-	if err != nil {
-		return "", err
+func FinalizeShortTermAfterConsolidate(w *Workspace, keepRecentBytes int) (archivedRel string, err error) {
+	if w == nil {
+		return "", fmt.Errorf("FinalizeShortTermAfterConsolidate: workspace required")
 	}
 	if keepRecentBytes <= 0 {
 		keepRecentBytes = DefaultKeepRecentAfterConsolidate

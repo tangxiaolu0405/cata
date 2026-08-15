@@ -13,13 +13,6 @@ import (
 	"cata/internal/llm"
 )
 
-func bindStats(cwd string) {
-	_, _ = brain.ResolveWorkspace(cwd)
-	if w := brain.Active(); w != nil {
-		_ = w
-	}
-}
-
 func (m *model) applyStats(ev map[string]any) {
 	if v, ok := ev["round"].(float64); ok {
 		m.stats.round = int(v)

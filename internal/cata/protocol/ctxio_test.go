@@ -1,4 +1,4 @@
-package server
+package protocol
 
 import (
 	"context"
@@ -23,7 +23,7 @@ func TestReadFileWithContextCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = readFileWithContext(ctx, path, len(data))
+		_, _ = ReadFileWithContext(ctx, path, len(data))
 	}()
 
 	time.Sleep(5 * time.Millisecond)
@@ -35,7 +35,7 @@ func TestReadFileWithContextCancelled(t *testing.T) {
 		t.Fatal("read did not stop after cancel")
 	}
 
-	if err := contextErr(ctx); err == nil {
+	if err := ContextErr(ctx); err == nil {
 		t.Fatal("expected cancelled context")
 	}
 }

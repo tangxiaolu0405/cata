@@ -76,7 +76,7 @@ func SaveConfig(cfg Config) error {
 	data = append(data, '\n')
 	path := config.LinkConfigPath()
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

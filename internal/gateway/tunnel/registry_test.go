@@ -214,3 +214,48 @@ func TestHandlerRequiresTokenAndHello(t *testing.T) {
 		t.Fatal("agent should not be registered after bad hello")
 	}
 }
+
+// TestReRegisterReplacesStaleConnection 回归：同一 agent 第二次 hello 顶替旧连接，
+// 而不是被 "already connected" 拒绝——避免 worker 重连被拒形成死锁。
+func TestReRegisterReplacesStaleConnection(t *testing.T) {
+	reg := NewRegistry()
+	ts := httptest.NewServer(Handler(reg, HandlerOptions{Token: "tok"}))
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/cata/v1/tunnel?agent=ws-1"
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer tok")
+
+	hello := tunnel.Frame{Type: tunnel.FrameHello, AgentID: "ws-1", Name: "proj",
+		RootPath: "/p", Protocol: tunnel.ProtocolName, Version: tunnel.Version}
+
+	// 第一次连接注册。
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws1.WriteJSON(hello); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, func() bool { return reg.AgentAlive("ws-1") })
+
+	// 第二次连接同 agent：应顶替旧连接（旧 ws1 被网关关闭），注册仍成功。
+	ws2, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws2.Close()
+	if err := ws2.WriteJSON(hello); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, func() bool {
+		info, ok := reg.FindAgent("ws-1")
+		return ok && info.AgentID == "ws-1"
+	})
+
+	// 旧连接应被网关关闭（readLoop 返回 EOF）。
+	ws1.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := ws1.ReadMessage(); err == nil {
+		t.Fatal("expected stale ws1 to be closed by gateway")
+	}
+}

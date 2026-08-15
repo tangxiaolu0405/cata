@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/protocol"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -33,6 +35,11 @@ type SocketServer struct {
 	chatToolsCache   []llm.Tool
 	chatToolsKey     string
 	workerToolsKey   string
+
+	// toolsCacheMu 保护 chatToolsCache/workerToolsCache 及对应 key 的无锁读写。
+	// 多个 chat goroutine 并发构建工具集（各自按 tier/ws/out/env 缓存），
+	// 无锁时 race detector 必报；加锁后保证 key/cache 成对一致。
+	toolsCacheMu sync.Mutex
 }
 
 // ChatSessions 返回当前交互式 chat 会话数（不含 ping 探活连接）。
@@ -238,18 +245,18 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			var runtime *brain.RuntimeEnv
 			if req.Runtime != nil {
 				runtime = req.Runtime
-				brain.SetRuntimeEnv(runtime)
 			} else {
 				e := brain.DetectRuntimeEnvFromProcess()
 				runtime = &e
-				brain.SetRuntimeEnv(runtime)
 			}
 			var ws *brain.Workspace
 			if ss.boundWS != nil {
 				// agent 模式：进程只服务一个工作空间。
 				ws = ss.boundWS
 			} else {
-				ws, err = brain.ResolveWorkspace(cwd)
+				// 显式 ChatContext：解析不写进程级全局（多 cata 并行勿依赖全局
+				// SetActive/SetOutputCwd/SetRuntimeEnv）。
+				ws, err = brain.ResolveWorkspaceNoGlobal(cwd)
 				if err != nil {
 					log.Printf("resolve brain: %v", err)
 				}
@@ -270,28 +277,58 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak, req.ShowThinking); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
-			continue
-		case "chat_reset":
-			ss.markChatSession(&chatSession)
-			chatHistory = nil
-			chatPromptPeak = ""
-			if err := brain.AppendSessionBoundaryFor(connWS); err != nil {
-				log.Printf("short-term session boundary: %v", err)
-			}
-			if w := connWS; w != nil {
-				if err := brain.ClearCurrentTask(w); err != nil {
-					log.Printf("clear task state: %v", err)
+			// chat 结束后 drain connLineReader 残留行：pump 在停止竞态窗口可能已读入
+			// 客户端紧跟发送的命令（如 chat_reset），必须归还主循环处理而非丢弃。
+			if lr := protocol.ConnLineReaderFrom(chatCtx); lr != nil {
+				for {
+					raw, ok := lr.DrainPending()
+					if !ok {
+						break
+					}
+					var pr Request
+					if err := json.Unmarshal(raw, &pr); err != nil {
+						continue
+					}
+					ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, pr)
 				}
 			}
-			ss.sendResponse(conn, Response{Success: true, Message: "Conversation cleared."})
+			continue
+		case "chat_reset":
+			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, req)
 			continue
 		case "chat_cancel":
-			ss.sendResponse(conn, Response{Success: true, Message: "no active stream"})
+			// chat 流进行中时由 connLineReader.pump 消费（onCancel）；此处仅服务
+			// 无活动流时的语义（保留兼容：回执 no active stream）。
+			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, req)
 			continue
 		default:
 			resp := ss.handleCommand(req)
 			ss.sendResponse(conn, resp)
 		}
+	}
+}
+
+// handleNonChatCommand 处理 chat 会话相关的非流式命令（chat_reset / chat_cancel）。
+// 主循环与 chat 结束后的 drain 共用，避免逻辑重复。
+func (ss *SocketServer) handleNonChatCommand(conn net.Conn, br *bufio.Reader, chatSession *bool, chatHistory *[]llm.Message, chatPromptPeak *brain.PromptProfile, connWS **brain.Workspace, req Request) {
+	switch req.Command {
+	case "chat_reset":
+		ss.markChatSession(chatSession)
+		*chatHistory = nil
+		*chatPromptPeak = ""
+		if err := brain.AppendSessionBoundaryFor(*connWS); err != nil {
+			log.Printf("short-term session boundary: %v", err)
+		}
+		if w := *connWS; w != nil {
+			if err := brain.ClearCurrentTask(w); err != nil {
+				log.Printf("clear task state: %v", err)
+			}
+		}
+		ss.sendResponse(conn, Response{Success: true, Message: "Conversation cleared."})
+	case "chat_cancel":
+		// 流式 chat 进行中时由 connLineReader.pump 消费（onCancel 触发 ctx 取消）；
+		// 走到这里说明没有活动流，回执兼容信息。
+		ss.sendResponse(conn, Response{Success: true, Message: "no active stream"})
 	}
 }
 

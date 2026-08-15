@@ -11,6 +11,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/protocol"
 	"cata/internal/llm"
 	"cata/internal/mcp"
 )
@@ -187,9 +188,9 @@ func (t *manageMCPTool) mcpDisable(ctx context.Context, name string) (string, er
 	if name == "" {
 		return "", fmt.Errorf("manage_mcp disable: server name required")
 	}
-	ws := chatWorkspaceFrom(ctx)
-	if ws == nil {
-		ws = brain.Active()
+	ws, err := requireChatWorkspace(ctx, "manage_mcp")
+	if err != nil {
+		return "", err
 	}
 	caps := brain.LoadCapabilitiesFor(ws)
 	if !caps.AllowsMCPServer(name) {
@@ -198,17 +199,16 @@ func (t *manageMCPTool) mcpDisable(ctx context.Context, name string) (string, er
 	if err := brain.RemoveMCPFromCapabilities(ws, name); err != nil {
 		return "", err
 	}
-	caps = brain.LoadCapabilitiesFor(ws)
-	mcp.Reload(caps)
+	// 项目 caps 变更只影响 ToolsFor 过滤；子进程生命周期与 workspace 解耦，无需重建。
 	auditMCPAction("disable", name)
-	return fmt.Sprintf("[manage_mcp] disabled %q in current project; MCP reloaded", name), nil
+	return fmt.Sprintf("[manage_mcp] disabled %q in current project; next chat round uses updated tools", name), nil
 }
 
 // enableForProject 在项目 capabilities.yaml 启用 server 名并重建 MCP（幂等）。
 func (t *manageMCPTool) enableForProject(ctx context.Context, name string) (string, error) {
-	ws := chatWorkspaceFrom(ctx)
-	if ws == nil {
-		ws = brain.Active()
+	ws, err := requireChatWorkspace(ctx, "manage_mcp")
+	if err != nil {
+		return "", err
 	}
 	caps := brain.LoadCapabilitiesFor(ws)
 	if caps.AllowsMCPServer(name) {
@@ -217,9 +217,21 @@ func (t *manageMCPTool) enableForProject(ctx context.Context, name string) (stri
 	if err := brain.AppendMCPToCapabilities(ws, name); err != nil {
 		return "", err
 	}
-	caps = brain.LoadCapabilitiesFor(ws)
-	mcp.Reload(caps)
-	return fmt.Sprintf("[manage_mcp] enabled %q in current project; MCP reloaded", name), nil
+	// enable 一个已定义 server：确保其 stdio 子进程已按配置启动（幂等），
+	// 项目 caps 过滤由下一轮 ToolsFor 生效。
+	mcp.EnsureInit()
+	return fmt.Sprintf("[manage_mcp] enabled %q in current project; next chat round uses updated tools", name), nil
+}
+
+// requireChatWorkspace 返回本轮 chat 的脑子分区；缺失时返回错误。
+// 这些工具只在 chat 工具循环内执行（ctx 必注入 ws），禁止回退到进程级全局
+// brain.Active()——后台 evolve 会临时改写全局，多 chat 并行时会写错 workspace。
+func requireChatWorkspace(ctx context.Context, toolName string) (*brain.Workspace, error) {
+	ws := chatWorkspaceFrom(ctx)
+	if ws == nil {
+		return nil, fmt.Errorf("%s: chat workspace missing from context (parallel-safe path required)", toolName)
+	}
+	return ws, nil
 }
 
 // confirmInstall 复用 exec_confirm 机制向用户确认全局写入/启动。
@@ -228,7 +240,7 @@ func (t *manageMCPTool) confirmInstall(ctx context.Context, conn net.Conn, name,
 	if len(args) > 0 {
 		cmdLine += " " + strings.Join(args, " ")
 	}
-	id := newConfirmID()
+	id := protocol.NewConfirmID()
 	_ = t.ss.emitStreamLine(conn, map[string]interface{}{
 		"type":         "exec_confirm_required",
 		"title":        "MCP install 待确认 (↑↓ 选 Run/Cancel，Enter 确认，Esc 取消)",
@@ -241,7 +253,7 @@ func (t *manageMCPTool) confirmInstall(ctx context.Context, conn net.Conn, name,
 			{"id": "cancel", "label": "Cancel"},
 		},
 	})
-	approved, err := t.ss.waitExecClientConfirm(ctx, id)
+	approved, err := protocol.WaitExecClientConfirm(ctx, id)
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, nil

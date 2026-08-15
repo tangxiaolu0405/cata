@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"cata/internal/cata/brain"
-	"cata/internal/cata/clock"
 )
 
 // DocUpdate LLM 决策输出的文档补丁（路径相对当前 workspace 根）。
@@ -90,22 +89,4 @@ func ApplyUpdates(ws *brain.Workspace, updates []DocUpdate) ([]string, error) {
 		touched = append(touched, storeRel)
 	}
 	return touched, nil
-}
-
-// TouchArchiveDay 创建当日 archive 占位。
-func TouchArchiveDay() (string, error) {
-	w, err := brain.MustActive()
-	if err != nil {
-		return "", err
-	}
-	rel := filepath.Join(brain.RelMemoryArchive, clock.Format("2006-01-02")+".md")
-	abs := w.Path(rel)
-	if _, err := os.Stat(abs); err == nil {
-		return rel, nil
-	}
-	content := fmt.Sprintf("# %s\n\n", clock.Format("2006-01-02"))
-	if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
-		return "", err
-	}
-	return rel, nil
 }
