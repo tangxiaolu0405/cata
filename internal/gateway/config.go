@@ -12,8 +12,8 @@ import (
 )
 
 // Edition gateway 发行档位（由配置决定，非不同二进制）。
-//   - base：gateway + 本机 cata server 一体（默认自动拉起 worker）
-//   - channel：仅渠道适配，worker 需外部运行（默认）
+//   - base：gateway + 本机 per-ws agent 一体（默认 auto_start，确保 supervisor 保活常驻 agent）
+//   - channel：仅渠道适配，agent 进程按需/外部运行（默认）
 //   - remote：云端注册中心 + 路由，接受各机器 `cata agent --link` 的 WSS 隧道
 const (
 	EditionBase    = "base"
@@ -23,22 +23,25 @@ const (
 
 // CataServerMode worker 连接方式。
 const (
-	ServerModeSocket   = "socket"   // 本机 Unix socket（模式一）
-	ServerModeExternal = "external" // 同 socket，但不自动启动（用户自管 cata run）
-	ServerModeRemote   = "remote"   // 预留：HTTP CATA_URL（模式二/三）
+	ServerModeSocket   = "socket"   // 本机 per-ws agent socket（模式一）
+	ServerModeExternal = "external" // 同 socket，但不自动确保 supervisor（用户自管进程）
+	ServerModeRemote   = "remote"   // 云端注册中心 + WSS 隧道（模式三）
 )
 
-// CataServerConfig gateway 侧的 cata worker 配置（base 版核心）。
+// CataServerConfig gateway 侧的 cata worker 配置。
+// 说明：本地多空间已迁移为 per-ws agent（每项目独立进程，socket 在
+// ~/.cata/sockets/<ws_id>.sock），不再拉起 legacy cata run。Binary/Managed/StopOnExit
+// 为历史字段，保留仅用于向后兼容，当前运行时不读取。
 type CataServerConfig struct {
-	// Mode：socket（base 默认，自动启动）、external（仅连接已有 socket）、remote（预留）
+	// Mode：socket（base 默认）、external（仅连接已有 agent）、remote（云端）
 	Mode string `json:"mode,omitempty"`
-	// Binary cata 可执行文件；空则 CATA_BIN 或 PATH 上的 cata
+	// Binary 历史字段（legacy cata run 用），现不读取
 	Binary string `json:"binary,omitempty"`
-	// AutoStart 启动 gateway 时是否确保 cata server 在运行
+	// AutoStart 启动 gateway 时是否确保 supervisor（保活常驻 agent）
 	AutoStart bool `json:"auto_start,omitempty"`
-	// Managed 拉起时是否带 `cata run --managed`（false 则普通 `cata run`）
+	// Managed 历史字段（legacy cata run --managed 用），现不读取
 	Managed bool `json:"managed,omitempty"`
-	// StopOnExit gateway 退出时是否结束由本进程拉起的 server
+	// StopOnExit 历史字段（legacy server 回收用），现不读取
 	StopOnExit bool `json:"stop_on_exit,omitempty"`
 }
 

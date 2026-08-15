@@ -21,8 +21,6 @@ type WebChat struct {
 	locks    *gateway.ProcessLock
 	remote   *tunnel.Registry // 非 nil = remote 模式：经隧道拨远端 agent
 
-	chatMu sync.Mutex // 本阶段全局串行化 web LLM 轮次
-
 	mu       sync.Mutex
 	pendingE map[string]chan bool
 	pendingC map[string]chan []string
@@ -115,9 +113,6 @@ func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string
 	unlock := w.locks.Lock(key)
 	defer unlock()
 
-	w.chatMu.Lock()
-	defer w.chatMu.Unlock()
-
 	conn, err := w.sessionConn(key, abs, project)
 	if err != nil {
 		return gateway.ChatResult{}, err
@@ -126,14 +121,16 @@ func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string
 	return conn.Chat(ctx, text, h)
 }
 
-// sessionConn 获取会话连接：remote 模式经隧道拨对应在线 agent，否则拨本机 socket。
+// sessionConn 获取会话连接：remote 模式经隧道拨对应在线 agent；
+// 本地模式按 project.ID(=ws_id) 拨本机对应 agent 的 per-ws socket（EnsureAgent 按需拉起）。
+// 两者对称——都是「按项目路由到对应 agent」，只差 dialFunc 实现。
 func (w *WebChat) sessionConn(key gateway.SessionKey, abs string, project gateway.Project) (*gateway.CataConn, error) {
 	if w.remote != nil {
 		return w.sessions.GetWithCwdDialer(key, abs, func() (net.Conn, error) {
 			return w.remote.DialAgent(project.ID)
 		})
 	}
-	return w.sessions.GetWithCwd(key, abs)
+	return w.sessions.GetWithCwdDialer(key, abs, gateway.DialLocalAgent(project.ID))
 }
 
 // Reset 清空项目会话。

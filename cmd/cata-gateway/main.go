@@ -193,14 +193,11 @@ func runGateway(only string) {
 		}
 	}
 
-	// remote 模式不拉起本机 cata server：worker 在各机器上由 `cata agent` 自持隧道。
+	// remote 模式不拉起本机进程：worker 在各机器上由 `cata agent` 自持隧道。
+	// 本地模式改为 per-ws agent：确保 supervisor 守护保活常驻 agent；
+	// 未注册项目的 agent 由 DialLocalAgent 按需拉起（不再拉起 legacy cata run）。
 	if !remote {
-		srvMgr := gateway.NewServerManager(cfg)
-		if err := srvMgr.Ensure(); err != nil {
-			fmt.Fprintf(os.Stderr, "cata server: %v\n", err)
-			os.Exit(1)
-		}
-		defer srvMgr.Stop()
+		gateway.EnsureLocalAgents(cfg)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -15,17 +15,22 @@
 
 - **gateway**：渠道消息格式、会话路由、`cwd` 映射、确认按钮 UX；**不**调用 LLM、**不**写脑子。
 - **Web UI**（默认 `http://0.0.0.0:8787`）：多项目真实目录对话 + 渠道只读消息面板；手机用 `http://<电脑局域网IP>:8787`。
-- **cata worker**：现有 `cata run` + Unix socket chat 循环；与 TUI 共用同一协议。
+- **cata worker**：每工作空间一个 `cata agent` 进程（per-ws），各自监听
+  `~/.cata/sockets/<ws_id>.sock`，与 TUI 共用同一 NDJSON chat 协议。
 
-## 本地 Web UI（多项目）
+## 本地 Web UI（多项目，per-ws agent）
 
 启动 `cata-gateway` 后浏览器打开控制台（无需 Telegram/QQ 凭证亦可 **UI-only**）：
 
 | 区域 | 能力 |
 |------|------|
-| **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_worker` 渠道沙箱）；会话 `web:<id>`，`cwd` = meta/registry 的 `root_path` |
+| **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_worker` 渠道沙箱）；会话 `web:<id>`，`<id>` = ws_id = agent_id |
 | **Channels** | Telegram/QQ 近期消息只读；**不能**从页面发消息、确认命令或 reset 渠道会话 |
 | **设置** | 编辑 `~/.cata/config.json` 与 `~/.cata/gateway.json`；保存时**保留**未知顶层键（如 `llm_previous_qwen` / `llm_xxx`） |
+
+多项目隔离：每个项目一条会话，按 `project.ID`（= ws_id）拨到对应 agent 的 per-ws socket
+（`~/.cata/sockets/<ws_id>.sock`），未注册项目由 `EnsureAgent` 按需拉起、空闲回收；
+注册且 keep-alive 的项目由 supervisor 守护保活。不同项目 = 独立 agent 进程，可并行对话。
 
 配置：
 
@@ -74,21 +79,20 @@ gateway 发给 cata 的 `cwd` 固定布局：
 
 同一 `cata-gateway` 二进制，由 `~/.cata/gateway.json` 的 `edition` 决定行为（非不同安装包）：
 
-| edition | 含义 | cata server |
+| edition | 含义 | cata worker |
 |---------|------|-------------|
-| **base** | 基础版：gateway + 本机 worker 一体 | 默认 `cata_server.auto_start: true`，启动时拉起 `cata run` |
-| **channel** | 渠道版：仅适配器 | 默认不拉起；需单独运行 `cata run` |
-| **remote** | 云端版：注册中心 + 隧道路由 | 不拉起本机 server；worker 由各机器 `cata agent --link` 提供 |
+| **base** | 基础版：gateway + 本机 per-ws agent 一体 | 默认 `auto_start: true`，启动时确保 supervisor（保活常驻 agent） |
+| **channel** | 渠道版：仅适配器 | 默认不确保 supervisor；agent 按需/外部运行 |
+| **remote** | 云端版：注册中心 + 隧道路由 | 不拉起本机进程；worker 由各机器 `cata agent --link` 提供 |
 
-`cata_server` 字段（base 版核心）：
+`cata_server` 字段：
 
 | 字段 | 说明 |
 |------|------|
-| `mode` | `socket`（本机 socket，base 默认）、`external`（仅连接已有 socket）、`remote`（云端注册中心 + WSS 隧道，见 [tunnel.md](tunnel.md)） |
-| `binary` | cata 可执行路径；空则 `CATA_BIN` 或 PATH |
-| `auto_start` | 是否在 gateway 启动时确保 server 运行 |
-| `managed` | 拉起时是否 `cata run --managed` |
-| `stop_on_exit` | gateway 退出时是否结束本进程拉起的 server |
+| `mode` | `socket`（本机 per-ws agent socket，base 默认）、`external`（仅连接已有 agent）、`remote`（云端注册中心 + WSS 隧道，见 [tunnel.md](tunnel.md)） |
+| `auto_start` | 是否在 gateway 启动时确保 supervisor 运行 |
+
+> `binary` / `managed` / `stop_on_exit` 为历史字段（legacy `cata run` 时代），当前不读取，保留仅向后兼容。
 
 示例见仓库根目录 `gateway.example.json`（base）、`gateway.example.channel.json`（channel）。
 
@@ -120,16 +124,16 @@ cata-gateway init --force            # 覆盖已有文件
 
 | 模式 | gateway | cata worker | 传输 | 状态 |
 |------|---------|-------------|------|------|
-| **一、同机** | 本机 | 本机 | Unix socket `~/.cata/cata.sock` | **当前实现** |
+| **一、同机（per-ws）** | 本机 | 本机每项目一个 `cata agent` | Unix socket `~/.cata/sockets/<ws_id>.sock` | **当前实现** |
 | **四、remote（云端隧道）** | 任意位置（云端） | 各机器 `cata agent --link` | WSS 隧道（cata-tunnel.v1） | **当前实现** |
 | **二、安全隔离** | 公网/云端 | 内网或用户本机 | HTTPS → worker HTTP API（`CATA_URL`） | 由模式四取代（设计归档） |
 | **三、全云端** | 云端 A | 云端 B（或同机） | HTTP API 或 VPC 内 socket | 由模式四取代（设计归档） |
 
-### 模式一（当前）
+### 模式一（当前，per-ws agent）
 
-- **base 版（推荐单进程）**：`edition: base`，一条命令 `cata-gateway` 即可（自动 `cata run`）
-- **channel 版**：`edition: channel` 或省略 edition；worker 需 `cata run` 独立进程
-- 配置：`TELEGRAM_BOT_TOKEN`、`CATA_SOCKET`（可选）、`CATA_WORKER_ROOT`（可选）
+- **base 版（推荐单进程）**：`edition: base`，一条命令 `cata-gateway` 即可（自动确保 supervisor 保活常驻 agent）
+- **channel 版**：`edition: channel` 或省略 edition；agent 按需拉起（`EnsureAgent`）或外部自管
+- 配置：`TELEGRAM_BOT_TOKEN`、`CATA_WORKER_ROOT`（可选；`CATA_SOCKET` 已无实际用途，本地走 per-ws socket）
 - 首渠道：Telegram 长轮询（`cmd/cata-gateway`）
 
 ### 模式二（预留）
