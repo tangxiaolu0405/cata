@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -67,7 +66,7 @@ func EnsureDaemonRunning() (spawned bool, err error) {
 	cmd.Env = os.Environ()
 	cmd.Stdout = logf
 	cmd.Stderr = logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detachCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		logf.Close()
 		return false, err
