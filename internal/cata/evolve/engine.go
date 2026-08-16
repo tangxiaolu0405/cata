@@ -14,7 +14,6 @@ import (
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 	"cata/internal/llm"
-	"cata/prompt"
 )
 
 // Engine 后台自主演进。
@@ -177,11 +176,9 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	}
 
 	decisionPrompt := buildDecisionPrompt(ws, snap, sessionCompress, crystallize)
-	sys := prompt.EvolveSystemPrompt()
-	if sessionCompress {
-		sys = prompt.EvolveSessionCompressPrompt()
-	} else if crystallize {
-		sys = prompt.EvolveCrystallizePrompt()
+	sys, err := evolveSystemPrompt(sessionCompress, crystallize)
+	if err != nil {
+		return fmt.Errorf("evolve system: %w", err)
 	}
 	messages := []llm.Message{
 		{Role: "system", Content: sys},
@@ -336,10 +333,6 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 		b.WriteString(ws.Name)
 	}
 	b.WriteString("\n")
-	if notice := prompt.EvolveDecisionScopeNotice(); notice != "" {
-		b.WriteString(notice)
-		b.WriteByte('\n')
-	}
 	b.WriteString("triggers: ")
 	b.WriteString(strings.Join(snap.Triggers, ", "))
 	if sessionCompress {
@@ -428,11 +421,20 @@ func buildDecisionPrompt(ws *brain.Workspace, snap *Snapshot, sessionCompress, c
 		b.WriteString("\n\nrecent evolution: ")
 		b.WriteString(snap.RecentLogSummary)
 	}
-	if footer := prompt.EvolveDecisionFooter(); footer != "" {
-		b.WriteString("\n\n")
-		b.WriteString(footer)
-	}
 	return b.String()
+}
+
+// evolveSystemPrompt 从 evolve 角色卡片取对应场景的 system 正文（常规/会话压缩共用通用部分，固化 skill 用专用节）。
+func evolveSystemPrompt(sessionCompress, crystallize bool) (string, error) {
+	card, err := llm.CardForRole(llm.RoleEvolution)
+	if err != nil {
+		return "", err
+	}
+	if crystallize {
+		return card.Section("场景：固化 skill"), nil
+	}
+	_ = sessionCompress // 会话压缩说明已并入通用正文（「分桶 evolve」节）
+	return card.BodyBeforeSection("场景：固化 skill"), nil
 }
 
 func readFileCap(path string, max int) (string, error) {

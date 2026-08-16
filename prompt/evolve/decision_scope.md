@@ -1,1 +1,0 @@
-ONLY patch: (1) project .cata at focus_path — persona.local, modes/<active_mode>/*, skills/*; (2) home brain cell — memory/*, meta.json, evolution_log.json. NEVER patch global/* (guidance prompts live in ~/.cata/global).

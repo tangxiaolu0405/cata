@@ -51,6 +51,41 @@ func (c RoleCard) InjectProfile() brain.PromptProfile {
 	}
 }
 
+// BodyBeforeSection 返回 "## "+title 之前的正文（不含该节）。无该节则返回全文。
+func (c RoleCard) BodyBeforeSection(title string) string {
+	idx := indexOfSection(c.Body, title)
+	if idx < 0 {
+		return strings.TrimSpace(c.Body)
+	}
+	return strings.TrimSpace(c.Body[:idx])
+}
+
+// Section 返回 "## "+title 开头的节（含标题，到下一个同级 ## 前）。无该节返回空。
+func (c RoleCard) Section(title string) string {
+	idx := indexOfSection(c.Body, title)
+	if idx < 0 {
+		return ""
+	}
+	rest := c.Body[idx:]
+	if next := strings.Index(rest, "\n## "); next >= 0 {
+		return strings.TrimSpace(rest[:next])
+	}
+	return strings.TrimSpace(rest)
+}
+
+// indexOfSection 定位 "## "+title 的节标题位置（必须位于行首）。
+func indexOfSection(body, title string) int {
+	target := "## " + title
+	idx := strings.Index(body, target)
+	if idx < 0 {
+		return -1
+	}
+	if idx > 0 && body[idx-1] != '\n' {
+		return -1
+	}
+	return idx
+}
+
 var roleCardCache sync.Map // Role -> *RoleCard
 
 // CardForRole 加载某角色的卡片（带缓存）。
