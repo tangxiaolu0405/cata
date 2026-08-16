@@ -31,8 +31,7 @@ const (
 	maxBrainExcerptBytesPerFile = 6500
 	maxBrainExcerptBytesTotal   = 20000
 	// boot-leader 正文码点上限（单文件过大时截断）
-	maxBootLeaderRunes     = 10000
-	maxBootLeaderRunesTask = 5000
+	maxBootLeaderRunes = 10000
 )
 
 // truncateRunes 按 Unicode 码点截断（仅用于发往 API 的 boot-leader 体积控制，不用于 llm.log）。
@@ -184,17 +183,13 @@ var (
 	bootLeaderPrompt string
 )
 
-// loadBootLeaderPrompt 只读一次 brain/boot-leader.md，用作所有对话的通用系统提示词前缀。
+// loadBootLeaderPrompt 返回主 chat 角色卡片的身份正文（历史名保留，供日志/token 估算标注）。
+// 实际出站由 assembleSystemForRole 按 Client.card 组装；此处仅作无卡片兜底与日志对齐。
 func loadBootLeaderPrompt() string {
 	bootLeaderOnce.Do(func() {
-		path := brain.BootLeaderPath()
-		data, err := os.ReadFile(path)
-		if err != nil {
-			log.Printf("Warning: failed to read boot-leader.md from %s: %v", path, err)
-			return
+		if card, err := CardForRole(RoleChat); err == nil {
+			bootLeaderPrompt = truncateRunes(strings.TrimSpace(card.Body), maxBootLeaderRunes)
 		}
-		s := brain.CompactExcessiveNewlines(strings.TrimSpace(string(data)))
-		bootLeaderPrompt = truncateRunes(s, maxBootLeaderRunes)
 	})
 	return bootLeaderPrompt
 }
@@ -203,19 +198,9 @@ func effectiveBootLeaderPrompt() string {
 	return effectiveBootLeaderPromptFor(brain.ActivePromptProfile())
 }
 
+// effectiveBootLeaderPromptFor 身份不再按 profile 分档（由角色卡片决定）；此函数保留作兼容。
 func effectiveBootLeaderPromptFor(profile brain.PromptProfile) string {
-	switch brain.ProfileRank(profile) {
-	case 0:
-		return brain.LoadMinimalBootPrompt()
-	case 1:
-		prompt := strings.TrimSpace(loadBootLeaderPrompt())
-		if prompt == "" {
-			return brain.LoadMinimalBootPrompt()
-		}
-		return truncateRunes(prompt, maxBootLeaderRunesTask)
-	default:
-		return strings.TrimSpace(loadBootLeaderPrompt())
-	}
+	return strings.TrimSpace(loadBootLeaderPrompt())
 }
 
 // withBootLeaderSystemMessage 确保每次请求的消息列表前面都有 boot-leader.md 作为系统提示词。

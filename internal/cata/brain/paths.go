@@ -2,15 +2,13 @@
 package brain
 
 import (
-	"os"
 	"path/filepath"
 )
 
 // 仓库模板 brain/ 内相对路径（种子来源，与 ~/.cata/global/ 名称一致）。
 const (
-	RelPathBootAssembler = "boot-assembler.md"
-	RelPathConstraints   = "constraints.md"
-	RelPathBehavior      = "behavior.md"
+	RelPathConstraints = "constraints.md"
+	RelPathBehavior    = "behavior.md"
 
 	RelPathMemoryIndex  = "memory_index.json"
 	RelPathEvolutionLog = "evolution_log.json"
@@ -30,15 +28,6 @@ func Path(rel string) string {
 		return w.Path(rel)
 	}
 	return filepath.Join(brainRoot(), rel)
-}
-
-// BootLeaderPath 全局启动组装说明。
-func BootLeaderPath() string {
-	p := filepath.Join(globalDir(), FileGlobalBoot)
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	return filepath.Join(brainRoot(), RelPathBootAssembler)
 }
 
 // HotPath 当前 workspace 活跃 mode 的 persona。

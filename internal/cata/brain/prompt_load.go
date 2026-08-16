@@ -52,12 +52,6 @@ func readGlobalJSON(globalRel, embedPath string) ([]byte, error) {
 	return embeddedGuidanceFS.ReadFile(embedPath)
 }
 
-// LoadMinimalBootPrompt worker minimal 档 boot（~/.cata/global/minimal-boot.md）。
-func LoadMinimalBootPrompt() string {
-	return loadGlobalPrompt("minimal-boot", FileGlobalMinimalBoot, "guidance/minimal-boot.md",
-		"你是 Cata 终端助手。遵守：不虚构路径；产出区=当前 output_cwd；读写改文件须用工具。")
-}
-
 // LoadDelegateGuideBlock 父 Agent 委派准则（~/.cata/global/delegate-guide.md）。
 func LoadDelegateGuideBlock() string {
 	return loadGlobalPrompt("delegate-guide", FileGlobalDelegateGuide, "guidance/delegate-guide.md",
@@ -89,12 +83,6 @@ func SubagentDelegateGuideBlock() string {
 // SubagentDelegateGuideBlockFor 显式指定产出区的委派指南（多 chat 并行勿依赖全局 OutputCwd）。
 func SubagentDelegateGuideBlockFor(out string) string {
 	return RenderDelegateGuideBlockFor(out)
-}
-
-// LoadWorkerContract worker 角色与 STATUS 格式（~/.cata/global/worker-contract.md）。
-func LoadWorkerContract() string {
-	return loadGlobalPrompt("worker-contract", FileGlobalWorkerContract, "guidance/worker-contract.md",
-		"You are a Cata worker. Execute the task only. Reply with STATUS/RESULT/ARTIFACTS/NOTES when done.")
 }
 
 // LoadDelegateTaskToolSpec delegate_task 工具 description + parameters。

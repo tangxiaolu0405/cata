@@ -16,7 +16,7 @@
 | 3 | 绑项目数据源 / 项目内服务 / 项目内凭据 | 项目启用声明；定义仍走全局兜底（无项目定义机制），记入 memory 备注 |
 | 4 | 无法判断 / 用户未表态 | 默认全局定义 + 项目启用；先可用，后迁移 |
 
-规则已写入 `brain/constraints.md`（模板）+ `~/.cata/global/constraints.md`（运行时，T4）并内嵌进 `manage_mcp` 工具描述。
+规则已写入 `internal/cata/brain/guidance/constraints.md`（模板）+ `~/.cata/global/constraints.md`（运行时，T4）并内嵌进 `manage_mcp` 工具描述。
 
 ## capabilities.yaml 的 mcp 语义（disable 关键）
 
@@ -47,7 +47,7 @@
 - **语义**：显式空 mcp 节 = 禁用全部（见上）；evolve 仍被 `RejectCapabilitiesPatch` 拦在 mcp 段外
 
 ### T4 — 判定规则注入提示词 ✅
-- **实现**：`brain/constraints.md`（模板）+ `~/.cata/global/constraints.md`（运行时）追加决策规则；`manage_mcp` Schema 描述内嵌规则
+- **实现**：`internal/cata/brain/guidance/constraints.md`（模板）+ `~/.cata/global/constraints.md`（运行时）追加决策规则；`manage_mcp` Schema 描述内嵌规则
 
 ### T5 — evolve 边界保持 + 记忆 ✅
 - **保持**：evolve 不写全局 config.json（`global/*` `EvolvePatch:false`，evolve 代码无 config 写入）；evolve 不 append capabilities 的 mcp 段（`RejectCapabilitiesPatch` 不变）

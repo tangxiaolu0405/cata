@@ -30,12 +30,6 @@ func TestLoadDelegateGuideFromEmbed(t *testing.T) {
 	}
 }
 
-func TestLoadMinimalBootFromEmbed(t *testing.T) {
-	if !strings.Contains(LoadMinimalBootPrompt(), "Cata") {
-		t.Fatal("empty minimal boot")
-	}
-}
-
 func TestLoadDelegateTaskToolSpec(t *testing.T) {
 	spec, err := LoadDelegateTaskToolSpec()
 	if err != nil {

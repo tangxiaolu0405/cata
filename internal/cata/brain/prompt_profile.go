@@ -12,7 +12,6 @@ const (
 	PromptProfileFull    PromptProfile = "full"
 )
 
-// MinimalBootPrompt 已迁至 ~/.cata/global/minimal-boot.md；代码请用 LoadMinimalBootPrompt()。
 var promptProfileMu sync.RWMutex
 var activePromptProfile PromptProfile = PromptProfileFull
 

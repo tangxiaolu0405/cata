@@ -21,7 +21,7 @@
     ├── LLM (internal/llm) ─── OpenAI 兼容 API
     │
     ├── CATA_HOME (~/.cata/)
-    │   ├── global/                    ← 引导型提示词（constraints、behavior、boot-assembler）
+    │   ├── global/                    ← 引导型提示词（constraints、behavior、delegate-guide）
     │   └── brain/workspaces/<id>/     ← 运行时记忆
     │       ├── memory/short/current.md
     │       ├── memory/long/、archive/
@@ -179,7 +179,7 @@ ok  internal/auth  0.234s                     ← stderr, 完整命令输出
 ├── global/                                 # 引导型提示词（evolve 禁止 patch）
 │   ├── constraints.md
 │   ├── behavior.md
-│   └── boot-assembler.md
+│   └── delegate-guide.md
 ├── locks/
 ├── skills/                                 # 全局共享 skill 回退
 └── brain/workspaces/<ws_id>/               # home 脑子格（运行时记忆）
@@ -224,7 +224,7 @@ ok  internal/auth  0.234s                     ← stderr, 完整命令输出
 | modes/…/persona 等 | 项目 `.cata/` | **主要内容** | evolve（active_mode） | 身份、项目 SOP，注入 ② |
 | persona.local.md | 项目 `.cata/` | **主要内容** | evolve | 仓库用途、栈、当前任务 |
 | long/ + archive/ | home 脑子格 | 运行时记忆 | evolve 归档 | 低频事实，经 index 召回 |
-| boot-assembler | ~/.cata/global | **引导** | init / 用户 | ① system 前缀 |
+| 角色卡片（chat/worker/evolve） | `internal/llm/rolecards/` | **身份+协议** | 随版本 | ① system 前缀 |
 
 ### Context 组装（每次终端 LLM 出站前）
 
@@ -243,8 +243,8 @@ socket_chat history (user/assistant/tool only)
 
 | 职责 | 包 / 符号 |
 |------|-----------|
-| 注入入口 | `internal/llm/client.go` — `withBootLeaderSystemMessage`, `ensureCataBrainExcerptSystem`, `buildHTTPChatRequest` |
-| boot 文件路径 | `internal/cata/brain/paths.go` — `BootLeaderPath()` → `~/.cata/global/boot-assembler.md`（优先）或 `brain/boot-assembler.md` |
+| 注入入口 | `internal/llm/client.go` — `assembleSystemForRole`, `buildHTTPChatRequest` |
+| 角色卡片 | `internal/llm/rolecard.go` — `CardForRole` → `internal/llm/rolecards/{chat,worker,evolve}.md` |
 | brain 节选正文 | `internal/cata/brain/terminal_context.go` — `TerminalBrainSystemExtension` |
 | 路径 / 运行时 | `internal/cata/brain/context_paths.go` — `TerminalPathsSystemBlock`, `SetOutputCwd` |
 | Skills 块 | `internal/cata/brain/skills_prompt.go` — `SkillsPromptBlock` |
@@ -255,7 +255,7 @@ socket_chat history (user/assistant/tool only)
 **发往 API 的 `messages` 顺序**（终端，有 boot 文件时）：
 
 ```
-[0] system  ① boot-assembler（~/.cata/global/，≤10000 runes）
+[0] system  ① 角色身份（`internal/llm/rolecards/chat.md`，≤10000 runes）
             · 身份 + 优先级栈 + 交互底线（不写路径表）
 [1] system  ② 单条 brain 节选（terminal_context.go），自上而下：
         · 【Cata 路径】TerminalPathsSystemBlock — 仅本轮绝对路径与本机环境
@@ -284,7 +284,7 @@ socket_chat history (user/assistant/tool only)
 
 | 项 | 上限 | 位置 |
 |----|------|------|
-| boot-assembler | 10000 runes | `maxBootLeaderRunes` |
+| 角色卡片身份 | 10000 runes | `maxBootLeaderRunes` |
 | 单文件 brain 摘录 | 6500 bytes | `maxBrainExcerptBytesPerFile` |
 | brain 摘录合计 | 20000 bytes | `maxBrainExcerptBytesTotal` |
 | memory/index 注入 | 2800 bytes | `maxIndexPromptBytes` |
@@ -310,7 +310,7 @@ socket_chat history (user/assistant/tool only)
     observe → LLM 决策 (idle|consolidate|crystallize_skill|…) → ApplyUpdates → 确定性 compact（去重）→ 索引同步
 
 项目主要内容约束:
-    按意图选 patch 模式（见 prompt/evolve/patch_modes.md）
+    按意图选 patch 模式（见 internal/llm/rolecards/evolve.md）
     更新已有 ## 节 → replace_section；memory 流水 → append；fill/compact → overwrite
     超 3500B 触发 compact:*；补丁后 CompactMarkdown 去重
 

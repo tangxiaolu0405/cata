@@ -20,12 +20,12 @@
 | **`~/.cata/`** | **CATA_HOME**：引导型提示词（`global/`）、运行时记忆（`brain/workspaces/<id>/memory`）、config、socket、registry |
 | **`focus_path/.cata/`** | **项目主要内容**：`persona.local`、`modes/<mode>/*`、`skills/<id>/*`、`workspace.yaml` |
 | **当前工作目录 cwd** | **产出区**：代码与命令结果；`run_command` 与默认文件工具在此 |
-| **仓库 `brain/`** | 模板种子（`cata init` → `~/.cata/global/`；`cata initconfig` 种子 config.json） |
+| **仓库 `internal/cata/brain/guidance/` + `internal/llm/rolecards/`** | 引导层模板 + 角色卡片（`cata init` seed 到 `~/.cata/global/`；`cata initconfig` 种子 config.json） |
 
 `focus_path`（git 根 / `.cata/workspace.yaml` / cwd）决定绑定哪一格脑子（`ws_id`），**不把产出存进 `~/.cata`**。
 
 **双根写入**：
-- **引导**（`~/.cata/global/`）：constraints、behavior、boot-assembler — 用户或 `cata init` 维护；**evolve 不写**
+- **引导**（`~/.cata/global/`）：constraints、behavior、delegate-guide — 用户或 `cata init` 维护；**evolve 不写**（角色身份见 `internal/llm/rolecards/`）
 - **主要内容**（`focus_path/.cata/`）：persona、modes、skills — **server + 后台 evolve** 维护
 - **运行时记忆**（`~/.cata/brain/workspaces/<id>/`）：short/long/archive、index、evolution_log — server 追加 + evolve 提炼
 
@@ -39,7 +39,7 @@
 |----|------|
 | **`internal/cata/`** | 核心 agent：`server`、`client`（TUI）、`brain`、`evolve`、`config`、`clock`、`execcmd` |
 | **`internal/gateway/`** | 渠道适配子模块（Telegram / QQ）→ 同一 Unix socket worker |
-| **`internal/llm/`** | OpenAI 兼容 Chat；出站前注入 boot-assembler + brain 节选 |
+| **`internal/llm/`** | OpenAI 兼容 Chat；出站前注入角色卡片 + brain 节选 |
 | **`internal/mcp/`** | MCP 客户端（browser 等） |
 
 ## 当前实现
@@ -51,7 +51,7 @@
 | **`cmd/cata-gateway`** | 渠道入口；凭证驱动并发启渠道 |
 | **`cmd/cata-pet`** | 可选桌宠客户端（Wails + `cmd/cata-pet/pet`）；同一 socket，不改 server |
 | **`internal/cata/server`** | Unix socket、终端 chat 工具循环 |
-| **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **boot-assembler** + **brain 节选**（见下文「提示词组装」） |
+| **`internal/llm`** | OpenAI 兼容 Chat；出站前注入 **角色卡片** + **brain 节选**（见下文「提示词组装」） |
 | **`internal/cata/brain`** | 双根路径（`project_paths.go`）、工作区解析、终端节选 |
 | **`internal/cata/evolve`** | **仅后台**自主演进：Observe → LLM → 文档补丁 → `evolution_log.json`（无手动 CLI） |
 | **`internal/cata/scheduler`** | 自托管调度框架：排程（机器 `~/.cata/schedules/` + 项目 `<root>/.cata/schedules/`）、cron / interval、环境发现、到点触发（`cata schedule` 守护 + `--once`）；执行走 `scheduler/runner` 真实客户端自发起（见 `docs/schedules.md`） |
@@ -71,13 +71,13 @@
 | `modes/<active_mode>/persona.md` 等 | 项目 `.cata/` | **仅** `internal/cata/evolve` 从 short-term 提炼 |
 | `long-term/`、`archive/` | home 脑子格 | evolve |
 
-详见 **`brain/constraints.md` §记忆分层**。
+详见 **`internal/cata/brain/guidance/constraints.md` §记忆分层**。
 
 ## 自主演进（摘要）
 
 - **触发**：short-term 有新内容等门控（见 `internal/cata/evolve`）；默认周期 600s。
 - **patch 路由**：主要内容 → `focus_path/.cata/`（**active_mode**）；记忆/审计 → home 格；**禁止** `global/*`
-- **防膨胀**：按场景选 patch 模式（`replace_section` / `append` / `overwrite`，见 `prompt/evolve/patch_modes.md`）；超 3.5KB 触发 `compact:*`；补丁后自动去重。
+- **防膨胀**：按场景选 patch 模式（`replace_section` / `append` / `overwrite`，见 `internal/llm/rolecards/evolve.md`）；超 3.5KB 触发 `compact:*`；补丁后自动去重。
 - **无** 手动 `cata evolve` 命令。
 
 ---
@@ -157,11 +157,11 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 ## 提示词组装（与代码对齐）
 
-终端 **socket history** 只存 `user` / `assistant` / `tool`；**系统提示在 HTTP 出站前**由 `internal/llm` 注入（`buildHTTPChatRequest(..., injectBrain=true)` → `withBootLeaderSystemMessage`）。详见 **`design.md` §Context 组装**。
+终端 **socket history** 只存 `user` / `assistant` / `tool`；**系统提示在 HTTP 出站前**由 `internal/llm` 注入（`buildHTTPChatRequest` → `assembleSystemForRole`，按角色卡片 + 相关记忆检索 + brain 节选）。详见 **`design.md` §Context 组装**。
 
 | 顺序 | API `messages[]` | 来源（代码） |
 |------|------------------|--------------|
-| ① | `system` boot-assembler | `loadBootLeaderPrompt()` ← `brain.BootLeaderPath()` → 优先 `~/.cata/global/boot-assembler.md`，否则 `brain/boot-assembler.md`；≤10000 码点；**只含身份/优先级/交互，不复述路径表** |
+| ① | `system` 角色身份 | 角色卡片 `internal/llm/rolecards/{chat,worker,evolve}.md` → `Client.card.Body`（`assembleSystemForRole`）；≤10000 码点；**只含身份/协议，不复述路径表** |
 | ② | `system` brain 节选 | `brain.TerminalBrainSystemExtension()`（单条 system，内部分段） |
 | ③+ | `user` / `assistant` / `tool` | `internal/cata/server/socket_chat.go` 内存 history |
 | 并行 | `tools[]` | 内置工具 + MCP（不经 messages 拼接正文） |
@@ -222,7 +222,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**；桌宠看 **`cmd/cata-pet`**（含 `pet/` 子包与 `frontend/`）。
 2. 路径以 **`internal/cata/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
 3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
-4. 勿虚构路径；勿把仓库 `brain/`（模板）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
+4. 勿虚构路径；勿把角色卡片/引导模板（`internal/llm/rolecards/`、`internal/cata/brain/guidance/`）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
 
 ---
 
@@ -230,7 +230,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 1. 本文件  
 2. **`design.md`**（架构、Context 组装、NDJSON 协议）  
-3. `~/.cata/global/constraints.md`（或仓库模板 `brain/constraints.md`）  
+3. `~/.cata/global/constraints.md`（或模板 `internal/cata/brain/guidance/constraints.md`）  
 4. 提示词代码：`internal/llm/client.go`、`internal/cata/brain/terminal_context.go`、`internal/llm/prompt_log.go`  
 5. 对话循环：`internal/cata/server/socket_chat.go`、`internal/cata/client/tui.go`  
 6. 演进：`internal/cata/evolve/engine.go`  

@@ -10,7 +10,7 @@ inject: off
 
 ## 双根目录（必遵）
 
-- **引导型** `~/.cata/global/`（constraints、behavior、boot-assembler）：全机共享，**禁止** patch；由用户或 init 维护
+- **引导型** `~/.cata/global/`（constraints、behavior、delegate-guide）：全机共享，**禁止** patch；由用户或 init 维护
 - **主要内容** `<focus_path>/.cata/`（persona.local、modes/<active_mode>/*、skills/*）：本 workspace 项目上下文，**由 evolve 迭代**
 - **运行时记忆** `~/.cata/brain/workspaces/<id>/`（memory/*、meta.json、evolution_log.json）：本 workspace 对话流水与长期记忆
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-//go:embed guidance/constraints.md guidance/behavior.md guidance/boot-assembler.md guidance/minimal-boot.md guidance/delegate-guide.md guidance/worker-contract.md guidance/delegate-task-tool.json
+//go:embed guidance/constraints.md guidance/behavior.md guidance/delegate-guide.md guidance/delegate-task-tool.json
 var embeddedGuidanceFS embed.FS
 
 // guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从嵌入模板覆盖 ~/.cata/global 引导文件。
@@ -55,12 +55,9 @@ func EnsureCataLayout() error {
 
 func seedGlobalFromRepo() error {
 	mapping := map[string]string{
-		FileGlobalConstraints:    "guidance/constraints.md",
-		FileGlobalBehavior:       "guidance/behavior.md",
-		FileGlobalBoot:           "guidance/boot-assembler.md",
-		FileGlobalMinimalBoot:    "guidance/minimal-boot.md",
-		FileGlobalDelegateGuide:  "guidance/delegate-guide.md",
-		FileGlobalWorkerContract: "guidance/worker-contract.md",
+		FileGlobalConstraints:   "guidance/constraints.md",
+		FileGlobalBehavior:      "guidance/behavior.md",
+		FileGlobalDelegateGuide: "guidance/delegate-guide.md",
 	}
 	force := shouldForceSyncGlobalGuidance()
 	for dstName, srcPath := range mapping {
@@ -127,16 +124,8 @@ func seedGlobalDefaults() error {
 	if err := ensureFile(filepath.Join(globalDir(), FileGlobalBehavior), "# Global behavior\n\n"); err != nil {
 		return err
 	}
-	if err := ensureFile(filepath.Join(globalDir(), FileGlobalBoot), defaultBootAssembler); err != nil {
-		return err
-	}
 	return nil
 }
-
-const defaultBootAssembler = `# Boot
-
-你是 Cata，终端原生 AI 助手。冲突时优先：constraints → behavior → 【Cata 路径】→ 项目内容 → memory/skills。绝对路径只认本轮路径块。
-`
 
 // InitDirectory 创建 ~/.cata 布局、global 模板，并迁移旧版扁平 brain（若有）。
 func InitDirectory() error {

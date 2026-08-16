@@ -175,7 +175,7 @@ Telegram 等 ──▶ cata-gateway ──────────┘
 ```
 
 **双根目录**：
-- **`~/.cata/`** — 引导（`global/constraints|behavior|boot-assembler`）、记忆（`brain/workspaces/<id>/memory`）、config、socket
+- **`~/.cata/`** — 引导（`global/constraints|behavior|delegate-guide`）、记忆（`brain/workspaces/<id>/memory`）、config、socket
 - **`focus_path/.cata/`** — 项目主要内容（`persona.local`、`modes/<mode>/*`、`skills/*`）；可随 git 提交（按需 `.gitignore`）
 
 `focus_path` 由产出区向上解析（git 根 / `.cata/workspace.yaml` / cwd），决定绑定哪一格脑子，**不等于**产出区。
@@ -228,9 +228,8 @@ internal/
 - `agents.md` — 项目边界与 AI 约束（与代码对齐）
 - `design.md` — 完整系统设计（双根存储、Context 组装、演进、TUI 协议）
 - `brain/directory-plan.md` — 脑子 vs 产出区 vs 项目 `.cata`
-- `brain/constraints.md` — 约束种子 → `~/.cata/global/constraints.md`
-- `brain/behavior.md` — 行为 SOP 种子 → `~/.cata/global/behavior.md`
-- `brain/boot-assembler.md` — 运行时引导种子 → `~/.cata/global/boot-assembler.md`
+- `internal/cata/brain/guidance/` — 引导层模板（constraints / behavior / delegate-guide）→ `cata init` seed 到 `~/.cata/global/`
+- `internal/llm/rolecards/` — 角色卡片（chat / worker / evolve 的身份 + 协议，编译期 embed）
 
 ## 依赖
 

@@ -12,12 +12,9 @@ const (
 	FileWorkspacesJSON = "workspaces.json"
 
 	DirGlobal                  = "global"
-	FileGlobalConstraints      = "constraints.md"
-	FileGlobalBehavior         = "behavior.md"
-	FileGlobalBoot             = "boot-assembler.md"
-	FileGlobalMinimalBoot      = "minimal-boot.md"
-	FileGlobalDelegateGuide    = "delegate-guide.md"
-	FileGlobalWorkerContract   = "worker-contract.md"
+	FileGlobalConstraints   = "constraints.md"
+	FileGlobalBehavior      = "behavior.md"
+	FileGlobalDelegateGuide = "delegate-guide.md"
 	FileGlobalDelegateTaskTool = "delegate-task-tool.json"
 
 	DirBrain      = "brain"

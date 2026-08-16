@@ -27,7 +27,7 @@
 | `skills/<id>/*` | 技能与脚本 | evolve | | | ✓ | ✓ | `brain/skills/...` |
 
 \* scaffold 空壳时不出现在 chat 节选，填满后注入。  
-† 按场景选 patch 模式（见 `prompt/evolve/patch_modes.md`）：更新已有节 → `replace_section`；memory 流水 → `append`；fill/compact → `overwrite`。补丁后 server 自动 **compact** 去重。  
+† 按场景选 patch 模式（见 `internal/llm/rolecards/evolve.md`）：更新已有节 → `replace_section`；memory 流水 → `append`；fill/compact → `overwrite`。补丁后 server 自动 **compact** 去重。  
 ‡ evolve 禁止 `append` capabilities；`write`/`overwrite` 须保留 `mcp:`。
 
 ## home 脑子格（`~/.cata/brain/workspaces/<ws_id>/`）
@@ -47,7 +47,7 @@
 |------|------|-------|--------|-----------|
 | `global/constraints.md` | **引导** | **否** | ✓ | `global/constraints.md` |
 | `global/behavior.md` | **引导** | **否** | ✓ | `global/behavior.md` |
-| `global/boot-assembler.md` | **引导** | **否** | ✓（boot-leader） | `global/boot-assembler.md` |
+| `global/delegate-guide.md` | **引导** | **否** | ✓（委派 SOP） | `global/delegate-guide.md` |
 
 ## Chat 文件工具路径
 
@@ -68,7 +68,7 @@
 | `append` | **memory/** 流水；项目内容仅用于无法归入任何节的新增 |
 | `delete` / `delete_section` | 删除文件或过时节 |
 
-选用规则见 **`prompt/evolve/patch_modes.md`**（编入 evolve system prompt）。
+选用规则见 **`internal/llm/rolecards/evolve.md`**（编入 evolve system prompt）。
 
 ## consolidate 与 compact
 
@@ -79,7 +79,7 @@
 
 1. **双根路由**：`ResolveBrainDocAbs` / `ApplyUpdates`。
 2. **禁止** per-workspace evolve patch `global/*`。
-3. **项目主要内容**：按 `prompt/evolve/patch_modes.md` 选模式；非一律禁止 append。
+3. **项目主要内容**：按 `internal/llm/rolecards/evolve.md` 选模式；非一律禁止 append。
 4. **capabilities.yaml**：禁止 evolve `append`；须保留 `mcp:`。
 5. **archive**：写入后不再作为 evolve Input。
 
@@ -89,6 +89,6 @@
 |------|------------|
 | `constraints.md` | `~/.cata/global/constraints.md` |
 | `behavior.md` | `~/.cata/global/behavior.md` |
-| `boot-assembler.md` | `~/.cata/global/boot-assembler.md` |
+| `delegate-guide.md` | `~/.cata/global/delegate-guide.md` |
 | `modes/_default/*` | 项目 `.cata` scaffold 种子（默认前台） |
 | `modes/<id>/*` | 专职 mode：**不**脚手架预种；由 evolve `crystallize_mode` 或用户自建 |

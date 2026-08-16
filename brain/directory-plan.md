@@ -22,7 +22,7 @@
 ├── global/                         # 引导型提示词（evolve 禁止 patch）
 │   ├── constraints.md
 │   ├── behavior.md
-│   └── boot-assembler.md
+│   └── delegate-guide.md
 ├── locks/
 ├── skills/                         # 全局 skill 回退目录
 └── brain/workspaces/<ws_id>/       # home 脑子格（运行时记忆）
@@ -65,7 +65,8 @@
 
 | 位置 | 角色 |
 |------|------|
-| `brain/constraints.md` 等 | 模板种子 → `cata init` → `~/.cata/global/` |
+| `internal/cata/brain/guidance/` | 引导层模板（constraints / behavior / delegate-guide）→ `cata init` → `~/.cata/global/` |
+| `internal/llm/rolecards/` | 角色卡片（chat / worker / evolve 身份 + 协议，编译期 embed） |
 | `~/.cata/` | 引导 + 运行时记忆 + config |
 | `focus_path/.cata/` | 项目主要内容（evolve 迭代 **active_mode**） |
 | cwd | 产出区 |
