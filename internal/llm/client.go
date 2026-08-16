@@ -228,20 +228,59 @@ func withBootLeaderSystemMessageFor(messages []Message, profile brain.PromptProf
 
 // withBootLeaderSystemMessageForCtx 与 For 版相同，但 brain 节选按 ctx 中 ChatContext 的
 // 脑子分区/产出区/运行环境组装（多 cata 并行勿依赖全局 Active/OutputCwd/RuntimeEnv）。
+// 组装顺序：boot-leader → 相关记忆检索块 → brain 节选（coalesce 后仍保持该顺序）。
 func withBootLeaderSystemMessageForCtx(ctx context.Context, messages []Message, profile brain.PromptProfile) []Message {
 	prompt := effectiveBootLeaderPromptFor(profile)
-	if prompt == "" {
-		return ensureCataBrainExcerptSystemForCtx(ctx, messages, profile)
+	out := messages
+	if prompt != "" {
+		alreadyBoot := len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt
+		if !alreadyBoot {
+			out = make([]Message, 0, len(messages)+1)
+			out = append(out, Message{Role: "system", Content: prompt})
+			out = append(out, messages...)
+		}
 	}
-
-	if len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt {
-		return ensureCataBrainExcerptSystemForCtx(ctx, messages, profile)
-	}
-
-	out := make([]Message, 0, len(messages)+1)
-	out = append(out, Message{Role: "system", Content: prompt})
-	out = append(out, messages...)
+	out = ensureRetrievedMemorySystemForCtx(ctx, out, profile)
 	return ensureCataBrainExcerptSystemForCtx(ctx, out, profile)
+}
+
+// ensureRetrievedMemorySystemForCtx 在 boot-leader 之后插入与当前请求相关的记忆检索块。
+// 幂等（已注入则跳过）；minimal 档（worker）不检索。
+func ensureRetrievedMemorySystemForCtx(ctx context.Context, msgs []Message, profile brain.PromptProfile) []Message {
+	if brain.ProfileRank(profile) < 1 {
+		return msgs
+	}
+	for _, m := range msgs {
+		if m.Role == "system" && strings.HasPrefix(strings.TrimSpace(m.Content), brain.RetrievedMemorySystemPrefix) {
+			return msgs
+		}
+	}
+	query := lastUserMessageContent(msgs)
+	if strings.TrimSpace(query) == "" {
+		return msgs
+	}
+	block := brain.RetrievedMemorySystemBlock(ctx, profile, query)
+	if strings.TrimSpace(block) == "" {
+		return msgs
+	}
+	if len(msgs) >= 1 && msgs[0].Role == "system" {
+		out := make([]Message, 0, len(msgs)+1)
+		out = append(out, msgs[0])
+		out = append(out, Message{Role: "system", Content: block})
+		out = append(out, msgs[1:]...)
+		return out
+	}
+	return append([]Message{{Role: "system", Content: block}}, msgs...)
+}
+
+// lastUserMessageContent 从后往前找最后一条 user 消息正文（检索 query）。
+func lastUserMessageContent(msgs []Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
 }
 
 // ensureCataBrainExcerptSystem 在 boot-leader 之后插入路径块 + 脑子节选（若尚未存在）。
