@@ -90,6 +90,7 @@ type Client struct {
 	httpClient       *http.Client
 	streamHTTPClient *http.Client
 	adapter          APIAdapter
+	card             *RoleCard // 角色卡片：身份 + 协议 + 采样 + 注入策略（NewClientForRole 挂载）
 }
 
 func resolveInitialAPIURL(apiFormat, configured string) (active, configuredOut string) {
@@ -283,6 +284,30 @@ func lastUserMessageContent(msgs []Message) string {
 	return ""
 }
 
+// assembleSystemForRole 按角色卡片组装 system 消息：
+// 身份（卡片 body）→ 相关记忆检索块 → brain 节选（coalesce 后仍保持该顺序）。
+// 未挂卡片时回退到 boot-leader（兼容非角色入口）。
+func (c *Client) assembleSystemForRole(ctx context.Context, messages []Message, profile brain.PromptProfile) []Message {
+	body := ""
+	if c.card != nil {
+		body = strings.TrimSpace(c.card.Body)
+	}
+	if body == "" {
+		body = effectiveBootLeaderPromptFor(profile)
+	}
+	out := messages
+	if body != "" {
+		already := len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == body
+		if !already {
+			out = make([]Message, 0, len(messages)+1)
+			out = append(out, Message{Role: "system", Content: body})
+			out = append(out, messages...)
+		}
+	}
+	out = ensureRetrievedMemorySystemForCtx(ctx, out, profile)
+	return ensureCataBrainExcerptSystemForCtx(ctx, out, profile)
+}
+
 // ensureCataBrainExcerptSystem 在 boot-leader 之后插入路径块 + 脑子节选（若尚未存在）。
 func ensureCataBrainExcerptSystem(msgs []Message) []Message {
 	return ensureCataBrainExcerptSystemFor(msgs, brain.ActivePromptProfile())
@@ -392,14 +417,32 @@ func resolveModelForRole(cfg config.LLMConfig, role Role) string {
 // - 当配置文件启用 LLM 时，从 config.Config.LLM 读取 Provider/APIURL/APIKey/MaxTokens/Timeout，并按角色解析模型名。
 // - 当配置未启用或尚未加载时，回退到 NewClient（环境变量与默认策略）。
 func NewClientForRole(role Role) (*Client, error) {
+	var c *Client
+	var err error
 	if config.Config != nil && config.Config.LLM.Enabled {
 		llmCfg := config.Config.LLM
 		model := resolveModelForRole(llmCfg, role)
-		return NewClientFromLLMConfig(llmCfg, model)
+		c, err = NewClientFromLLMConfig(llmCfg, model)
+	} else {
+		c, err = NewClient()
 	}
+	if err != nil {
+		return nil, err
+	}
+	if err := c.attachRoleCard(role); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
 
-	// 配置未启用或未加载，沿用现有环境变量与默认逻辑
-	return NewClient()
+// attachRoleCard 加载并挂载角色卡片。
+func (c *Client) attachRoleCard(role Role) error {
+	card, err := CardForRole(role)
+	if err != nil {
+		return err
+	}
+	c.card = card
+	return nil
 }
 
 // NewClientFromLLMConfig 从 LLMConfig 片段创建客户端（api_format 决定协议，provider 仅标签）。

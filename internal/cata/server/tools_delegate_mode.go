@@ -167,8 +167,7 @@ func (t *delegateModeTool) Execute(ctx context.Context, conn net.Conn, argsJSON 
 // buildModeWorkerPromptFor 显式指定产出区（多 chat 并行勿依赖全局 OutputCwd）。
 func buildModeWorkerPromptFor(modeID, caseID, task, parentContext, modeBundle string, readArts, writeArts []string, outCwd string) string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(brain.LoadWorkerContract()))
-	b.WriteString("\n\n")
+	// worker 身份 + STATUS 协议由 worker 角色卡片（system）提供；此处拼 mode 角色卡与任务上下文。
 	b.WriteString("You are running as a **specialist mode**, not the orchestrator. Follow the role card.\n\n")
 	if out := strings.TrimSpace(outCwd); out != "" {
 		fmt.Fprintf(&b, "## Output cwd\n\n`%s`\n\n", out)

@@ -10,10 +10,9 @@ import (
 )
 
 // buildWorkerSystemPromptFor 显式指定产出区与运行环境（多 chat 并行勿依赖全局 OutputCwd/ActiveRuntimeEnv）。
+// worker 的角色身份与 STATUS 协议由 worker 角色卡片（system）提供，此处只拼动态任务上下文。
 func buildWorkerSystemPromptFor(task, parentContext string, out string, env *brain.RuntimeEnv) string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(brain.LoadWorkerContract()))
-	b.WriteString("\n\n")
 	if out = strings.TrimSpace(out); out != "" {
 		b.WriteString("## Output cwd\n\n`")
 		b.WriteString(out)

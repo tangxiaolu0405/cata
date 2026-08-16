@@ -9,11 +9,22 @@ import (
 
 func TestBuildWorkerSystemPrompt(t *testing.T) {
 	p := buildWorkerSystemPromptFor("Run go test ./pkg/foo", "module root: ./pkg/foo", "", nil)
-	if !strings.Contains(p, "worker") || !strings.Contains(p, "STATUS:") {
-		t.Fatalf("missing worker contract: %q", p)
+	// worker 身份与 STATUS 协议由角色卡片（system）提供，此处只拼动态任务上下文。
+	if strings.Contains(p, "STATUS:") {
+		t.Fatalf("worker contract should live in role card, not user prompt: %q", p)
 	}
 	if !strings.Contains(p, "module root") || !strings.Contains(p, "go test") {
 		t.Fatalf("missing task/context: %q", p)
+	}
+}
+
+func TestWorkerRoleCardHasContract(t *testing.T) {
+	card, err := llm.CardForRole(llm.RoleWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(card.Body, "STATUS:") || !strings.Contains(card.Body, "worker") {
+		t.Fatalf("worker role card should carry the contract: %q", card.Body)
 	}
 }
 

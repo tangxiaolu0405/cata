@@ -102,12 +102,15 @@ func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []
 
 // buildHTTPChatRequest 构建 HTTP 请求（stream 为 true 时使用 SSE）。
 // injectBrain 由 req.NoBrainInject 控制；演进模块应设 NoBrainInject=true。
+// 角色卡片（Client.card）决定默认注入档位 / 采样 / thinking。
 func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("API key is empty")
 	}
+	card := c.card
+	injectOff := card != nil && card.Inject == InjectOff
 	msgs := req.Messages
-	if !req.NoBrainInject {
+	if !req.NoBrainInject && !injectOff {
 		profile := req.BrainProfile
 		if profile == "" {
 			if cc := brain.ChatContextFrom(ctx); cc != nil && cc.Profile != "" {
@@ -115,19 +118,34 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 			}
 		}
 		if profile == "" {
-			profile = brain.ActivePromptProfile()
+			if card != nil {
+				profile = card.InjectProfile()
+			} else {
+				profile = brain.ActivePromptProfile()
+			}
 		}
-		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessageForCtx(ctx, req.Messages, profile)))
+		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(c.assembleSystemForRole(ctx, req.Messages, profile)))
 	} else {
 		msgs = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
 	// vLLM 等严格端点：system 只能在最前且通常只要一条（否则 400 System message must be at the beginning）。
 	msgs = coalesceSystemMessagesForAPI(msgs)
 	req.Messages = msgs
+
+	// 采样：卡片为默认，req 显式值优先。
+	temperature := req.Temperature
+	if temperature <= 0 && card != nil {
+		temperature = card.Temperature
+	}
+	disableThinking := req.DisableThinking
+	if card != nil && card.DisableThinking {
+		disableThinking = true
+	}
+
 	log.Printf("LLM Request: URL=%s, Model=%s, format=%s label=%s adapter=%T, stream=%v, APIKey present=%v",
 		c.apiURL, c.model, c.apiFormat, c.providerLabel, c.adapter, stream, c.apiKey != "")
 
-	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream, req.DisableThinking)
+	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
 		return nil, err
 	}
