@@ -1,0 +1,132 @@
+package tunnel
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"cata/internal/cata/tunnel"
+)
+
+func newTestHandlerServer(t *testing.T, opts HandlerOptions) (*httptest.Server, *Registry, *MachinesStore) {
+	t.Helper()
+	reg := NewRegistry()
+	if opts.Machines == nil {
+		opts.Machines = NewMachinesStore(filepath.Join(t.TempDir(), "machines.json"))
+	}
+	srv := httptest.NewServer(Handler(reg, opts))
+	return srv, reg, opts.Machines
+}
+
+func wsURL(srv *httptest.Server, agent string) string {
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/?agent=" + agent
+}
+
+func TestHandlerHTTPLayerAuth(t *testing.T) {
+	srv, _, _ := newTestHandlerServer(t, HandlerOptions{Token: "secret"})
+	defer srv.Close()
+
+	// 非 websocket Upgrade → 400。
+	resp, err := http.Get(srv.URL + "?agent=a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-websocket: want 400, got %d", resp.StatusCode)
+	}
+
+	// 错 token（带 Upgrade）→ 401。
+	req, _ := http.NewRequest("GET", srv.URL+"?agent=a", nil)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Authorization", "Bearer wrong")
+	resp2, _ := http.DefaultClient.Do(req)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad token: want 401, got %d", resp2.StatusCode)
+	}
+
+	// 缺 agent 参数 → 400。
+	req3, _ := http.NewRequest("GET", srv.URL, nil)
+	req3.Header.Set("Upgrade", "websocket")
+	req3.Header.Set("Authorization", "Bearer secret")
+	resp3, _ := http.DefaultClient.Do(req3)
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing agent: want 400, got %d", resp3.StatusCode)
+	}
+
+	// 白名单外 → 403。
+	srv2, _, _ := newTestHandlerServer(t, HandlerOptions{Token: "secret", AllowAgentIDs: []string{"allowed"}})
+	defer srv2.Close()
+	req4, _ := http.NewRequest("GET", srv2.URL+"?agent=other", nil)
+	req4.Header.Set("Upgrade", "websocket")
+	req4.Header.Set("Authorization", "Bearer secret")
+	resp4, _ := http.DefaultClient.Do(req4)
+	resp4.Body.Close()
+	if resp4.StatusCode != http.StatusForbidden {
+		t.Fatalf("not allowed: want 403, got %d", resp4.StatusCode)
+	}
+}
+
+func TestHandlerHelloMachineAuth(t *testing.T) {
+	srv, reg, store := newTestHandlerServer(t, HandlerOptions{Token: "secret", Machines: newStore(t)})
+	defer srv.Close()
+	goodToken, _ := store.IssueToken("machine-1")
+
+	// 错误 machine token → FrameError。
+	conn := dialWS(t, srv, "agent-1", "secret")
+	defer conn.Close()
+	_ = conn.WriteJSON(tunnel.Frame{Type: tunnel.FrameHello, AgentID: "agent-1",
+		MachineID: "machine-1", MachineToken: "wrong", Protocol: tunnel.ProtocolName, Version: tunnel.Version})
+	var errFrame tunnel.Frame
+	if err := conn.ReadJSON(&errFrame); err != nil {
+		t.Fatal(err)
+	}
+	if errFrame.Type != tunnel.FrameError {
+		t.Fatalf("bad machine token: want FrameError, got %q (%q)", errFrame.Type, errFrame.Message)
+	}
+	conn.Close()
+
+	// 正确 machine token → 注册成功。
+	conn2 := dialWS(t, srv, "agent-1", "secret")
+	defer conn2.Close()
+	_ = conn2.WriteJSON(tunnel.Frame{Type: tunnel.FrameHello, AgentID: "agent-1",
+		MachineID: "machine-1", MachineToken: goodToken, Protocol: tunnel.ProtocolName, Version: tunnel.Version})
+	waitForOnline(t, reg, "agent-1")
+}
+
+func dialWS(t *testing.T, srv *httptest.Server, agent, token string) *websocket.Conn {
+	t.Helper()
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer "+token)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv, agent), hdr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	return conn
+}
+
+func waitForOnline(t *testing.T, reg *Registry, agentID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, a := range reg.OnlineAgents() {
+			if a.AgentID == agentID {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("agent %s did not come online", agentID)
+}
+
+func newStore(t *testing.T) *MachinesStore {
+	t.Helper()
+	return NewMachinesStore(filepath.Join(t.TempDir(), "machines.json"))
+}
