@@ -221,7 +221,7 @@ cata chat --dir ~/a --dir ~/b     # 多产出区，第一个是主产出区
 
 1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**；桌宠看 **`cmd/cata-pet`**（含 `pet/` 子包与 `frontend/`）。
 2. 路径以 **`internal/cata/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
-3. **同机一个 server**（`cata` 自动 `run --managed` 或手动 `cata run`）；**同一产出区目录只能开一个 chat**；**最后一个 chat 断开**后 managed server 自动退出。
+3. **一个工作空间 = 一个 agent 进程**（`cata chat` 按需拉起，注册的常驻，空闲超时回收）；**同一产出区目录只能开一个 chat**；per-ws socket 在 `~/.cata/sockets/<ws_id>.sock`。legacy `cata run` 仅作 cata-pet / scheduler 内部支撑，chat 不依赖。
 4. 勿虚构路径；勿把角色卡片/引导模板（`internal/llm/rolecards/`、`internal/cata/brain/guidance/`）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
 5. **提交前必须全量自检**：`gofmt -l .`（应为空）→ `go build ./...` → `go test ./...`，三者通过才提交并推送。只对改动文件逐个 gofmt 会漏掉其它未格式化文件（CI 会因 `gofmt -l .` 失败）。
 

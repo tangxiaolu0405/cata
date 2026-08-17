@@ -154,8 +154,8 @@ export CATA_WORKER_ROOT="$HOME/.cata_worker"
 export CATA_SOCKET="$HOME/.cata/cata.sock"
 export TELEGRAM_ALLOWED_USERS="123456789"
 
-cata run          # 终端 1
-cata-gateway      # 终端 2
+cata agent --workspace <ws_id>   # 每个工作空间一个 agent（默认由 cata chat 自动拉起）
+cata-gateway                     # 终端 2
 ```
 
 或设置 `CATA_GATEWAY_EDITION=channel` / `edition: channel`（见 `gateway.example.channel.json`）。
@@ -165,8 +165,9 @@ Telegram：`/start` `/help` `/clear`（危险命令按钮确认）。QQ：`/help
 ## 架构
 
 ```
-cata chat / cata-pet ──Unix Socket──▶ cata run (server) ──HTTP──▶ LLM
-Telegram 等 ──▶ cata-gateway ──────────┘
+cata chat ──Unix Socket──▶ cata agent (per-ws, ~/.cata/sockets/<ws_id>.sock) ──HTTP──▶ LLM
+cata-pet ──▶ legacy cata run（仅桌宠/scheduler 内部支撑）──┘
+Telegram 等 ──▶ cata-gateway ──▶ 在线/本机 agent
                                 │
                                 ├── ~/.cata/global/          引导型提示词
                                 ├── ~/.cata/brain/ws/<id>/   运行时记忆
