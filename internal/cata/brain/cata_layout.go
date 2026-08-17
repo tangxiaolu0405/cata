@@ -14,7 +14,7 @@ import (
 var embeddedGuidanceFS embed.FS
 
 // guidanceTemplateVersion 递增后，下次 EnsureCataLayout 会从嵌入模板覆盖 ~/.cata/global 引导文件。
-const guidanceTemplateVersion = 6
+const guidanceTemplateVersion = 7
 
 const fileGuidanceVersion = ".guidance_version"
 
@@ -40,6 +40,8 @@ func EnsureCataLayout() error {
 	if err := seedGlobalFromRepo(); err != nil {
 		return err
 	}
+	// 自动迁移：删除旧的角色身份文件（已迁到 internal/llm/rolecards/，运行时覆盖在 global/roles/）。
+	removeDeprecatedGlobalIdentityFiles()
 	if err := MigrateWorkspaceNaming(); err != nil {
 		return fmt.Errorf("migrate workspace naming: %w", err)
 	}
@@ -82,6 +84,19 @@ func seedGlobalFromRepo() error {
 		return err
 	}
 	return seedGlobalDefaults()
+}
+
+// removeDeprecatedGlobalIdentityFiles 删除旧版角色身份文件（迁到角色卡片后不再读）。
+// boot-assembler/minimal-boot/worker-contract 曾是 ~/.cata/global 下的身份文件，
+// 现由 internal/llm/rolecards/（内置默认 + global/roles/ 运行时覆盖）取代。删除是安全幂等的。
+func removeDeprecatedGlobalIdentityFiles() {
+	for _, name := range []string{
+		"boot-assembler.md",  // 旧身份文件，已迁到角色卡片
+		"minimal-boot.md",    // 旧身份文件，已迁到 worker 角色卡片
+		"worker-contract.md", // 旧身份文件，已迁到 worker 角色卡片
+	} {
+		_ = os.Remove(filepath.Join(globalDir(), name))
+	}
 }
 
 func seedDelegateTaskToolJSON(force bool) error {

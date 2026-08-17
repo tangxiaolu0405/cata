@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"cata/internal/cata/brain"
@@ -178,20 +177,14 @@ func newHTTPClientPair(timeout time.Duration) (*http.Client, *http.Client) {
 	return regular, stream
 }
 
-var (
-	bootLeaderOnce   sync.Once
-	bootLeaderPrompt string
-)
-
 // loadBootLeaderPrompt 返回主 chat 角色卡片的身份正文（历史名保留，供日志/token 估算标注）。
 // 实际出站由 assembleSystemForRole 按 Client.card 组装；此处仅作无卡片兜底与日志对齐。
+// 运行时覆盖文件（~/.cata/global/roles/chat.md）编辑后立即生效。
 func loadBootLeaderPrompt() string {
-	bootLeaderOnce.Do(func() {
-		if card, err := CardForRole(RoleChat); err == nil {
-			bootLeaderPrompt = truncateRunes(strings.TrimSpace(card.Body), maxBootLeaderRunes)
-		}
-	})
-	return bootLeaderPrompt
+	if card, err := CardForRole(RoleChat); err == nil {
+		return truncateRunes(strings.TrimSpace(card.Body), maxBootLeaderRunes)
+	}
+	return ""
 }
 
 func effectiveBootLeaderPrompt() string {
@@ -413,6 +406,10 @@ func NewClientForRole(role Role) (*Client, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	// 惰性 seed 运行时角色卡片模板（文件不存在才写）；失败不阻塞（embed 兜底）。
+	if err := EnsureRoleCards(); err != nil {
+		log.Printf("role cards seed: %v", err)
 	}
 	if err := c.attachRoleCard(role); err != nil {
 		return nil, err

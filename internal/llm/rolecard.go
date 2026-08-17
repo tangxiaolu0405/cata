@@ -3,6 +3,8 @@ package llm
 import (
 	"embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,11 +13,12 @@ import (
 )
 
 // RoleCard 一张角色卡片：一个 AgentRole 的静态身份 + 协议 + 采样 + 注入策略。
-// 卡片是编译期 embed 的单一真相；调用点只说「我是哪个角色」，统一按卡片组装。
+// 卡片分两层：embed 内置默认（rolecards/*.md，随二进制）+ 运行时覆盖
+// （~/.cata/global/roles/<role>.md，用户可编辑、立即生效，无需重编）。
 //
 // 与「引导层」（guidance/constraints.md、behavior.md、delegate-guide.md）的区别：
 // 引导层是全机共享的环境规则与委派 SOP（运行时可改、含动态占位符），
-// 角色卡片是某个角色的「我是谁 + 协作协议」（静态，随版本发布）。
+// 角色卡片是某个角色的「我是谁 + 协作协议」。
 
 //go:embed rolecards/*.md
 var roleCardsFS embed.FS
@@ -86,22 +89,59 @@ func indexOfSection(body, title string) int {
 	return idx
 }
 
-var roleCardCache sync.Map // Role -> *RoleCard
+var roleCardCache sync.Map // Role -> *RoleCard（仅缓存 embed 兜底）
 
-// CardForRole 加载某角色的卡片（带缓存）。
+// roleCardsRuntimeDir 角色卡片运行时覆盖目录：~/.cata/global/roles/。
+func roleCardsRuntimeDir() string {
+	return filepath.Join(brain.CataHome(), "global", "roles")
+}
+
+func runtimeRoleCardPath(role Role) string {
+	return filepath.Join(roleCardsRuntimeDir(), roleCardFilename(role)+".md")
+}
+
+// EnsureRoleCards 把内置角色卡片模板 seed 到 ~/.cata/global/roles/。
+// 仅当文件不存在时写；已存在不覆盖（用户可编辑覆盖内置版本，删除该文件即回到内置最新版）。
+func EnsureRoleCards() error {
+	for _, role := range []Role{RoleChat, RoleWorker, RoleEvolution} {
+		dst := runtimeRoleCardPath(role)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		data, err := roleCardsFS.ReadFile("rolecards/" + roleCardFilename(role) + ".md")
+		if err != nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CardForRole 加载某角色的卡片：运行时覆盖优先（每次读文件，立即生效），embed 兜底（缓存）。
 func CardForRole(role Role) (*RoleCard, error) {
 	if role == "" {
 		role = RoleDefault
+	}
+	if p := runtimeRoleCardPath(role); p != "" {
+		if data, err := os.ReadFile(p); err == nil {
+			return buildCardFromRaw(role, string(data)), nil
+		}
 	}
 	if v, ok := roleCardCache.Load(role); ok {
 		if c, ok := v.(*RoleCard); ok {
 			return c, nil
 		}
 	}
-	card, err := loadRoleCard(role)
+	data, err := roleCardsFS.ReadFile("rolecards/" + roleCardFilename(role) + ".md")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("role card %q not found: %w", role, err)
 	}
+	card := buildCardFromRaw(role, string(data))
 	roleCardCache.Store(role, card)
 	return card, nil
 }
@@ -116,13 +156,9 @@ func roleCardFilename(role Role) string {
 	}
 }
 
-func loadRoleCard(role Role) (*RoleCard, error) {
-	fname := roleCardFilename(role) + ".md"
-	data, err := roleCardsFS.ReadFile("rolecards/" + fname)
-	if err != nil {
-		return nil, fmt.Errorf("role card %q not found: %w", role, err)
-	}
-	meta, body := parseRoleCard(string(data))
+// buildCardFromRaw 从 front-matter + body 原文构建 RoleCard。
+func buildCardFromRaw(role Role, raw string) *RoleCard {
+	meta, body := parseRoleCard(raw)
 	card := &RoleCard{
 		Role: role,
 		Body: strings.TrimSpace(body),
@@ -148,7 +184,7 @@ func loadRoleCard(role Role) (*RoleCard, error) {
 	if card.Temperature == 0 {
 		card.Temperature = 0.7
 	}
-	return card, nil
+	return card
 }
 
 // parseRoleCard 解析 front-matter（--- 之间 key: value 行）与 body（其后）。

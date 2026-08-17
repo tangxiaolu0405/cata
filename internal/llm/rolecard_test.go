@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -25,6 +26,8 @@ func TestParseRoleCard(t *testing.T) {
 }
 
 func TestCardForRole(t *testing.T) {
+	// 隔离 CATA_HOME 且不 seed，走 embed 兜底，避免受本机 global/roles/ 覆盖影响。
+	t.Setenv("CATA_HOME", t.TempDir())
 	cases := []struct {
 		role    Role
 		temp    float64
@@ -52,6 +55,52 @@ func TestCardForRole(t *testing.T) {
 		if strings.TrimSpace(card.Body) == "" {
 			t.Errorf("%s body should be non-empty", c.role)
 		}
+	}
+}
+
+func TestRoleCardRuntimeOverride(t *testing.T) {
+	t.Setenv("CATA_HOME", t.TempDir())
+	if err := EnsureRoleCards(); err != nil {
+		t.Fatal(err)
+	}
+	// 修改运行时覆盖文件，CardForRole 应立即反映（不缓存运行时）。
+	p := runtimeRoleCardPath(RoleChat)
+	override := "---\ntemperature: 0.9\ndisable_thinking: true\ninject: full\n---\n覆盖后的身份"
+	if err := os.WriteFile(p, []byte(override), 0644); err != nil {
+		t.Fatal(err)
+	}
+	card, err := CardForRole(RoleChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Temperature != 0.9 {
+		t.Fatalf("temperature = %v, want 0.9", card.Temperature)
+	}
+	if !card.DisableThinking {
+		t.Fatal("disable_thinking should be true")
+	}
+	if card.Body != "覆盖后的身份" {
+		t.Fatalf("body = %q, want override", card.Body)
+	}
+}
+
+func TestEnsureRoleCardsDoesNotOverwrite(t *testing.T) {
+	t.Setenv("CATA_HOME", t.TempDir())
+	if err := EnsureRoleCards(); err != nil {
+		t.Fatal(err)
+	}
+	p := runtimeRoleCardPath(RoleChat)
+	custom := "---\ninject: minimal\n---\n用户自定义"
+	if err := os.WriteFile(p, []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// 再次 EnsureRoleCards 不应覆盖用户自定义。
+	if err := EnsureRoleCards(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(p)
+	if string(data) != custom {
+		t.Fatalf("EnsureRoleCards overwrote user edit: %q", string(data))
 	}
 }
 
