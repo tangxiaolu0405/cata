@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,7 +86,36 @@ func ArchiveSessionLogs() error {
 			}
 		}
 	}
+	// 清理旧归档（name.YYYYMMDD-HHMMSS-RRR.ext），保留最近 maxArchivedLogs 个，防止无限堆积。
+	pruneArchivedLogs(CataHome())
+	pruneArchivedLogs(llmDir)
 	return first
+}
+
+// reArchivedLog 匹配归档日志文件名特征：name.YYYYMMDD-HHMMSS-RRR.ext（archivedLogPath 生成）。
+var reArchivedLog = regexp.MustCompile(`\.\d{8}-\d{6}-\d{3}\.`)
+
+const maxArchivedLogs = 10
+
+// pruneArchivedLogs 删除目录下旧的归档日志，保留最近 keep 个（文件名含时间戳，字典序即时间序）。
+func pruneArchivedLogs(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		return
+	}
+	var archived []string
+	for _, p := range matches {
+		if reArchivedLog.MatchString(filepath.Base(p)) {
+			archived = append(archived, p)
+		}
+	}
+	if len(archived) <= maxArchivedLogs {
+		return
+	}
+	sort.Strings(archived)
+	for _, p := range archived[:len(archived)-maxArchivedLogs] {
+		_ = os.Remove(p)
+	}
 }
 
 func acquireArchiveLock() error {
