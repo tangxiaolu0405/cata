@@ -100,13 +100,22 @@ func runtimeRoleCardPath(role Role) string {
 	return filepath.Join(roleCardsRuntimeDir(), roleCardFilename(role)+".md")
 }
 
+// roleCardSeedVersion 内置角色卡片的种子版本。内置卡片 front-matter 里的 seed_version
+// 小于此值时，EnsureRoleCards 会用内置模板覆盖运行时文件（视为「旧 seed 未被用户编辑」）。
+// 用户编辑后删除 front-matter 的 seed_version 行，即可阻止覆盖。
+const roleCardSeedVersion = 1
+
 // EnsureRoleCards 把内置角色卡片模板 seed 到 ~/.cata/global/roles/。
-// 仅当文件不存在时写；已存在不覆盖（用户可编辑覆盖内置版本，删除该文件即回到内置最新版）。
+// - 文件不存在 → 写入内置模板；
+// - 文件存在但 seed_version 小于当前内置版本（旧 seed）→ 覆盖；
+// - 文件存在且无 seed_version（用户已编辑）→ 保留不覆盖。
 func EnsureRoleCards() error {
 	for _, role := range []Role{RoleChat, RoleWorker, RoleEvolution} {
 		dst := runtimeRoleCardPath(role)
-		if _, err := os.Stat(dst); err == nil {
-			continue
+		if data, err := os.ReadFile(dst); err == nil {
+			if !shouldRefreshRoleCard(string(data)) {
+				continue
+			}
 		}
 		data, err := roleCardsFS.ReadFile("rolecards/" + roleCardFilename(role) + ".md")
 		if err != nil {
@@ -120,6 +129,18 @@ func EnsureRoleCards() error {
 		}
 	}
 	return nil
+}
+
+// shouldRefreshRoleCard 判断运行时角色卡片是否应被内置模板覆盖：
+// 无 seed_version（用户编辑）→ 否；seed_version < roleCardSeedVersion → 是。
+func shouldRefreshRoleCard(raw string) bool {
+	meta, _ := parseRoleCard(raw)
+	v, ok := meta["seed_version"]
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	return err == nil && n < roleCardSeedVersion
 }
 
 // CardForRole 加载某角色的卡片：运行时覆盖优先（每次读文件，立即生效），embed 兜底（缓存）。

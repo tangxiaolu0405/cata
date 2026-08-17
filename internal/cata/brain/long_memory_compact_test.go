@@ -50,6 +50,59 @@ func TestCompactLearningPlaybookContent_dedupesAndDropsNoise(t *testing.T) {
 	}
 }
 
+func TestLearningBulletsSimilar(t *testing.T) {
+	// 真实重复：同一「daban-fupan 模式结晶」换措辞记录。
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{
+			"结晶daban-fupan专职模式，接管复盘流水线+7项checklist，_default保留通用调度",
+			"daban-fupan模式已结晶：专职复盘+选股，含7项checklist、因子迭代、命中率追踪；已从_default剥离独立维护",
+			true,
+		},
+		{
+			"结晶 daban-fupan 专职模式，接管复盘流水线与7项checklist，已执行2次复盘，命中率50%。",
+			"daban-fupan模式已结晶，专职复盘+选股，含7项checklist、因子迭代",
+			true,
+		},
+		{
+			"CSV文件被引号包裹成单行字符串时，需先修复格式再解析",
+			"复盘输出优化清单7项已固化到behavior.md，每次复盘自动检查",
+			false,
+		},
+	}
+	for _, c := range cases {
+		if got := learningBulletsSimilar(c.a, c.b); got != c.want {
+			t.Errorf("similar(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestCompactLearningPlaybookContent_semanticDedup(t *testing.T) {
+	raw := `# Evolution learnings
+
+## 2026-07-28
+
+- 结晶daban-fupan专职模式，接管复盘流水线+7项checklist，_default保留通用调度
+
+## 2026-07-29
+
+- daban-fupan模式已结晶：专职复盘+选股，含7项checklist、因子迭代、命中率追踪；已从_default剥离独立维护
+
+## 2026-07-30
+
+- CSV文件被引号包裹成单行字符串时，需先修复格式再解析
+`
+	out := compactLearningPlaybookContent(raw)
+	if strings.Count(out, "daban-fupan") > 1 {
+		t.Fatalf("semantic duplicate not merged: %q", out)
+	}
+	if !strings.Contains(out, "CSV") {
+		t.Fatalf("distinct learning lost: %q", out)
+	}
+}
+
 func TestCompactLongMemory_archivesBulk(t *testing.T) {
 	ws, _ := testWorkspace(t, "compact-ws")
 	longDir := ws.LongTermDir()

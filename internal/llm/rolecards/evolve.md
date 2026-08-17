@@ -1,4 +1,5 @@
 ---
+seed_version: 1
 temperature: 0.2
 disable_thinking: true
 inject: off
@@ -29,9 +30,10 @@ updates[].path 为**逻辑相对路径**（如 `modes/_default/persona.md`、`me
 
 ## learning 字段
 
-- `learning`：本轮审计摘要（≤120 字），写入 `evolution_log.json`；**同时**追加到 home `memory/long/learnings.md`（long-term 滚动账本）
+- `learning`：**仅本轮审计摘要**（≤120 字，回答「这轮改了什么、为什么」），写入 `evolution_log.json` 并追加到 home `memory/long/learnings.md`
+- `learning` **禁止**复述事实/SOP/偏好本身——那些必须走 `updates[]` 进项目文档；不要把「结晶了 X 模式」这种结论反复写成 learning
 - **禁止**再创建 `memory/long/learnings/learning-*.md` 碎片文件
-- **可复用、会影响后续行为的 durable 事实**必须通过 `updates[]` 写入：
+- **可复用、会影响后续行为的 durable 事实**必须通过 `updates[]` 写入（同一事实只写一处，见「三文件互斥路由」）：
   - 用户偏好/输出格式 → `modes/<active_mode>/persona.md`
   - 项目 SOP/流程 → `modes/<active_mode>/behavior.md` 或 `memory/long/workflow_sop.md`
   - 仓库事实/路径约定 → `persona.local.md`

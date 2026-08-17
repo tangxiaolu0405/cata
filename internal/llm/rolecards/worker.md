@@ -1,4 +1,5 @@
 ---
+seed_version: 1
 temperature: 0.2
 disable_thinking: true
 inject: minimal

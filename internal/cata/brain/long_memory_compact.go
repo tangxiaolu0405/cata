@@ -18,6 +18,8 @@ const (
 	maxLearningPlaybookBullets = 80
 	minLearningBulletRunes     = 12
 	longMemoryBulkArchiveDir   = "long-bulk"
+	// learningDupJaccard 两条 learning bullet 的 bigram Jaccard 相似度阈值，超过即视为语义重复。
+	learningDupJaccard = 0.5
 )
 
 var learningNoiseSubstrings = []string{
@@ -264,6 +266,7 @@ func compactLearningPlaybookContent(raw string) string {
 		bullets []string
 	}
 	seen := make(map[string]bool)
+	var kept []string // 已保留的 bullet 原文，用于语义去重（文本近似但非精确重复）
 	var buckets []dayBucket
 	bucketIndex := make(map[string]int)
 
@@ -277,7 +280,14 @@ func compactLearningPlaybookContent(raw string) string {
 		if key == "" || seen[key] {
 			return
 		}
+		// 语义去重：与已保留 bullet 的 bigram 重叠率过高视为重复（治「同一结论换措辞反复记录」）。
+		for _, k := range kept {
+			if learningBulletsSimilar(k, bullet) {
+				return
+			}
+		}
 		seen[key] = true
+		kept = append(kept, bullet)
 		day := playbookDayKey(when)
 		i, ok := bucketIndex[day]
 		if !ok {
@@ -413,6 +423,54 @@ func normalizeLearningKey(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// learningBulletsSimilar 判断两条 learning bullet 是否语义近似（用于去重）。
+// 判重信号用「高信息量 token」（英文标识符/数字，如 daban-fupan、checklist、_default），
+// 而非中文 bigram——中文措辞略变（接管 vs 专职）会让 bigram 重叠骤降，但英文锚点稳定。
+func learningBulletsSimilar(a, b string) bool {
+	ka := learningInfoTokens(a)
+	kb := learningInfoTokens(b)
+	if len(ka) == 0 || len(kb) == 0 {
+		return false
+	}
+	shared := 0
+	for t := range ka {
+		if kb[t] {
+			shared++
+		}
+	}
+	minLen := len(ka)
+	if len(kb) < minLen {
+		minLen = len(kb)
+	}
+	if minLen == 0 {
+		return false
+	}
+	// 至少共享 2 个高信息量 token，且覆盖较短一方一半以上。
+	return shared >= 2 && float64(shared)/float64(minLen) >= learningDupJaccard
+}
+
+// learningInfoTokens 提取 bullet 的「高信息量」token：全 ASCII（英文词/数字/标识符），丢弃中文 bigram。
+func learningInfoTokens(s string) map[string]bool {
+	set := make(map[string]bool)
+	for _, t := range tokenizeForRetrieval(s) {
+		r := []rune(t)
+		if len(r) < 2 {
+			continue
+		}
+		ascii := true
+		for _, c := range r {
+			if c >= 0x4e00 {
+				ascii = false
+				break
+			}
+		}
+		if ascii {
+			set[t] = true
+		}
+	}
+	return set
 }
 
 func refreshIndexAfterLongCompact(w *Workspace) error {

@@ -104,6 +104,26 @@ func TestEnsureRoleCardsDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+func TestEnsureRoleCardsRefreshesOldSeed(t *testing.T) {
+	t.Setenv("CATA_HOME", t.TempDir())
+	if err := EnsureRoleCards(); err != nil {
+		t.Fatal(err)
+	}
+	p := runtimeRoleCardPath(RoleChat)
+	// 模拟旧 seed（seed_version 0），应被内置模板覆盖。
+	old := "---\nseed_version: 0\ntemperature: 0.7\ninject: task\n---\n旧版身份"
+	if err := os.WriteFile(p, []byte(old), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureRoleCards(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(p)
+	if !strings.Contains(string(data), "seed_version: 1") {
+		t.Fatalf("old seed should be refreshed to seed_version 1: %q", string(data))
+	}
+}
+
 func TestInjectProfile(t *testing.T) {
 	cases := []struct {
 		in   InjectMode
