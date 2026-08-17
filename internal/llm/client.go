@@ -89,6 +89,8 @@ type Client struct {
 	streamHTTPClient *http.Client
 	adapter          APIAdapter
 	card             *RoleCard // 角色卡片：身份 + 协议 + 采样 + 注入策略（NewClientForRole 挂载）
+	// lastRetrieved 本轮组装时检索命中的记忆 source 列表（命中观测；appendLLMLog 记录）。
+	lastRetrieved []string
 }
 
 func resolveInitialAPIURL(apiFormat, configured string) (active, configuredOut string) {
@@ -187,32 +189,32 @@ func loadBootLeaderPrompt() string {
 }
 
 // ensureRetrievedMemorySystemForCtx 在身份之后插入与当前请求相关的记忆检索块。
-// 幂等（已注入则跳过）；minimal 档（worker）不检索。
-func ensureRetrievedMemorySystemForCtx(ctx context.Context, msgs []Message, profile brain.PromptProfile) []Message {
+// 幂等（已注入则跳过）；minimal 档（worker）不检索。返回命中的记忆 source 列表（命中观测）。
+func ensureRetrievedMemorySystemForCtx(ctx context.Context, msgs []Message, profile brain.PromptProfile) ([]Message, []string) {
 	if brain.ProfileRank(profile) < 1 {
-		return msgs
+		return msgs, nil
 	}
 	for _, m := range msgs {
 		if m.Role == "system" && strings.HasPrefix(strings.TrimSpace(m.Content), brain.RetrievedMemorySystemPrefix) {
-			return msgs
+			return msgs, nil
 		}
 	}
 	query := lastUserMessageContent(msgs)
 	if strings.TrimSpace(query) == "" {
-		return msgs
+		return msgs, nil
 	}
-	block := brain.RetrievedMemorySystemBlock(ctx, profile, query)
+	block, sources := brain.RetrievedMemorySystemBlock(ctx, profile, query)
 	if strings.TrimSpace(block) == "" {
-		return msgs
+		return msgs, nil
 	}
 	if len(msgs) >= 1 && msgs[0].Role == "system" {
 		out := make([]Message, 0, len(msgs)+1)
 		out = append(out, msgs[0])
 		out = append(out, Message{Role: "system", Content: block})
 		out = append(out, msgs[1:]...)
-		return out
+		return out, sources
 	}
-	return append([]Message{{Role: "system", Content: block}}, msgs...)
+	return append([]Message{{Role: "system", Content: block}}, msgs...), sources
 }
 
 // lastUserMessageContent 从后往前找最后一条 user 消息正文（检索 query）。
@@ -245,7 +247,10 @@ func (c *Client) assembleSystemForRole(ctx context.Context, messages []Message, 
 			out = append(out, messages...)
 		}
 	}
-	out = ensureRetrievedMemorySystemForCtx(ctx, out, profile)
+	// 命中观测：记录本轮检索命中的记忆来源，供 llm.log 审计与后续 Evaluate 评估。
+	var sources []string
+	out, sources = ensureRetrievedMemorySystemForCtx(ctx, out, profile)
+	c.lastRetrieved = sources
 	return ensureCataBrainExcerptSystemForCtx(ctx, out, profile)
 }
 

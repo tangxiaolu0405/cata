@@ -33,17 +33,22 @@ type MemoryHit struct {
 }
 
 // RetrievedMemorySystemBlock 组装检索注入块；无命中或非主 chat 档位返回空。
-func RetrievedMemorySystemBlock(ctx context.Context, p PromptProfile, query string) string {
+// RetrievedMemorySystemBlock 组装检索注入块，并返回命中的记忆 source 列表（供命中观测/评估）。
+func RetrievedMemorySystemBlock(ctx context.Context, p PromptProfile, query string) (string, []string) {
 	if ProfileRank(p) < 1 {
-		return "" // worker/minimal 不检索
+		return "", nil // worker/minimal 不检索
 	}
 	cc := ChatContextFrom(ctx)
 	if cc == nil || cc.WS == nil {
-		return ""
+		return "", nil
 	}
 	hits := RetrieveRelevantMemory(cc.WS, query, maxRetrievedHits)
 	if len(hits) == 0 {
-		return ""
+		return "", nil
+	}
+	sources := make([]string, 0, len(hits))
+	for _, h := range hits {
+		sources = append(sources, h.Source)
 	}
 	var b strings.Builder
 	b.WriteString(RetrievedMemorySystemPrefix)
@@ -62,9 +67,9 @@ func RetrievedMemorySystemBlock(ctx context.Context, p PromptProfile, query stri
 		fmt.Fprintf(&b, "\n### [%s] %s\n%s\n", h.Category, h.Source, snippet)
 	}
 	if b.Len() == 0 {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(b.String()), sources
 }
 
 // RetrieveRelevantMemory 从记忆索引检索与 query 最相关的条目，并展开源文件相关片段。

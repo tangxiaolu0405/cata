@@ -330,6 +330,10 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 		"prompt":         buildPromptManifest(effectiveMessages, tools, toolChoice, req.MaxTokens, req.Temperature),
 		"response":       respLog,
 	}
+	// 命中观测：本轮检索命中的记忆来源（P4⑦ 数据基础，供 Evaluate 评估记忆有效性）。
+	if len(c.lastRetrieved) > 0 {
+		entry["retrieved_memory"] = c.lastRetrieved
+	}
 	if req.SubagentID != "" {
 		entry["subagent_id"] = req.SubagentID
 	}

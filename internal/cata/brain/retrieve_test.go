@@ -113,8 +113,9 @@ func TestRetrieveRelevantMemoryEndToEnd(t *testing.T) {
 }
 
 func TestRetrievedMemorySystemBlockSkipsMinimal(t *testing.T) {
-	if got := RetrievedMemorySystemBlock(nil, PromptProfileMinimal, "anything"); got != "" {
-		t.Fatalf("minimal profile should not retrieve, got %q", got)
+	block, sources := RetrievedMemorySystemBlock(nil, PromptProfileMinimal, "anything")
+	if block != "" || len(sources) != 0 {
+		t.Fatalf("minimal profile should not retrieve, got %q %v", block, sources)
 	}
 }
 
