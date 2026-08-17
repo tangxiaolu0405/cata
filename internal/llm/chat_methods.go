@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"cata/internal/cata/brain"
@@ -357,6 +358,14 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 		return
 	}
 
+	// 按产出区拆分的 llm/<sanitized>.log 目录可能不存在：os.O_CREATE 不建父目录，
+	// 不 MkdirAll 会静默写失败（命中观测等 LLM 日志数据全部丢失）。
+	if dir := filepath.Dir(logPath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Printf("Failed to create LLM log dir %s: %v", dir, err)
+			return
+		}
+	}
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to open LLM log file %s: %v", logPath, err)
