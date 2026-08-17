@@ -11,21 +11,30 @@ import (
 	"cata/internal/cata/config"
 )
 
+// legacyBrainMigratedMarker 标记 MigrateLegacyBrain 已执行（无论是否实际迁移了数据）。
+// 显式 marker 避免依赖「registry 非空」的隐式判断：registry 意外清空或首次迁移中途失败时不会重复迁移。
+const legacyBrainMigratedMarker = ".legacy_brain_migrated_v1"
+
 // MigrateLegacyBrain 将旧版扁平 ~/.cata/brain/{hot,core,memory,...} 迁入首个 workspace。
 func MigrateLegacyBrain() error {
+	marker := filepath.Join(brainRoot(), legacyBrainMigratedMarker)
+	if _, err := os.Stat(marker); err == nil {
+		return nil
+	}
+
 	entries, err := ListRegistryEntries()
 	if err != nil {
 		return err
 	}
 	if len(entries) > 0 {
-		return nil
+		return writeMigrationMarker(marker) // 已初始化，无 legacy 可迁，直接标记完成
 	}
 
 	legacyHot := filepath.Join(brainRoot(), RelPathHot)
 	legacyShort := filepath.Join(brainRoot(), RelPathShortTermCurrent)
 	if _, err := os.Stat(legacyHot); os.IsNotExist(err) {
 		if _, err2 := os.Stat(legacyShort); os.IsNotExist(err2) {
-			return nil
+			return writeMigrationMarker(marker) // 无 legacy 数据，标记完成
 		}
 	}
 
@@ -59,7 +68,13 @@ func MigrateLegacyBrain() error {
 	_ = copyTreeIfExists(filepath.Join(brainRoot(), RelPathLongTerm), ws.LongTermDir())
 	_ = copyIfExists(filepath.Join(brainRoot(), RelPathEvolutionLog), ws.EvolutionLogPath())
 	_ = copyTreeIfExists(filepath.Join(brainRoot(), RelPathArchive), ws.ArchiveDir())
-	return nil
+	return writeMigrationMarker(marker)
+}
+
+// writeMigrationMarker 幂等写入迁移完成标记。
+func writeMigrationMarker(path string) error {
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	return os.WriteFile(path, []byte("v1\n"), 0644)
 }
 
 func fallbackWorkspaceRoot() string {
