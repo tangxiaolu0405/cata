@@ -62,7 +62,7 @@ func ContextCompressThreshold(window int) int {
 	return int(float64(window) * ContextCompressRatioValue())
 }
 
-// EstimatedChatInputTokens 估算发往 API 前的输入 token（含 boot-leader + brain 节选注入）。
+// EstimatedChatInputTokens 估算发往 API 前的输入 token（含角色身份 + 检索 + brain 节选注入）。
 // ctx 携带本轮 ChatContext（Profile/WS），保证多 chat 并行时按各自档位估算，
 // 勿走全局 ActivePromptProfile（后台 evolve 会临时改写全局）。
 func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Message, tools []Tool) int {
@@ -70,7 +70,7 @@ func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Messag
 	if cc := brain.ChatContextFrom(ctx); cc != nil && cc.Profile != "" {
 		profile = cc.Profile
 	}
-	wired := withBootLeaderSystemMessageForCtx(ctx, messages, profile)
+	wired := c.assembleSystemForRole(ctx, messages, profile)
 	n := estimateMessagesTokens(wired)
 	n += estimateToolsTokens(tools)
 	// 预留生成空间（与 max_tokens 无关，只避免把窗口算满）

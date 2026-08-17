@@ -177,9 +177,8 @@ func newHTTPClientPair(timeout time.Duration) (*http.Client, *http.Client) {
 	return regular, stream
 }
 
-// loadBootLeaderPrompt 返回主 chat 角色卡片的身份正文（历史名保留，供日志/token 估算标注）。
-// 实际出站由 assembleSystemForRole 按 Client.card 组装；此处仅作无卡片兜底与日志对齐。
-// 运行时覆盖文件（~/.cata/global/roles/chat.md）编辑后立即生效。
+// loadBootLeaderPrompt 返回主 chat 角色卡片的身份正文（历史名保留，供日志标注与无卡片兜底）。
+// 实际出站由 assembleSystemForRole 按 Client.card 组装；运行时覆盖文件编辑后立即生效。
 func loadBootLeaderPrompt() string {
 	if card, err := CardForRole(RoleChat); err == nil {
 		return truncateRunes(strings.TrimSpace(card.Body), maxBootLeaderRunes)
@@ -187,43 +186,7 @@ func loadBootLeaderPrompt() string {
 	return ""
 }
 
-func effectiveBootLeaderPrompt() string {
-	return effectiveBootLeaderPromptFor(brain.ActivePromptProfile())
-}
-
-// effectiveBootLeaderPromptFor 身份不再按 profile 分档（由角色卡片决定）；此函数保留作兼容。
-func effectiveBootLeaderPromptFor(profile brain.PromptProfile) string {
-	return strings.TrimSpace(loadBootLeaderPrompt())
-}
-
-// withBootLeaderSystemMessage 确保每次请求的消息列表前面都有 boot-leader.md 作为系统提示词。
-func withBootLeaderSystemMessage(messages []Message) []Message {
-	return withBootLeaderSystemMessageFor(messages, brain.ActivePromptProfile())
-}
-
-func withBootLeaderSystemMessageFor(messages []Message, profile brain.PromptProfile) []Message {
-	return withBootLeaderSystemMessageForCtx(nil, messages, profile)
-}
-
-// withBootLeaderSystemMessageForCtx 与 For 版相同，但 brain 节选按 ctx 中 ChatContext 的
-// 脑子分区/产出区/运行环境组装（多 cata 并行勿依赖全局 Active/OutputCwd/RuntimeEnv）。
-// 组装顺序：boot-leader → 相关记忆检索块 → brain 节选（coalesce 后仍保持该顺序）。
-func withBootLeaderSystemMessageForCtx(ctx context.Context, messages []Message, profile brain.PromptProfile) []Message {
-	prompt := effectiveBootLeaderPromptFor(profile)
-	out := messages
-	if prompt != "" {
-		alreadyBoot := len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt
-		if !alreadyBoot {
-			out = make([]Message, 0, len(messages)+1)
-			out = append(out, Message{Role: "system", Content: prompt})
-			out = append(out, messages...)
-		}
-	}
-	out = ensureRetrievedMemorySystemForCtx(ctx, out, profile)
-	return ensureCataBrainExcerptSystemForCtx(ctx, out, profile)
-}
-
-// ensureRetrievedMemorySystemForCtx 在 boot-leader 之后插入与当前请求相关的记忆检索块。
+// ensureRetrievedMemorySystemForCtx 在身份之后插入与当前请求相关的记忆检索块。
 // 幂等（已注入则跳过）；minimal 档（worker）不检索。
 func ensureRetrievedMemorySystemForCtx(ctx context.Context, msgs []Message, profile brain.PromptProfile) []Message {
 	if brain.ProfileRank(profile) < 1 {
@@ -264,14 +227,14 @@ func lastUserMessageContent(msgs []Message) string {
 
 // assembleSystemForRole 按角色卡片组装 system 消息：
 // 身份（卡片 body）→ 相关记忆检索块 → brain 节选（coalesce 后仍保持该顺序）。
-// 未挂卡片时回退到 boot-leader（兼容非角色入口）。
+// 未挂卡片时回退到主 chat 角色卡片身份。
 func (c *Client) assembleSystemForRole(ctx context.Context, messages []Message, profile brain.PromptProfile) []Message {
 	body := ""
 	if c.card != nil {
 		body = strings.TrimSpace(c.card.Body)
 	}
 	if body == "" {
-		body = effectiveBootLeaderPromptFor(profile)
+		body = loadBootLeaderPrompt()
 	}
 	out := messages
 	if body != "" {

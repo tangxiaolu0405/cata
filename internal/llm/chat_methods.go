@@ -310,12 +310,9 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 		logPath = brain.LLMLogPathFor(out)
 	}
 
-	msgsCopy := append([]Message(nil), req.Messages...)
-	profile := req.BrainProfile
-	if profile == "" {
-		profile = brain.ActivePromptProfile()
-	}
-	effectiveMessages := withBootLeaderSystemMessageFor(msgsCopy, profile)
+	// req.Messages 已经是 buildHTTPChatRequest 组装+coalesce 后的实际载荷，直接用于日志，
+	// 勿再重新组装（会重复插入身份/brain 节选，且与实际发送不一致）。
+	effectiveMessages := append([]Message(nil), req.Messages...)
 
 	respLog := map[string]interface{}{
 		"content": content,

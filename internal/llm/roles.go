@@ -9,7 +9,6 @@ const (
 	RoleDefault   Role = "default"
 	RoleChat      Role = "chat"      // 主对话 + 工具（强模型）
 	RoleEvolution Role = "evolution" // 后台演进决策（弱/快模型）
-	RoleSummarize Role = "summarize" // 摘要 / 会话压缩
 	RoleWorker    Role = "worker"    // delegate_task 子 agent
 )
 
@@ -27,7 +26,7 @@ func ModelsByRole() map[string]string {
 	if config.Config == nil {
 		return nil
 	}
-	roles := []Role{RoleChat, RoleEvolution, RoleSummarize, RoleWorker}
+	roles := []Role{RoleChat, RoleEvolution, RoleWorker}
 	out := make(map[string]string, len(roles)+1)
 	base := config.Config.LLM.Model
 	if base != "" {
