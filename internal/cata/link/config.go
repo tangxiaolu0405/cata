@@ -131,6 +131,7 @@ func (c Config) LinkedAgentIDs() []string {
 //   - 解析目录 → 工作空间（注册进 registry + 落盘 link.json）
 //   - 默认 keep-alive（注册即常驻）
 //   - 幂等：同一 root_path 已注册时直接返回既有条目（不重复写、不刷新 linked_at）
+//
 // 注意：网关地址与逐机器 token 由 `cata link join` 预先写入 link.json，本函数不再接收。
 func Add(dir string, keepAlive bool) (AgentEntry, error) {
 	if err := brain.EnsureCataLayout(); err != nil {

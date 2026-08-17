@@ -29,8 +29,8 @@ type Server struct {
 	web     *WebChat
 	hub     *Hub
 	httpSrv *http.Server
-	reg     *tunnel.Registry     // 非 nil = remote 模式：项目列表/路由来自在线 agent
-	join    *tunnel.JoinManager  // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
+	reg     *tunnel.Registry    // 非 nil = remote 模式：项目列表/路由来自在线 agent
+	join    *tunnel.JoinManager // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
 }
 
 // NewServer 创建 UI 服务器（本地模式）。

@@ -17,8 +17,8 @@ import (
 	"strings"
 	"sync"
 
-	"cata/internal/cata/config"
 	"cata/internal/cata/clock"
+	"cata/internal/cata/config"
 )
 
 // MachineRecord 单台机器的 token 记录（hash 存储，不落明文）。

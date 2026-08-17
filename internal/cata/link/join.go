@@ -114,7 +114,7 @@ func pollJoinStatus(base, code string, timeout time.Duration) (string, error) {
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
 				var out struct {
-					Approved    bool   `json:"approved"`
+					Approved     bool   `json:"approved"`
 					MachineToken string `json:"machine_token"`
 				}
 				if json.NewDecoder(resp.Body).Decode(&out) == nil {

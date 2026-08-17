@@ -33,10 +33,10 @@ func DefaultRateLimitConfig() RateLimitConfig {
 
 // RateLimiter 线程安全的内存态限流器。
 type RateLimiter struct {
-	cfg   RateLimitConfig
-	mu    sync.Mutex
-	hits  map[string][]time.Time // ip → 窗口内命中时间戳
-	banned map[string]time.Time  // ip → 解除拉黑时间
+	cfg    RateLimitConfig
+	mu     sync.Mutex
+	hits   map[string][]time.Time // ip → 窗口内命中时间戳
+	banned map[string]time.Time   // ip → 解除拉黑时间
 }
 
 // NewRateLimiter 创建限流器；cfg 零值字段用默认值。

@@ -13,9 +13,9 @@ func TestConfigSaveLoadRoundtrip(t *testing.T) {
 	t.Setenv(config.EnvCataHome, home)
 
 	cfg := Config{
-		GatewayURL:    "https://gw.example.com",
-		GatewayToken:  "secret-token",
-		MachineToken:  "machine-secret",
+		GatewayURL:     "https://gw.example.com",
+		GatewayToken:   "secret-token",
+		MachineToken:   "machine-secret",
 		DefaultAgentID: "ws-1",
 		Agents: map[string]AgentEntry{
 			"ws-1": {AgentID: "ws-1", RootPath: "/proj/a", Name: "Project A", KeepAlive: true, Enabled: true, LinkedAt: "2026-01-01T00:00:00Z"},

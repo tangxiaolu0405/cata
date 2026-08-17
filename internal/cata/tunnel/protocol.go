@@ -46,11 +46,11 @@ type Frame struct {
 	// MachineToken 逐机器凭证（hello 帧携带）：join 流程签发的本机独立 token。
 	// gateway 按 machine_id 查表比对 hash，单机泄露可单独吊销（替代 v1 共享 token）。
 	MachineToken string `json:"machine_token,omitempty"`
-	Protocol  string `json:"protocol,omitempty"`
-	Version   int    `json:"version,omitempty"`
-	Stream    uint64 `json:"stream,omitempty"`
-	Data      string `json:"data,omitempty"` // base64（line 帧）
-	Message   string `json:"message,omitempty"`
+	Protocol     string `json:"protocol,omitempty"`
+	Version      int    `json:"version,omitempty"`
+	Stream       uint64 `json:"stream,omitempty"`
+	Data         string `json:"data,omitempty"` // base64（line 帧）
+	Message      string `json:"message,omitempty"`
 }
 
 // EncodeData 字节 → base64 字符串。

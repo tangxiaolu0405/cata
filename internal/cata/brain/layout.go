@@ -12,9 +12,9 @@ const (
 	FileWorkspacesJSON = "workspaces.json"
 
 	DirGlobal                  = "global"
-	FileGlobalConstraints   = "constraints.md"
-	FileGlobalBehavior      = "behavior.md"
-	FileGlobalDelegateGuide = "delegate-guide.md"
+	FileGlobalConstraints      = "constraints.md"
+	FileGlobalBehavior         = "behavior.md"
+	FileGlobalDelegateGuide    = "delegate-guide.md"
 	FileGlobalDelegateTaskTool = "delegate-task-tool.json"
 
 	DirBrain      = "brain"
