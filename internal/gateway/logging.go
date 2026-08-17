@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"cata/internal/cata/brain"
+	"cata/internal/cata/config"
 )
 
 const gatewayLogFile = "cata-gateway.log"
@@ -18,6 +19,9 @@ func LogPath() string {
 
 // SetupLogging 同时写入 stderr 与 ~/.cata/cata-gateway.log。
 func SetupLogging() {
+	// 启动时先截断超大的旧日志（长驻期间由 supervisor 周期轮转兜底）。
+	config.RotateRuntimeLogs()
+
 	path := LogPath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)

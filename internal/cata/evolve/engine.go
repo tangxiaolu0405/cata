@@ -117,6 +117,10 @@ func (e *Engine) runAll(ctx context.Context) {
 		if err := brain.MaintainLongMemoryAfterEvolution(ws); err != nil {
 			log.Printf("Autonomous evolution [%s]: long memory maintain: %v", ws.ID, err)
 		}
+		// 归档冷流水轮转：保留最近若干 consolidated，旧的价值已沉淀进项目，可删。
+		if err := brain.PruneArchiveDir(ws, 0); err != nil {
+			log.Printf("Autonomous evolution [%s]: archive prune: %v", ws.ID, err)
+		}
 	}
 }
 

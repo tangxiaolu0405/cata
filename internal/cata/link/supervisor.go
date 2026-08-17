@@ -99,6 +99,7 @@ func RunSupervisor(ctx context.Context) error {
 	// 常驻保活复查
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	tickCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -107,6 +108,11 @@ func RunSupervisor(ctx context.Context) error {
 		case <-ticker.C:
 			if err := s.ensureAll(); err != nil {
 				log.Printf("cata supervisor: ensure all: %v", err)
+			}
+			// 每 10 分钟（20 tick）截断一次超大的运行日志，防止 ~/.cata 膨胀。
+			tickCount++
+			if tickCount%20 == 0 {
+				config.RotateRuntimeLogs()
 			}
 		}
 	}
