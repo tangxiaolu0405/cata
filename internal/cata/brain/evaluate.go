@@ -48,25 +48,51 @@ func RecordRetrievalHits(w *Workspace, sources []string) error {
 	return nil
 }
 
-// EvaluateIndex 根据命中日志评估记忆条目：频繁命中的强化、陈旧未命中的僵尸降权，
-// 并把累计命中写回 entry.Hits。评估后清空命中日志（每周期一轮）。
+// EvaluateIndex 根据命中日志与用户纠正信号评估记忆条目：
+//   - 用户最近纠正 → 纠正前最近命中的记忆降权（Corrections+1）；
+//   - 否则单周期频繁命中的强化（priority+1，封顶 9）；
+//   - 从未命中且陈旧（>60 天）的僵尸降权（priority-1）。
+//
+// 累计命中写回 entry.Hits；评估后清空命中日志（每周期一轮）。
 func EvaluateIndex(w *Workspace) error {
 	if w == nil {
 		return nil
 	}
-	counts, err := readHitsCounts(w.Path(hitsLogName))
+	recs, err := readHits(w.Path(hitsLogName))
 	if err != nil {
 		return err
 	}
-	if len(counts) == 0 {
+	if len(recs) == 0 {
 		return nil // 无命中记录，不空转读写 index
 	}
 	idx, err := LoadMemoryIndexFor(w)
 	if err != nil {
 		return err
 	}
+	counts := countHits(recs)
+	corrected, corrTs := DetectUserCorrection(w)
 	now := time.Now()
 	changed := false
+	entryFor := func(rel string) *IndexEntry {
+		for i := range idx.Entries {
+			if filepath.ToSlash(strings.TrimSpace(idx.Entries[i].Source)) == rel {
+				return &idx.Entries[i]
+			}
+		}
+		return nil
+	}
+	// 纠正信号：用户最近纠正 → 纠正前最近命中的记忆降权（负面信号）。
+	if corrected && corrTs != "" {
+		if src := lastHitBefore(recs, corrTs); src != "" {
+			if e := entryFor(src); e != nil {
+				e.Corrections++
+				if e.Priority > 0 {
+					e.Priority--
+				}
+				changed = true
+			}
+		}
+	}
 	for i := range idx.Entries {
 		e := &idx.Entries[i]
 		rel := filepath.ToSlash(strings.TrimSpace(e.Source))
@@ -93,7 +119,12 @@ func EvaluateIndex(w *Workspace) error {
 	return nil
 }
 
-func readHitsCounts(path string) (map[string]int, error) {
+type hitRec struct {
+	Source string
+	Time   string
+}
+
+func readHits(path string) ([]hitRec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -101,7 +132,7 @@ func readHitsCounts(path string) (map[string]int, error) {
 		}
 		return nil, err
 	}
-	counts := map[string]int{}
+	var out []hitRec
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -109,12 +140,41 @@ func readHitsCounts(path string) (map[string]int, error) {
 		}
 		var rec struct {
 			Source string `json:"source"`
+			T      string `json:"t"`
 		}
 		if json.Unmarshal([]byte(line), &rec) == nil && rec.Source != "" {
-			counts[rec.Source]++
+			out = append(out, hitRec{Source: rec.Source, Time: rec.T})
 		}
 	}
-	return counts, nil
+	return out, nil
+}
+
+func countHits(recs []hitRec) map[string]int {
+	counts := map[string]int{}
+	for _, r := range recs {
+		counts[r.Source]++
+	}
+	return counts
+}
+
+// lastHitBefore 返回发生在纠正时间之前（含）且最接近纠正时间的命中 source。
+func lastHitBefore(recs []hitRec, corrTs string) string {
+	var best string
+	var bestT time.Time
+	for _, r := range recs {
+		if r.Time == "" || r.Time > corrTs {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, r.Time)
+		if err != nil {
+			continue
+		}
+		if best == "" || t.After(bestT) {
+			best = r.Source
+			bestT = t
+		}
+	}
+	return best
 }
 
 func isStaleEntry(updatedAt string, now time.Time) bool {

@@ -99,3 +99,38 @@ func TestEvaluateNoHitsNoop(t *testing.T) {
 		t.Fatalf("priority changed without hits: %d", got.Entries[0].Priority)
 	}
 }
+
+func TestEvaluateCorrectionDemotes(t *testing.T) {
+	t.Setenv("CATA_HOME", t.TempDir())
+	w := &Workspace{ID: "corr-ev", ActiveMode: ModeDefaultID}
+	if err := os.MkdirAll(filepath.Join(w.Dir(), "memory"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	idx := &MemoryIndex{Version: memoryIndexVersion, Entries: []IndexEntry{
+		{ID: "sop", Source: "memory/long/workflow_sop.md", Summary: "sop", Category: "procedure", Priority: 5, UpdatedAt: clock.RFC3339()},
+	}}
+	if err := SaveMemoryIndexFor(w, idx); err != nil {
+		t.Fatal(err)
+	}
+	// 命中（时间=now），随后用户纠正（short-term 块 ts 在命中之后）。
+	if err := RecordRetrievalHits(w, []string{"memory/long/workflow_sop.md"}); err != nil {
+		t.Fatal(err)
+	}
+	corrTs := time.Now().Add(time.Minute).Format(time.RFC3339)
+	writeShortTerm(w, "# Short-term\n\n## "+corrTs+"\n\n**User:** 不对，这个 SOP 是错的\n\n**Assistant:** 抱歉，我修正\n")
+
+	if err := EvaluateIndex(w); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadMemoryIndexFor(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := got.Entries[0]
+	if e.Corrections != 1 {
+		t.Fatalf("corrections = %d, want 1", e.Corrections)
+	}
+	if e.Priority != 4 {
+		t.Fatalf("priority = %d, want 4 (demoted by correction)", e.Priority)
+	}
+}

@@ -40,6 +40,8 @@ type IndexEntry struct {
 	UpdatedAt       string   `json:"updated_at,omitempty"`
 	// Hits 被消费侧检索命中的累计次数（P4⑦ Evaluate：命中多→强化，长期未命中→降权）。
 	Hits int `json:"hits,omitempty"`
+	// Corrections 命中后被用户明确纠正的次数（负面信号：记忆过时/错误，Evaluate 降权）。
+	Corrections int `json:"corrections,omitempty"`
 }
 
 // LoadMemoryIndex 读取当前 workspace 的 index.json（兼容旧版 `[]`）。
