@@ -207,6 +207,10 @@ func ensureRetrievedMemorySystemForCtx(ctx context.Context, msgs []Message, prof
 	if strings.TrimSpace(block) == "" {
 		return msgs, nil
 	}
+	// 命中观测：记录本次命中的记忆来源，供 Evaluate 强化/淘汰（P4⑦ 闭环）。
+	if cc := brain.ChatContextFrom(ctx); cc != nil && cc.WS != nil {
+		_ = brain.RecordRetrievalHits(cc.WS, sources)
+	}
 	if len(msgs) >= 1 && msgs[0].Role == "system" {
 		out := make([]Message, 0, len(msgs)+1)
 		out = append(out, msgs[0])

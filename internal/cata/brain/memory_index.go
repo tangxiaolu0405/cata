@@ -38,6 +38,8 @@ type IndexEntry struct {
 	Priority        int      `json:"priority"`
 	DisclosureLevel string   `json:"disclosure_level,omitempty"`
 	UpdatedAt       string   `json:"updated_at,omitempty"`
+	// Hits 被消费侧检索命中的累计次数（P4⑦ Evaluate：命中多→强化，长期未命中→降权）。
+	Hits int `json:"hits,omitempty"`
 }
 
 // LoadMemoryIndex 读取当前 workspace 的 index.json（兼容旧版 `[]`）。

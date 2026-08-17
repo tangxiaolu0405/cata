@@ -121,6 +121,10 @@ func (e *Engine) runAll(ctx context.Context) {
 		if err := brain.PruneArchiveDir(ws, 0); err != nil {
 			log.Printf("Autonomous evolution [%s]: archive prune: %v", ws.ID, err)
 		}
+		// P4⑦ Evaluate：按检索命中统计强化/降权记忆，淘汰僵尸条目。
+		if err := brain.EvaluateIndex(ws); err != nil {
+			log.Printf("Autonomous evolution [%s]: evaluate memory: %v", ws.ID, err)
+		}
 	}
 }
 
