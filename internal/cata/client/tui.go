@@ -94,12 +94,11 @@ func (i pickItem) Title() string       { return i.title }
 func (i pickItem) Description() string { return i.desc }
 
 type model struct {
-	sess      *session
-	cwd       string
-	wsID      string // per-ws agent 模式绑定的工作空间 id（空 = legacy 单 server）
-	agentMode bool   // true = 拨 per-ws agent socket
-	width     int
-	height    int
+	sess   *session
+	cwd    string
+	wsID   string // per-ws agent 绑定的工作空间 id
+	width  int
+	height int
 
 	vp        viewport.Model
 	sidebarVP viewport.Model
@@ -201,35 +200,21 @@ func RunChat(opts ChatOptions) {
 
 	// 扁平化：一个工作空间 = 一个 agent 进程 = 一个 LLM loop（per-ws socket）。
 	// 本地未注册工作空间按需拉起、空闲回收；注册（cata link add）的常驻。
-	ws, _ := brain.ResolveWorkspace(cwd)
-	wsID := ""
-	if ws != nil {
-		wsID = ws.ID
+	ws, err := brain.ResolveWorkspace(cwd)
+	if err != nil {
+		fatal(err)
 	}
-	agentMode := false
-	var s *session
-	if wsID != "" {
-		if err := link.EnsureAgent(wsID); err == nil {
-			if as, aerr := dialAgent(wsID); aerr == nil {
-				agentMode = true
-				s = as
-			}
-		}
+	if err := link.EnsureAgent(ws.ID); err != nil {
+		fatal(err)
 	}
-	if !agentMode {
-		if err := EnsureServer(); err != nil {
-			fatal(err)
-		}
-		s, err = dial()
-		if err != nil {
-			fatal(err)
-		}
+	s, err := dialAgent(ws.ID)
+	if err != nil {
+		fatal(err)
 	}
 	defer s.conn.Close()
 
 	m := newModel(s, cwd, ws)
-	m.wsID = wsID
-	m.agentMode = agentMode
+	m.wsID = ws.ID
 	m.displayMode = opts.displayMode()
 	m.showThinking = opts.ShowThinking
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -238,23 +223,12 @@ func RunChat(opts ChatOptions) {
 	}
 }
 
-// reconnect 断线后重连（agent 模式重拨 per-ws socket，否则 legacy cata.sock）。
+// reconnect 断线后重连（重拨 per-ws agent socket）。
 func (m *model) reconnect() error {
-	if m.agentMode {
-		if err := link.EnsureAgent(m.wsID); err != nil {
-			return err
-		}
-		ns, err := dialAgent(m.wsID)
-		if err != nil {
-			return err
-		}
-		m.swapSession(ns)
-		return nil
-	}
-	if err := EnsureServer(); err != nil {
+	if err := link.EnsureAgent(m.wsID); err != nil {
 		return err
 	}
-	ns, err := dial()
+	ns, err := dialAgent(m.wsID)
 	if err != nil {
 		return err
 	}

@@ -50,8 +50,6 @@ func main() {
 		runInitConfig()
 	case "config":
 		handleConfigCommand(args[1:])
-	case "run":
-		runServer(args[1:])
 	case "agent":
 		runAgent(args[1:])
 	case "link":
@@ -75,7 +73,6 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  cata                    Start chat (default, TUI)")
 	fmt.Println("  cata chat [--dir <path>] [--quiet|-q] [--verbose|-v] [--show-thinking]  Start chat at output dir")
-	fmt.Println("  cata run                Start server (one per machine; foreground, legacy)")
 	fmt.Println("  cata agent              Start one agent per workspace (one LLM loop; --workspace <ws_id>)")
 	fmt.Println("  cata link               Register local workspaces to a remote gateway (add/remove/list)")
 	fmt.Println("  cata supervisor         Per-machine daemon: keep registered agent processes alive")
@@ -284,34 +281,6 @@ func writeAgentPID(agentID string) error {
 
 func removeAgentPID(agentID string) {
 	_ = os.Remove(config.AgentPIDPath(agentID))
-}
-
-func runServer(args []string) {
-	managed := false
-	for _, a := range args {
-		if a == "--managed" {
-			managed = true
-			break
-		}
-	}
-
-	srv, err := server.NewServer(managed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create server: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := brain.ArchiveSessionLogs(); err != nil {
-		fmt.Fprintf(os.Stderr, "cata: archive logs: %v\n", err)
-	}
-	server.SetupProcessLogging(managed)
-
-	if err := srv.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
-		os.Exit(1)
-	}
-
-	srv.Wait()
 }
 
 func handleConfigCommand(args []string) {

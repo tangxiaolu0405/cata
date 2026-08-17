@@ -37,11 +37,6 @@ type session struct {
 	lastExecCwd string
 }
 
-// dial 拨传统 legacy socket（~/.cata/cata.sock；cata run 兼容路径）。
-func dial() (*session, error) {
-	return dialPath(config.ResolvedSocketPath())
-}
-
 // dialAgent 拨某工作空间的 per-ws agent socket（~/.cata/sockets/<ws_id>.sock）。
 // 一个工作空间 = 一个 agent 进程 = 一个 LLM loop。
 func dialAgent(wsID string) (*session, error) {
