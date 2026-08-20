@@ -113,6 +113,10 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	guard := newChatLoopGuard(task)
 
 	var sessPromptTok, sessCompletionTok int
+	// unparsedToolRounds 连续「模型要调工具但 arguments 无法解析」的轮次数。
+	// 未达上限前自动回填提示并继续循环（让模型重发干净参数），超过上限才硬中断要求用户输入「继续」。
+	unparsedToolRounds := 0
+	const maxUnparsedToolRetries = 3
 
 	for round := 1; ; round++ {
 		if ctx.Err() != nil {
@@ -241,11 +245,25 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 		if len(toolCalls) == 0 {
 			// finish_reason 表明要调工具，但 arguments 损坏被丢弃时，禁止当成成功收工（否则 TUI 直接回等待输入）。
 			if strings.EqualFold(finishReason, "tool_calls") || strings.EqualFold(finishReason, "tool_use") {
-				hint := "模型请求了工具，但 tool arguments 无法解析（常见于多行 python3 -c / 裸换行 JSON）。请改用 create_file 写脚本再跑一行命令，或输入「继续」。"
 				log.Printf("chat: finish_reason=%s but 0 usable tool_calls after normalize; refusing success-done", finishReason)
+				unparsedToolRounds++
+				if unparsedToolRounds <= maxUnparsedToolRetries {
+					// 自动重试：把「参数无法解析」回填给模型，让它重发干净的 tool call 后继续循环；
+					// 模型据此修复（如改用 create_file 写脚本再 run_command），无需用户手动输入「继续」。
+					retryHint := fmt.Sprintf(
+						"上一次工具调用的 tool arguments 无法解析成合法 JSON（第 %d/%d 次）。"+
+							"多行 python3 -c 或裸换行 JSON 常导致此类问题；请改用 create_file 写脚本再 run_command 一行命令，并确保工具参数是单个合法 JSON 对象。重试。",
+						unparsedToolRounds, maxUnparsedToolRetries)
+					*history = append(*history, llm.Message{Role: "user", Content: retryHint})
+					_ = ss.emitStreamLine(conn, map[string]interface{}{
+						"type": "progress", "message": retryHint,
+					})
+					continue
+				}
+				hint := "模型请求了工具，但 tool arguments 无法解析（常见于多行 python3 -c / 裸换行 JSON）。请改用 create_file 写脚本再跑一行命令，或输入「继续」。"
 				*history = append(*history, llm.Message{Role: "assistant", Content: strings.TrimSpace(asst + "\n\n[system] " + hint)})
 				if chatWS != nil && task != nil {
-					_ = brain.MarkTaskFailed(chatWS, task, "tool_args_unparsed", hint, round, 0, 0, "", "")
+					_ = brain.MarkTaskFailed(chatWS, task, "tool_args_unparsed", hint, round, unparsedToolRounds, 0, "", "")
 				}
 				if lr != nil {
 					lr.Stop()
@@ -283,6 +301,8 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 		if brk := guard.observe(results); brk != nil {
 			return ss.emitChatLoopFailure(conn, lr, chatWS, task, guard, round, brk)
 		}
+		// 工具成功执行的一轮结束：重置「参数无法解析」连续计数，避免一次历史偶发拖垮后续自动重试额度。
+		unparsedToolRounds = 0
 	}
 }
 
