@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
@@ -68,8 +69,12 @@ type Config struct {
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	// UIPassword 控制台访问口令（HTTP Basic）。空 = 不启用（仍受 LAN-only 限制）。
 	// 局域网内有其他设备时建议设置，避免任何人驱动对话/批准 exec 确认。
-	UIPassword string    `json:"ui_password,omitempty"`
-	Projects   []Project `json:"projects,omitempty"`
+	UIPassword string `json:"ui_password,omitempty"`
+	// LoginBanMaxAttempts 连续登录失败封禁阈值（默认 5）；仅 ui_password 启用时生效。
+	LoginBanMaxAttempts int `json:"login_ban_max_attempts,omitempty"`
+	// LoginBanDurationSeconds 封禁时长（秒，默认 600=10 分钟）；仅 ui_password 启用时生效。
+	LoginBanDurationSeconds int       `json:"login_ban_duration_seconds,omitempty"`
+	Projects                []Project `json:"projects,omitempty"`
 	// remote 模式（cata_server.mode=remote）：本网关作为云端注册中心 + 路由。
 	// GatewayToken 隧道共享 Bearer token（v1；逐 agent token 留 v2）。空 = 拒绝所有隧道。
 	GatewayToken string `json:"gateway_token,omitempty"`
@@ -146,6 +151,16 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_UI_PASSWORD")); v != "" {
 		cfg.UIPassword = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_LOGIN_BAN_MAX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LoginBanMaxAttempts = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_LOGIN_BAN_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LoginBanDurationSeconds = n
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("CATA_GATEWAY_TOKEN")); v != "" {
 		cfg.GatewayToken = v
@@ -316,6 +331,28 @@ func (c Config) UIEnabled() bool {
 	return c.ResolvedUIListen() != ""
 }
 
+// LoginBanMaxAttemptsDefault 默认连续失败封禁阈值。
+const LoginBanMaxAttemptsDefault = 5
+
+// LoginBanDurationDefault 默认封禁时长（10 分钟）。
+const LoginBanDurationDefault = 10 * time.Minute
+
+// ResolvedLoginBanMaxAttempts 连续失败封禁阈值（默认 LoginBanMaxAttemptsDefault）。
+func (c Config) ResolvedLoginBanMaxAttempts() int {
+	if c.LoginBanMaxAttempts <= 0 {
+		return LoginBanMaxAttemptsDefault
+	}
+	return c.LoginBanMaxAttempts
+}
+
+// ResolvedLoginBanDuration 封禁时长（默认 LoginBanDurationDefault=10 分钟）。
+func (c Config) ResolvedLoginBanDuration() time.Duration {
+	if c.LoginBanDurationSeconds <= 0 {
+		return LoginBanDurationDefault
+	}
+	return time.Duration(c.LoginBanDurationSeconds) * time.Second
+}
+
 // FindProject 按 id 查找项目。
 func (c Config) FindProject(id string) (Project, bool) {
 	id = strings.TrimSpace(id)
@@ -340,6 +377,7 @@ func GatewayKnownTopKeys() []string {
 		"qq_app_id", "qq_app_secret", "qq_allowed_openids", "qq_sandbox",
 		"worker_root", "socket_path", "cata_url", "ui_listen", "projects",
 		"gateway_token", "tunnel_listen", "allow_agent_ids", "default_agent_id",
+		"ui_password", "login_ban_max_attempts", "login_ban_duration_seconds",
 	}
 }
 

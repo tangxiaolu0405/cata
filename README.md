@@ -51,6 +51,48 @@ $env:CATA_VERSION = "v0.1.9"; .\install_cata_windows.ps1
 
 安装完成后**新开终端**，确认 `cata` 在 PATH 中，再配置 `~/.cata/config.json` 中的 LLM API Key。
 
+## Gateway 独立部署
+
+`cata-gateway` 自带 Web 控制台（多项目对话、渠道面板）。需要把它单独跑在一台机器上时，用仓库根目录的
+`deploy_gateway.sh`：它从 GitHub Releases 下载二进制、写 `~/.cata/gateway.json`、再启动（**编译已在
+CI 完成，脚本不本地编译**）。
+
+**Linux / macOS（一键，从远端拉脚本执行）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/deploy_gateway.sh | \
+  GATEWAY_UI_PASSWORD=你的口令 bash
+```
+
+**下载到本地再执行**（便于审查 / 离线）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/deploy_gateway.sh -o deploy_gateway.sh
+chmod +x deploy_gateway.sh
+GATEWAY_UI_PASSWORD=你的口令 ./deploy_gateway.sh
+```
+
+启动方式与环境变量：
+
+| 参数 / 变量 | 说明 |
+|------|------|
+| `GATEWAY_UI_PASSWORD` | 控制台访问口令；**设了才启用登录页**，否则仅本机/局域网可访问 |
+| `GATEWAY_UI_LISTEN` | 监听地址，默认 `0.0.0.0:8787` |
+| `GATEWAY_EDITION` | 默认 `channel`（仅 gateway）；`base` 会额外拉起本机 cata server |
+| `INSTALL_DIR` | 二进制安装目录，默认 `~/.local/bin` |
+| `GATEWAY_REPO` | 自定义仓库，默认 `tangxiaolu0405/cata` |
+| `--version=v1.2.3` | 指定 release tag，默认 latest |
+| `--run=systemd` | 生成并启用 systemd unit（需 root）；默认 nohup 后台 + pidfile |
+
+登录安全：设了口令后，UI 所有请求需登录会话 cookie；**连续 5 次登录失败封该 IP 10 分钟**
+（阈值/时长可改 `gateway.json` 的 `login_ban_max_attempts` / `login_ban_duration_seconds`）。
+
+示例：指定版本 + systemd 托管
+
+```bash
+GATEWAY_UI_PASSWORD=你的口令 ./deploy_gateway.sh --version=v1.2.3 --run=systemd
+```
+
 ## 更新
 
 已安装带 `update` 子命令的版本后，可直接：

@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -31,6 +30,8 @@ type Server struct {
 	httpSrv *http.Server
 	reg     *tunnel.Registry    // 非 nil = remote 模式：项目列表/路由来自在线 agent
 	join    *tunnel.JoinManager // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
+	bans    *ipBan              // 连续登录失败封 IP（仅 ui_password 启用时生效）
+	session *sessionStore       // 登录会话（仅 ui_password 启用时生效）
 }
 
 // NewServer 创建 UI 服务器（本地模式）。
@@ -44,10 +45,18 @@ func NewServerWithRegistry(cfg gateway.Config, hub *Hub, reg *tunnel.Registry) *
 	if hub == nil {
 		hub = DefaultHub
 	}
+	s := &Server{cfg: cfg}
 	if reg != nil {
-		return &Server{cfg: cfg, web: NewWebChatWithRegistry(cfg, reg), hub: hub, reg: reg}
+		s.web = NewWebChatWithRegistry(cfg, reg)
+		s.reg = reg
+	} else {
+		s.web = NewWebChat(cfg)
 	}
-	return &Server{cfg: cfg, web: NewWebChat(cfg), hub: hub}
+	if strings.TrimSpace(cfg.UIPassword) != "" {
+		s.bans = newIPBan(cfg.ResolvedLoginBanMaxAttempts(), cfg.ResolvedLoginBanDuration())
+		s.session = newSessionStore(cfg.UIPassword, 24*time.Hour)
+	}
+	return s
 }
 
 // NewServerWithRegistryAndJoin 同 NewServerWithRegistry，并绑定 join 管理器（remote 模式
@@ -66,6 +75,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc(LoginPath, s.handleLoginPage)
+	mux.HandleFunc(LoginAPIPath, s.handleLoginAPI)
+	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProjectAction)
 	mux.HandleFunc("/api/machines", s.handleMachines)
@@ -82,10 +94,9 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("ui listen %s: %w", addr, err)
 	}
 	s.httpSrv = &http.Server{
-		Handler:           s.lanOrLocalOnly(mux),
+		Handler:           s.authHandler(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("cata-gateway: UI http://%s/ (LAN: use this machine's IP:port)", ln.Addr().String())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -108,48 +119,59 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// lanOrLocalOnly 允许本机与 RFC1918/链路本地局域网；拒绝公网直连作轻量防护。
-// 配置 UIPassword 时叠加 HTTP Basic 口令：LAN-only 只是「够得着」限制，不是授权。
-func (s *Server) lanOrLocalOnly(next http.Handler) http.Handler {
+// authHandler 统一鉴权中间件：
+//   - 未配置 ui_password：保持 LAN-only（公网直连拒绝），不弹登录页（向后兼容）。
+//   - 已配置 ui_password：放开公网，但需登录会话 cookie；未登录跳 /login。
+//     登录接口 /login、/api/login、/api/logout 免鉴权。连续失败达阈值封该 IP LoginBanDuration。
+func (s *Server) authHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
-		if !isAllowedUIClient(ip) {
-			http.Error(w, "LAN or localhost only", http.StatusForbidden)
+		if !s.uiPasswordRequired() {
+			// 无口令：仅本机与 RFC1918/链路本地局域网（公网直连拒绝）。
+			ip := net.ParseIP(stripPort(r.RemoteAddr))
+			if !isAllowedUIClient(ip) {
+				http.Error(w, "LAN or localhost only", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
 			return
 		}
-		if s.uiPasswordRequired() && !s.checkUIPassword(r) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="cata-gateway"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		// 已启用登录：IP 封禁检查。
+		clientIP := clientIPFromRequest(r)
+		if rem := s.bans.bannedRemaining(clientIP); rem > 0 {
+			http.Error(w, "too many failed attempts; try again later", http.StatusForbidden)
+			return
+		}
+		// 登录页/接口免鉴权。
+		if isLoginRoute(r.URL.Path) || r.URL.Path == "/api/logout" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// 其余需有效会话。
+		if !s.validSession(r) {
+			serveLoginResult(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// uiPasswordRequired 是否配置了 UI 访问口令。
+// uiPasswordRequired 是否配置了 UI 访问口令（启用登录页 + 封 IP）。
 func (s *Server) uiPasswordRequired() bool {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return strings.TrimSpace(s.cfg.UIPassword) != ""
 }
 
-// checkUIPassword 校验 HTTP Basic 口令（常量时间比较）。
-func (s *Server) checkUIPassword(r *http.Request) bool {
-	s.cfgMu.RLock()
-	want := s.cfg.UIPassword
-	s.cfgMu.RUnlock()
-	if want == "" {
-		return true
-	}
-	_, pass, ok := r.BasicAuth()
-	if !ok {
+// validSession 校验请求是否携带有效登录会话 cookie。
+func (s *Server) validSession(r *http.Request) bool {
+	if s.session == nil {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(pass), []byte(want)) == 1
+	c, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return false
+	}
+	return s.session.valid(c.Value)
 }
 
 func isAllowedUIClient(ip net.IP) bool {
@@ -184,6 +206,86 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(data)
+}
+
+// handleLoginPage 返回登录页（仅口令已配置时有意义；未配置时仍返回页面但提交会 400）。
+func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if !s.uiPasswordRequired() {
+		http.Error(w, "login disabled: set ui_password in gateway.json", http.StatusBadRequest)
+		return
+	}
+	data, err := fs.ReadFile(staticFS, "static/login.html")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+// handleLoginAPI 校验口令并签发会话 cookie；连续失败达阈值封该 IP。
+func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if !s.uiPasswordRequired() || s.session == nil {
+		http.Error(w, `{"error":"login disabled"}`, http.StatusBadRequest)
+		return
+	}
+	ip := clientIPFromRequest(r)
+	if rem := s.bans.bannedRemaining(ip); rem > 0 {
+		http.Error(w, `{"error":"too many failed attempts; try again later"}`, http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	token, ok := s.session.create(strings.TrimSpace(body.Password))
+	if !ok {
+		banned, _ := s.bans.recordFailure(ip)
+		if banned {
+			log.Printf("cata-gateway: IP %s banned after %d failed logins", ip, s.bans.max)
+			http.Error(w, `{"error":"too many failed attempts; try again later"}`, http.StatusForbidden)
+			return
+		}
+		http.Error(w, `{"error":"invalid password"}`, http.StatusUnauthorized)
+		return
+	}
+	s.bans.recordSuccess(ip)
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(24 * time.Hour.Seconds()),
+	})
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleLogout 注销当前会话。
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if c, err := r.Cookie(SessionCookieName); err == nil {
+		s.session.destroy(c.Value)
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {

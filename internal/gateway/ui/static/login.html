@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cata Gateway · 登录</title>
+  <style>
+    :root {
+      --ink: #0f1c1a;
+      --paper: #f4faf7;
+      --accent: #d97706;
+      --accent-deep: #b45309;
+      --line: rgba(15, 28, 26, 0.12);
+      --muted: rgba(15, 28, 26, 0.55);
+      --font-b: "Segoe UI", "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: var(--font-b);
+      color: var(--ink);
+      background:
+        radial-gradient(1000px 500px at 0% -10%, rgba(217,119,6,.16), transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(15,118,110,.12), transparent 50%),
+        linear-gradient(160deg, #f7fbf9, #eef6f2);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card {
+      width: 340px; max-width: 90vw;
+      background: rgba(244,250,247,0.92);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 28px 26px;
+      box-shadow: 0 12px 40px rgba(15,28,26,0.10);
+    }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+    label { display: block; font-size: 13px; margin-bottom: 6px; }
+    input {
+      width: 100%; padding: 10px 12px; font-size: 14px;
+      border: 1px solid var(--line); border-radius: 10px;
+      background: #fff; color: var(--ink); outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      margin-top: 16px; width: 100%; padding: 11px 12px;
+      font-size: 14px; font-weight: 600; color: #fff; cursor: pointer;
+      background: var(--accent); border: none; border-radius: 10px;
+    }
+    button:hover { background: var(--accent-deep); }
+    .err { color: #b91c1c; font-size: 13px; min-height: 18px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Cata Gateway</h1>
+    <div class="sub">控制台登录</div>
+    <form id="login-form">
+      <label for="password">访问口令（ui_password）</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+      <button type="submit">登录</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById("login-form");
+    const errEl = document.getElementById("err");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.textContent = "";
+      const password = document.getElementById("password").value;
+      try {
+        const resp = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        });
+        if (resp.ok) {
+          window.location.href = "/";
+          return;
+        }
+        let msg = "登录失败";
+        try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) {}
+        if (resp.status === 403) msg = "尝试次数过多，已被临时封禁，请稍后再试";
+        errEl.textContent = msg;
+      } catch (e) {
+        errEl.textContent = "网络错误";
+      }
+    });
+  </script>
+</body>
+</html>
