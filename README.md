@@ -54,22 +54,22 @@ $env:CATA_VERSION = "v0.1.9"; .\install_cata_windows.ps1
 ## Gateway 独立部署
 
 `cata-gateway` 自带 Web 控制台（多项目对话、渠道面板）。需要把它单独跑在一台机器上时，用仓库根目录的
-`deploy_gateway.sh`：它从 GitHub Releases 下载二进制、写 `~/.cata/gateway.json`、再启动（**编译已在
+`install_gateway.sh`：它从 GitHub Releases 下载二进制、写 `~/.cata/gateway.json`、再启动（**编译已在
 CI 完成，脚本不本地编译**）。
 
 **Linux / macOS（一键，从远端拉脚本执行）**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/deploy_gateway.sh | \
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_gateway.sh | \
   GATEWAY_UI_PASSWORD=你的口令 bash
 ```
 
 **下载到本地再执行**（便于审查 / 离线）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/deploy_gateway.sh -o deploy_gateway.sh
-chmod +x deploy_gateway.sh
-GATEWAY_UI_PASSWORD=你的口令 ./deploy_gateway.sh
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_gateway.sh -o install_gateway.sh
+chmod +x install_gateway.sh
+GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh
 ```
 
 启动方式与环境变量：
@@ -90,7 +90,7 @@ GATEWAY_UI_PASSWORD=你的口令 ./deploy_gateway.sh
 示例：指定版本 + systemd 托管
 
 ```bash
-GATEWAY_UI_PASSWORD=你的口令 ./deploy_gateway.sh --version=v1.2.3 --run=systemd
+GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=systemd
 ```
 
 ## 更新

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# deploy_gateway.sh — 单独部署 cata-gateway（二进制由 GitHub Actions 构建，本脚本只负责下载/配置/启动）。
+# install_gateway.sh — 单独部署 cata-gateway（二进制由 GitHub Actions 构建，本脚本只负责下载/配置/启动）。
 #
 # 用法:
-#   ./deploy_gateway.sh                         # 下载最新 release，安装 cata-gateway，写 gateway.json，nohup 后台启动
-#   GATEWAY_UI_PASSWORD=xxx ./deploy_gateway.sh # 非交互：直接指定控制台口令
-#   ./deploy_gateway.sh --run=systemd           # 改为生成并安装 systemd unit（需 root）
-#   ./deploy_gateway.sh --version v1.2.3        # 指定 release tag（默认 latest）
+#   ./install_gateway.sh                         # 下载最新 release，安装 cata-gateway，写 gateway.json，nohup 后台启动
+#   GATEWAY_UI_PASSWORD=xxx ./install_gateway.sh # 非交互：直接指定控制台口令
+#   ./install_gateway.sh --run=systemd           # 改为生成并安装 systemd unit（需 root）
+#   ./install_gateway.sh --version v1.2.3        # 指定 release tag（默认 latest）
 #
 # 环境变量:
 #   INSTALL_DIR         默认 $HOME/.local/bin
