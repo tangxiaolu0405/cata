@@ -67,6 +67,12 @@ func (s *Supervisor) handleConn(conn net.Conn) {
 			} else {
 				resp = respBody{Success: true, Message: "stopped"}
 			}
+		case "shutdown":
+			// 关闭 supervisor 并级联停掉全部保活 agent（cata supervisor stop）。
+			resp = respBody{Success: true, Message: "shutting down"}
+			if s.cancel != nil {
+				s.cancel()
+			}
 		case "list", "status":
 			entries, _ := List()
 			type row struct {

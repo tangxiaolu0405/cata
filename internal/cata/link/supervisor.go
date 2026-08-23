@@ -22,6 +22,7 @@ type Supervisor struct {
 	mu         sync.Mutex
 	ln         net.Listener
 	backoff    *ensureBackoff
+	cancel     context.CancelFunc // shutdown 控制命令触发，级联停掉全部 agent
 }
 
 // NewSupervisor 创建 supervisor 实例。
@@ -63,6 +64,7 @@ func RunSupervisor(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.cancel = cancel
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -96,7 +98,10 @@ func RunSupervisor(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("cata supervisor: stopped")
+			// 级联关闭：supervisor 退出时把保活的 agent 一起停掉，
+			// 避免留下脱离监管的常驻进程继续占资源/持隧道。
+			s.stopAllAgents()
+			log.Println("cata supervisor: stopped (all agents stopped)")
 			return nil
 		case <-ticker.C:
 			if err := s.ensureAll(); err != nil {
@@ -108,6 +113,24 @@ func RunSupervisor(ctx context.Context) error {
 				config.RotateRuntimeLogs()
 			}
 		}
+	}
+}
+
+// stopAllAgents 停止所有注册的 agent 进程（读 pid 文件逐个 SIGTERM）。
+// supervisor 退出（SIGTERM/SIGINT）时调用，实现「关 supervisor 即关全部 cata」。
+func (s *Supervisor) stopAllAgents() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Printf("cata supervisor: stop all: %v", err)
+		return
+	}
+	for _, id := range cfg.LinkedAgentIDs() {
+		if err := killAgentProcess(id); err != nil {
+			// 进程可能本来就停了/pid 文件缺失，不阻断其它 agent。
+			log.Printf("cata supervisor: stop agent %s: %v", id, err)
+			continue
+		}
+		log.Printf("cata supervisor: stopped agent %s", id)
 	}
 }
 

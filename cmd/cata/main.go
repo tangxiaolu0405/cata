@@ -78,7 +78,7 @@ func printUsage() {
 	fmt.Println("  cata run                Start legacy server (internal: cata-pet / scheduler 用; chat 不再依赖)")
 	fmt.Println("  cata agent              Start one agent per workspace (one LLM loop; --workspace <ws_id>)")
 	fmt.Println("  cata link               Register local workspaces to a remote gateway (add/remove/list)")
-	fmt.Println("  cata supervisor         Per-machine daemon: keep registered agent processes alive")
+	fmt.Println("  cata supervisor [stop]   Per-machine daemon: keep registered agent processes alive; stop 级联关闭全部 agent")
 	fmt.Println("  cata schedule           Self-hosted scheduler daemon (discovers tasks, fires as real client)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
 	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")

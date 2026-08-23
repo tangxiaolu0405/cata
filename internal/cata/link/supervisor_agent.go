@@ -93,6 +93,31 @@ func killAgentProcess(agentID string) error {
 	return fmt.Errorf("agent %s process %d did not exit after SIGTERM+SIGKILL", agentID, pid)
 }
 
+// StopSupervisor 向 supervisor 发 shutdown 命令：supervisor 退出并级联停掉全部保活 agent。
+func StopSupervisor() error {
+	conn, err := net.DialTimeout("unix", config.SupervisorSocketPath(), 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("supervisor not running (%s)", config.SupervisorSocketPath())
+	}
+	defer conn.Close()
+	req, _ := json.Marshal(map[string]string{"command": "shutdown"})
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+	var resp respBody
+	if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("supervisor shutdown: %s", resp.Message)
+	}
+	return nil
+}
+
 // SupervisorAlive 探测 supervisor 控制 socket 是否存活。
 func SupervisorAlive() bool {
 	conn, err := net.DialTimeout("unix", config.SupervisorSocketPath(), 500*time.Millisecond)
