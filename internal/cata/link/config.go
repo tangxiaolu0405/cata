@@ -93,10 +93,9 @@ func SaveConfig(cfg Config) error {
 	return os.Rename(tmp, path)
 }
 
-// GatewayConfigured 是否已配置网关（gateway_url + 准入口令 + 逐机器 token）。
+// GatewayConfigured 是否已配置网关（gateway_url + 逐机器 token）。
 func (c Config) GatewayConfigured() bool {
 	return strings.TrimSpace(c.GatewayURL) != "" &&
-		strings.TrimSpace(c.GatewayToken) != "" &&
 		strings.TrimSpace(c.MachineToken) != ""
 }
 

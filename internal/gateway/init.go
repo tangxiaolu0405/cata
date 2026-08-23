@@ -51,7 +51,6 @@ func defaultConfigForEdition(edition string) Config {
 			CataServer: CataServerConfig{
 				Mode: ServerModeRemote,
 			},
-			GatewayToken: "YOUR_GATEWAY_TOKEN",
 			TunnelListen: DefaultTunnelListen,
 			UIListen:     DefaultUIListen,
 			Projects:     []Project{},

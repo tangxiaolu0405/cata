@@ -31,6 +31,16 @@ func DefaultRateLimitConfig() RateLimitConfig {
 	}
 }
 
+// DefaultJoinRateLimitConfig join 端点限流（强拦截碰撞/爆破）：60s 内最多 10 次，
+// 超限直接拉黑 10 分钟（对比普通 60s，给爆破者更长冷却，且需配合 X-Cata-Join 协议头网关端拦截）。
+func DefaultJoinRateLimitConfig() RateLimitConfig {
+	return RateLimitConfig{
+		Window:      60 * time.Second,
+		MaxHits:     10,
+		BanDuration: 10 * time.Minute,
+	}
+}
+
 // RateLimiter 线程安全的内存态限流器。
 type RateLimiter struct {
 	cfg    RateLimitConfig

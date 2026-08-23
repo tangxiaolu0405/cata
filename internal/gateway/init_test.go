@@ -104,7 +104,7 @@ func TestInitConfig_remote(t *testing.T) {
 	if cfg.CataServer.Mode != ServerModeRemote {
 		t.Fatalf("mode=%s", cfg.CataServer.Mode)
 	}
-	if cfg.GatewayToken == "" {
-		t.Fatal("remote template should include gateway_token")
+	if cfg.GatewayToken != "" {
+		t.Fatal("remote template should not include gateway_token (removed)")
 	}
 }

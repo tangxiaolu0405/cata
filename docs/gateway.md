@@ -165,7 +165,7 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 |------|--------|-----------|
 | `edition` | `base` \| `channel` | `remote` |
 | `cata_server` | base 版自动拉起 | `mode: remote`（不拉起本机 server） |
-| `gateway_token` / `CATA_GATEWAY_TOKEN` | — | **必需**（隧道共享 Bearer token） |
+| `gateway_token` / `CATA_GATEWAY_TOKEN` | — | 已移除（join 靠 X-Cata-Join 协议头 + UI 批准；隧道用逐机 machine_token） |
 | `tunnel_listen` / `CATA_TUNNEL_LISTEN` | — | 隧道端点，默认 `0.0.0.0:8799` |
 | `allow_agent_ids` / `CATA_GATEWAY_ALLOW_AGENTS` | — | agent 白名单（空 = 放行所有） |
 | `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | — | 通道会话默认路由 agent |

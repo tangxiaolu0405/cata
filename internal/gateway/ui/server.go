@@ -45,7 +45,7 @@ func NewServerWithRegistry(cfg gateway.Config, hub *Hub, reg *tunnel.Registry) *
 	if hub == nil {
 		hub = DefaultHub
 	}
-	s := &Server{cfg: cfg}
+	s := &Server{cfg: cfg, hub: hub}
 	if reg != nil {
 		s.web = NewWebChatWithRegistry(cfg, reg)
 		s.reg = reg
@@ -82,6 +82,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/projects/", s.handleProjectAction)
 	mux.HandleFunc("/api/machines", s.handleMachines)
 	mux.HandleFunc("/api/machines/", s.handleMachineAction)
+	mux.HandleFunc("/api/join/pending", s.handleJoinPending)
 	mux.HandleFunc("/api/join/approve", s.handleJoinApprove)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
@@ -628,8 +629,22 @@ func (s *Server) handleMachineAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// handleJoinPending GET /api/join/pending → 待批准机器接入列表（remote 模式）。
+// UI 展示后一键批准，管理员无需复制机器打印的 code。
+func (s *Server) handleJoinPending(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.join == nil {
+		writeJSON(w, []any{})
+		return
+	}
+	writeJSON(w, s.join.Pending())
+}
+
 // handleJoinApprove POST /api/join/approve → UI 批准机器接入（remote 模式）。
-// 走 UI 端口、进程内调 JoinManager，无需 gateway_token、无跨域；防护靠 lanOrLocalOnly。
+// 走 UI 端口、进程内调 JoinManager，无需 gateway_token、无跨域；防护靠登录会话（authHandler）。
 func (s *Server) handleJoinApprove(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)

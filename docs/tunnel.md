@@ -42,7 +42,6 @@
 ```json
 {
   "gateway_url": "wss://gw.example.com",
-  "gateway_token": "网关准入口令（join 时提供，HTTP 握手层）",
   "machine_id": "本机稳定标识（join 生成）",
   "machine_token": "本机逐机器凭证（join 签发）",
   "workspace_root": "/home/user/projects",
@@ -55,7 +54,7 @@
 
 | 命令 | 作用 |
 |------|------|
-| `cata link join --gateway <url> --token <gateway_token>` | 机器首次接入：join 拿逐机器 token（一次性 code 经网关 UI 批准） |
+| `cata link join <gateway_url>` | 机器首次接入：join 拿逐机器 token（一次性 code 经网关 UI 批准；无需任何固定口令） |
 | `cata link add --dir <path>` | 注册工作空间（join 后）；写 link.json 并拉起 agent + supervisor |
 | `cata link remove <agent_id>` | 注销并停止 agent |
 | `cata link list` / `cata link status` | 查看注册与运行状态 |
@@ -72,7 +71,10 @@ agent 启动参数：
 
 ## 隧道协议（cata-tunnel.v1）
 
-- 传输：WebSocket（wss），端点 `GET /cata/v1/tunnel?agent=<agent_id>`，`Authorization: Bearer <gateway_token>`。
+- 传输：WebSocket（wss），端点 `GET /cata/v1/tunnel?agent=<agent_id>`。不再要求 `gateway_token`；
+  鉴权在 **hello 帧**用逐机器 `machine_token` 完成（网关存 hash，可单台吊销）。
+- join 握手：机器侧 `cata link join` 的请求带自定义协议头 `X-Cata-Join: cata-tunnel.v1`，
+  网关端在最外层校验——未携带该头的请求（随机扫描/爆破）直接 400 丢弃并记录告警，不进状态机。
 - 帧：JSON text message。`stream` 是网关侧分配的递增 id，标识一条「逻辑 socket 连接」。
 - `line` 帧的 `data` 为 base64，逐字节透传（不含行尾约定），因此 NDJSON chat 协议无需任何改动。
 
@@ -99,17 +101,20 @@ agent 启动参数：
 
 ### join 流程（机器首次接入）
 
-机器侧 `cata link join --gateway <url> --token <gateway_token>`：
+机器侧 `cata link join <gateway_url>`（无需任何固定口令）：
 
-1. POST `/cata/v1/join/request {machine_id}` → 网关发一次性 join code（10 分钟有效，内存态）；
-2. 机器打印 code，管理员在网关 UI 批准；
-3. 网关签发 machine_token（machines.json 存 hash），状态改 approved；
+1. 本地发 POST `/cata/v1/join/request {machine_id}`，**携带自定义协议头 `X-Cata-Join: cata-tunnel.v1`**
+   → 网关最外层校验该头后发一次性 join code（10 分钟有效，内存态）；
+2. 机器进入待批准状态，**已在登录的网关 UI 自动弹出待批准提示**（无需复制 code）；
+3. 管理员在 UI 点「批准」→ 网关签发 machine_token（machines.json 存 hash），状态改 approved；
 4. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
 5. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
 
-**join 端点 IP 限流**：`request`/`status` 无鉴权，套内存态 RateLimiter（默认 60s 窗口最多 10 次，
-超限拉黑 60s，返回 429 + Retry-After）。拉黑池为临时态，网关重启清空（攻击者继续刷会再次被拉黑，
-故不持久化）。
+**join 端点防爆破（两层）**：
+- **协议头拦截**：`request`/`status` 最外层校验 `X-Cata-Join: cata-tunnel.v1`，未携带/不符的请求
+  （随机扫描器、爆破器）**直接 400 丢弃**并记录 IP 告警，连限流/状态机都进不去。
+- **IP 限流**：通过协议头校验后套内存态 RateLimiter（60s 窗口最多 10 次，**超限拉黑 10 分钟**，
+  返回 429 + Retry-After）。拉黑池为临时态，网关重启清空（攻击者继续刷会再次被拉黑，故不持久化）。
 
 **首次引导**：一台机器首次接入需本机 `cata link join`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程 register。
 
@@ -148,7 +153,6 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 {
   "edition": "remote",
   "cata_server": { "mode": "remote" },
-  "gateway_token": "与 worker 共享的 Bearer token",
   "tunnel_listen": "0.0.0.0:8799",
   "allow_agent_ids": [],
   "default_agent_id": ""
@@ -157,14 +161,14 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 | 字段 / 环境变量 | 说明 |
 |-----------------|------|
-| `gateway_token` / `CATA_GATEWAY_TOKEN` | 必需；空 = 拒绝所有隧道 |
 | `tunnel_listen` / `CATA_TUNNEL_LISTEN` | 隧道 + agents API 监听，默认 `0.0.0.0:8799` |
-| `allow_agent_ids` / `CATA_GATEWAY_ALLOW_AGENTS` | 白名单；空 = 放行所有（仍要求 token） |
+| `allow_agent_ids` / `CATA_GATEWAY_ALLOW_AGENTS` | 白名单；空 = 放行所有（仍要求机器 join 后逐机 token） |
 | `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | 通道类会话（telegram/qq）默认路由 agent；空 = 第一个在线 |
 
 - `edition: remote` 或 `cata_server.mode: remote`（或设了 `cata_url`）进入 remote 模式。
 - remote 模式**不**拉起本机 cata server；worker 在各机器由 `cata agent --link` 自持隧道。
-- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/agents`（GET 在线 agent 列表）、`/cata/v1/join/*`（机器首次接入）。
+- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/join/*`（机器首次接入，协议头拦截 + IP 限流）。
+  `/cata/v1/agents` 与批准（approve）已改为 UI 进程内调用，不再暴露为远端无鉴权 API。
 
 ## 会话路由
 
@@ -174,10 +178,11 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 ## 安全
 
-- 两层鉴权：HTTP 层 `gateway_token`（准入口令）+ hello 层 `machine_token`（逐机器，hash 存储、可单独吊销）。
+- 鉴权：hello 层 `machine_token`（逐机器，hash 存储、可单独吊销）；join 授权靠一次性 code + 管理员 UI 批准。
+- join 端点最外层校验自定义协议头 `X-Cata-Join: cata-tunnel.v1`，未携带（扫描/爆破）直接 400 + 告警；通过后 IP 限流拉黑 10 分钟。
 - token 只存 sha256 hash（`~/.cata/machines.json`，0600），不落明文。
 - `allow_agent_ids` 白名单（可选）。
-- 隧道端点 `CheckOrigin` 放行（可能经 nginx/caddy 反代），鉴权靠 token；建议网关部署走 HTTPS。
+- 隧道端点 `CheckOrigin` 放行（可能经 nginx/caddy 反代）；建议网关部署走 HTTPS。
 
 ## 与旧模式的关系
 

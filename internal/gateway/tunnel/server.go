@@ -10,18 +10,38 @@ import (
 	"time"
 )
 
-// NewHandler 挂载隧道端点（/cata/v1/tunnel）、在线 agent API（/cata/v1/agents）、
-// 与 join 流程（/cata/v1/join/request|status|approve）。
+// NewHandler 挂载隧道端点（/cata/v1/tunnel）与 join 流程（/cata/v1/join/request|status）。
+// gateway_token 已移除：join 靠自定义协议头 X-Cata-Join 区分 cata 自身报文并自动拦截碰撞/爆破，
+// 授权靠一次性 code + 管理员在 UI 批准；隧道握手鉴权用逐机器 token（machine_token，hello 帧）。
 func NewHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/cata/v1/tunnel", Handler(reg, opts))
-	mux.Handle("/cata/v1/agents", AgentsHandler(reg, opts))
 	if opts.Join != nil {
-		mux.Handle("/cata/v1/join/request", rateLimitJoin(opts.Limiter, JoinRequestHandler(opts.Join)))
-		mux.Handle("/cata/v1/join/status", rateLimitJoin(opts.Limiter, JoinStatusHandler(opts.Join)))
-		mux.Handle("/cata/v1/join/approve", JoinApproveHandler(opts.Join, opts))
+		// join 端点：最外层协议头拦截（不符直接 400，连限流/状态机都不进入）→ 限流防爆破。
+		mux.Handle("/cata/v1/join/request", gateJoinProto(rateLimitJoin(opts.Limiter, JoinRequestHandler(opts.Join))))
+		mux.Handle("/cata/v1/join/status", gateJoinProto(rateLimitJoin(opts.Limiter, JoinStatusHandler(opts.Join))))
 	}
 	return mux
+}
+
+// JoinProtoHeader 自定义握手协议头：标记「cata 自身的 join 报文」，与随机扫描/爆破流量区分。
+// 网关端在最外层校验，未携带该头的一律 400 丢弃，从源头降低爆破面。
+const (
+	JoinProtoHeaderName  = "X-Cata-Join"
+	JoinProtoHeaderValue = "cata-tunnel.v1"
+)
+
+// gateJoinProto join 端点最外层中间件：校验 X-Cata-Join 协议头。
+// 缺失/不符 → 记录 IP 告警并直接 400（不进入限流/状态机）。仅 cata 自身报文带该头。
+func gateJoinProto(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(JoinProtoHeaderName) != JoinProtoHeaderValue {
+			log.Printf("cata-gateway: join proto mismatch from %s (missing/invalid %s): possible scan/brute-force", clientIP(r), JoinProtoHeaderName)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // rateLimitJoin 对 join 端点套 IP 限流中间件（limiter 为 nil 时透传）。
@@ -75,50 +95,6 @@ func JoinStatusHandler(j *JoinManager) http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{"approved": approved, "machine_token": token})
-	})
-}
-
-// JoinApproveHandler POST /cata/v1/join/approve → 管理员批准，签发逐机器 token。
-// 管理动作，要求 gateway_token 鉴权（与隧道同口令），或由 UI 内部（LAN）调用。
-func JoinApproveHandler(j *JoinManager, opts HandlerOptions) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validToken(r.Header.Get("Authorization"), opts.Token) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		var body struct {
-			Code string `json:"code"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		machineID, err := j.ApproveJoin(body.Code)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "machine_id": machineID})
-	})
-}
-
-// AgentsHandler GET /cata/v1/agents → 在线 agent 列表 JSON（Web UI 远程项目列表用）。
-// 与隧道端点共用 Bearer token 鉴权：泄露 agent 列表会暴露各项目路径与拓扑。
-func AgentsHandler(reg *Registry, opts HandlerOptions) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validToken(r.Header.Get("Authorization"), opts.Token) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		writeJSON(w, map[string]any{"agents": reg.OnlineAgents()})
 	})
 }
 

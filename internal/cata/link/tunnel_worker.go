@@ -91,7 +91,8 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 		log.Printf("cata agent %s: WARNING: gateway url is ws:// (token sent in plaintext); use wss:// in production", agentID)
 	}
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+cfg.GatewayToken)
+	// 隧道握手鉴权用逐机器 token（machine_token），不再使用固定 gateway_token。
+	header.Set("Authorization", "Bearer "+cfg.MachineToken)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, resp, err := dialer.Dial(wsURL, header)

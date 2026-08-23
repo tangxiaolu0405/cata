@@ -41,24 +41,15 @@ func TestHandlerHTTPLayerAuth(t *testing.T) {
 		t.Fatalf("non-websocket: want 400, got %d", resp.StatusCode)
 	}
 
-	// 错 token（带 Upgrade）→ 401。
-	req, _ := http.NewRequest("GET", srv.URL+"?agent=a", nil)
+	// 缺 agent 参数 → 400。
+	req, _ := http.NewRequest("GET", srv.URL, nil)
 	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Authorization", "Bearer wrong")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Version", "13")
 	resp2, _ := http.DefaultClient.Do(req)
 	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("bad token: want 401, got %d", resp2.StatusCode)
-	}
-
-	// 缺 agent 参数 → 400。
-	req3, _ := http.NewRequest("GET", srv.URL, nil)
-	req3.Header.Set("Upgrade", "websocket")
-	req3.Header.Set("Authorization", "Bearer secret")
-	resp3, _ := http.DefaultClient.Do(req3)
-	resp3.Body.Close()
-	if resp3.StatusCode != http.StatusBadRequest {
-		t.Fatalf("missing agent: want 400, got %d", resp3.StatusCode)
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing agent: want 400, got %d", resp2.StatusCode)
 	}
 
 	// 白名单外 → 403。

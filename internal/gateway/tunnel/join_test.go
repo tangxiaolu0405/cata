@@ -103,3 +103,31 @@ func TestJoinExpired(t *testing.T) {
 		t.Fatal("expired entry should be purged")
 	}
 }
+
+// TestJoinPending 验证 Pending() 只返回未批准、未过期的请求，批准后不再出现。
+func TestJoinPending(t *testing.T) {
+	j := newTestJoinManager(t)
+	code1, _ := j.RequestJoin("machine-1")
+	code2, _ := j.RequestJoin("machine-2")
+
+	pending := j.Pending()
+	if len(pending) != 2 {
+		t.Fatalf("want 2 pending, got %d: %+v", len(pending), pending)
+	}
+	byCode := map[string]string{}
+	for _, p := range pending {
+		byCode[p.Code] = p.MachineID
+	}
+	if byCode[code1] != "machine-1" || byCode[code2] != "machine-2" {
+		t.Fatalf("pending mapping mismatch: %+v", byCode)
+	}
+
+	// 批准一台后不再出现在待批准列表。
+	if _, err := j.ApproveJoin(code1); err != nil {
+		t.Fatal(err)
+	}
+	pending = j.Pending()
+	if len(pending) != 1 || pending[0].Code != code2 {
+		t.Fatalf("want only code2 pending, got %+v", pending)
+	}
+}

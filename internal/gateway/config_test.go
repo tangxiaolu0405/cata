@@ -63,12 +63,8 @@ func TestConfig_editionRemote(t *testing.T) {
 	if !cfg.RemoteMode() {
 		t.Fatal("RemoteMode should be true")
 	}
-	if cfg.TunnelEnabled() {
-		t.Fatal("remote without gateway_token should not be tunnel-enabled")
-	}
-	cfg.GatewayToken = "tok"
 	if !cfg.TunnelEnabled() {
-		t.Fatal("remote with gateway_token should be tunnel-enabled")
+		t.Fatal("remote should be tunnel-enabled without gateway_token")
 	}
 	if cfg.ResolvedTunnelListen() != DefaultTunnelListen {
 		t.Fatalf("tunnel listen default=%s", cfg.ResolvedTunnelListen())

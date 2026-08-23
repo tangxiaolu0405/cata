@@ -225,9 +225,9 @@ func (c Config) RemoteMode() bool {
 	return c.CataServer.Mode == ServerModeRemote
 }
 
-// TunnelEnabled remote 模式且已配置隧道 token（空 token 拒绝所有隧道连接）。
+// TunnelEnabled remote 模式（隧道由逐机器 token 鉴权，不再依赖固定 gateway_token）。
 func (c Config) TunnelEnabled() bool {
-	return c.RemoteMode() && strings.TrimSpace(c.GatewayToken) != ""
+	return c.RemoteMode()
 }
 
 // ResolvedTunnelListen 返回隧道端点实际监听地址。

@@ -72,8 +72,8 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Remote mode (cata_server.mode=remote; cloud gateway):")
 	fmt.Println("  Accepts WSS tunnels from `cata agent --link` on any machine; project = online agent")
-	fmt.Println("  gateway_token (or CATA_GATEWAY_TOKEN) required; tunnel_listen default 0.0.0.0:8799")
-	fmt.Println("  Worker side: cata link add --dir <path> --gateway <url> --token <token>")
+	fmt.Println("  join 靠 X-Cata-Join 协议头 + UI 批准；隧道用逐机器 token；tunnel_listen 默认 0.0.0.0:8799")
+	fmt.Println("  Worker side: cata link join <url>  →  cata link add --dir <path>")
 	fmt.Println()
 	fmt.Println("Channels (credential-driven, can run together):")
 	fmt.Println("  telegram  telegram_bot_token / TELEGRAM_BOT_TOKEN")
@@ -88,7 +88,7 @@ func printUsage() {
 	fmt.Println("Environment:")
 	fmt.Println("  CATA_GATEWAY_EDITION    base | channel")
 	fmt.Println("  CATA_GATEWAY_UI         listen addr, or 0/off to disable")
-	fmt.Println("  CATA_GATEWAY_TOKEN / CATA_TUNNEL_LISTEN / CATA_GATEWAY_ALLOW_AGENTS / CATA_GATEWAY_DEFAULT_AGENT")
+	fmt.Println("  CATA_TUNNEL_LISTEN / CATA_GATEWAY_ALLOW_AGENTS / CATA_GATEWAY_DEFAULT_AGENT")
 	fmt.Println("  TELEGRAM_BOT_TOKEN / QQ_APP_ID / QQ_APP_SECRET / QQ_SANDBOX")
 	fmt.Println("  TELEGRAM_ALLOWED_USERS / QQ_ALLOWED_OPENIDS")
 	fmt.Println("  CATA_WORKER_ROOT / CATA_SOCKET / CATA_BIN")
@@ -164,14 +164,10 @@ func runGateway(only string) {
 	var join *tunnel.JoinManager
 	var limiter *tunnel.RateLimiter
 	if remote {
-		if !cfg.TunnelEnabled() {
-			fmt.Fprintf(os.Stderr, "remote mode requires gateway_token (env CATA_GATEWAY_TOKEN or gateway.json gateway_token)\n")
-			os.Exit(1)
-		}
 		reg = tunnel.NewRegistry()
 		machines = tunnel.NewMachinesStore(tunnel.MachinesPath())
 		join = tunnel.NewJoinManager(machines)
-		limiter = tunnel.NewRateLimiter(tunnel.DefaultRateLimitConfig())
+		limiter = tunnel.NewRateLimiter(tunnel.DefaultJoinRateLimitConfig())
 		log.Printf("cata-gateway: remote mode: tunnel listen=%s (allow_agents=%d)", cfg.ResolvedTunnelListen(), len(cfg.AllowAgentIDs))
 	}
 
@@ -217,7 +213,6 @@ func runGateway(only string) {
 		go func() {
 			defer wg.Done()
 			if err := tunnel.Run(ctx, cfg.ResolvedTunnelListen(), reg, tunnel.HandlerOptions{
-				Token:         cfg.GatewayToken,
 				AllowAgentIDs: cfg.AllowAgentIDs,
 				Machines:      machines,
 				Join:          join,

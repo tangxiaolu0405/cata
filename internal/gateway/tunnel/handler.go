@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"crypto/subtle"
 	"log"
 	"net/http"
 	"strings"
@@ -41,11 +40,7 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 			http.Error(w, "websocket required", http.StatusBadRequest)
 			return
 		}
-		auth := r.Header.Get("Authorization")
-		if !validToken(auth, opts.Token) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+		// 不再预校验 gateway_token：隧道鉴权在 hello 帧用逐机器 token 完成（见下）。
 		agentID := strings.TrimSpace(r.URL.Query().Get("agent"))
 		if agentID == "" {
 			http.Error(w, "agent param required", http.StatusBadRequest)
@@ -119,21 +114,6 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		ac.readLoop()
 		log.Printf("cata-gateway: agent offline: %s", agentID)
 	})
-}
-
-func validToken(auth, want string) bool {
-	if want == "" {
-		return false
-	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return false
-	}
-	got := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
-	if len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func allowedAgent(agentID string, allow []string) bool {

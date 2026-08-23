@@ -173,28 +173,18 @@ func readWithTimeout(t *testing.T, conn net.Conn, buf []byte) string {
 	}
 }
 
-// TestHandlerRequiresTokenAndHello 未带 token / 非 hello 首帧应拒绝。
+// TestHandlerRequiresTokenAndHello 非 hello 首帧应拒绝（token 已移除：HTTP 握手不再校验
+// gateway_token，鉴权靠 hello 帧 machine token；这里验证「首帧非 hello → FrameError」）。
 func TestHandlerRequiresTokenAndHello(t *testing.T) {
 	reg := NewRegistry()
-	ts := httptest.NewServer(Handler(reg, HandlerOptions{Token: "tok"}))
+	ts := httptest.NewServer(Handler(reg, HandlerOptions{}))
 	defer ts.Close()
 
-	// 无 token
+	// 无 token 也能完成 HTTP 握手（已不再要求 gateway_token），但首帧非 hello 应被拒绝。
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/cata/v1/tunnel?agent=ws-1"
-	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err == nil {
-		t.Fatal("dial without token should fail")
-	}
-	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status=%v err=%v", resp, err)
-	}
-
-	// 带 token 但首帧不是 hello
-	hdr := http.Header{}
-	hdr.Set("Authorization", "Bearer tok")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("dial with token: %v", err)
+		t.Fatalf("dial without token should succeed at HTTP layer now: %v", err)
 	}
 	defer ws.Close()
 	if err := ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameLine, Stream: 1, Data: tunnel.EncodeData([]byte("x"))}); err != nil {

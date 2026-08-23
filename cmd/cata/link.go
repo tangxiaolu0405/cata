@@ -11,7 +11,7 @@ import (
 
 // runLink 管理「本地工作空间 → 远程网关」注册：
 //
-//	cata link join --gateway <url>          # 机器首次接入：join 拿逐机器 token
+//	cata link join <gateway_url>             # 机器首次接入：join 拿逐机器 token
 //	cata link add --dir <path>              # 注册工作空间（join 后）
 //	cata link remove <agent_id>
 //	cata link list
@@ -45,7 +45,7 @@ func runLink(args []string) {
 
 func printLinkUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  cata link join --gateway <url>")
+	fmt.Println("  cata link join <gateway_url>")
 	fmt.Println("  cata link add --dir <path>")
 	fmt.Println("  cata link remove <agent_id>")
 	fmt.Println("  cata link list")
@@ -59,35 +59,42 @@ func printLinkUsage() {
 }
 
 // runLinkJoin 机器首次接入网关：join 拿逐机器 token。
-// 需提供网关准入口令 gateway_token（与 gateway.json 的 gateway_token 一致），
-// 用于 join 端点鉴权 + 之后隧道 HTTP 握手层的第一道门。
+// 用法：cata link join <gateway_url> [--token <legacy>]
+// gateway_url 作为位置参数（join 本身就表达「加入某网关」），无需 --gateway 前缀。
+// 无需任何固定口令：握手靠自定义协议头 X-Cata-Join，授权靠一次性 code + 网关 UI 批准，
+// 最终凭证为网关签发的逐机器 token（machine_token）。--token 仍可选（传递则写入 link.json 兼容字段，但不再用于鉴权）。
+// 兼容：仍接受 --gateway <url> 写法（deprecated）。
 func runLinkJoin(args []string) {
 	gatewayURL := ""
 	gatewayToken := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--gateway" && i+1 < len(args):
+		case a == "--gateway" && i+1 < len(args): // deprecated：用位置参数
 			gatewayURL = args[i+1]
 			i++
 		case a == "--token" && i+1 < len(args):
 			gatewayToken = args[i+1]
 			i++
 		case a == "-h" || a == "--help":
-			fmt.Println("Usage: cata link join --gateway <url> --token <gateway_token>")
-			fmt.Println("  gateway_token = 网关准入口令（gateway.json 的 gateway_token）")
+			fmt.Println("Usage: cata link join <gateway_url> [--token <gateway_token>]")
+			fmt.Println("  gateway_url 为位置参数；gateway_token 可选（不再用于鉴权），join 靠 X-Cata-Join 协议头 + UI 批准。")
+			fmt.Println("  兼容旧写法：cata link join --gateway <url>")
 			return
-		default:
+		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "cata link join: unknown flag %q\n", a)
 			os.Exit(2)
+		default:
+			// 位置参数 = gateway url。
+			if gatewayURL != "" {
+				fmt.Fprintf(os.Stderr, "cata link join: unexpected extra argument %q\n", a)
+				os.Exit(2)
+			}
+			gatewayURL = a
 		}
 	}
 	if strings.TrimSpace(gatewayURL) == "" {
-		fmt.Fprintln(os.Stderr, "cata link join: --gateway <url> required")
-		os.Exit(2)
-	}
-	if strings.TrimSpace(gatewayToken) == "" {
-		fmt.Fprintln(os.Stderr, "cata link join: --token <gateway_token> required")
+		fmt.Fprintln(os.Stderr, "cata link join: <gateway_url> required (e.g. cata link join http://gw.example.com:8787)")
 		os.Exit(2)
 	}
 	res, err := link.Join(gatewayURL, gatewayToken)
@@ -96,7 +103,15 @@ func runLinkJoin(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("joined: machine_id=%s\n", res.MachineID)
-	fmt.Println("next: cata link add --dir <path>   (register a workspace)")
+
+	// 自动拉起 supervisor：其启动 ensure 会扫描本机已有工作空间并自动 link add，
+	// 无需再手动逐个 `cata link add --dir <path>`。
+	if err := link.EnsureSupervisorDaemon(); err != nil {
+		fmt.Printf("warning: supervisor start: %v\n（可稍后手动运行 cata supervisor，或 cata link add --dir <path> 接入指定工作空间）\n", err)
+		return
+	}
+	fmt.Println("已自动拉起 supervisor，正在自动接入本机已有工作空间…")
+	fmt.Println("查看: cata link list   |   停止全部: pkill -f 'cata supervisor' 或 kill <supervisor_pid>")
 }
 
 func runLinkAdd(args []string) {
@@ -204,11 +219,20 @@ func runLinkStatus() {
 
 // runSupervisor 每机器一个进程生命周期守护（cata supervisor）。
 func runSupervisor(args []string) {
+	if len(args) == 1 && (args[0] == "stop") {
+		if err := link.StopSupervisor(); err != nil {
+			fmt.Fprintf(os.Stderr, "cata supervisor stop: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("supervisor shutdown requested: 已停止 supervisor 及全部保活 cata agent")
+		return
+	}
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
-			fmt.Println("Usage: cata supervisor")
-			fmt.Println("  Per-machine daemon: keep registered (linked) agent processes alive;")
-			fmt.Println("  control socket at ~/.cata/supervisor.sock (ensure/stop/list/status).")
+			fmt.Println("Usage: cata supervisor [stop]")
+			fmt.Println("  （无参数）运行守护：Per-machine daemon, keep registered (linked) agent processes alive;")
+			fmt.Println("  stop        关闭守护并级联停止全部保活的 cata agent")
+			fmt.Println("  control socket at ~/.cata/supervisor.sock (ensure/stop/list/status/shutdown).")
 			return
 		}
 		fmt.Fprintf(os.Stderr, "cata supervisor: unknown flag %q\n", a)

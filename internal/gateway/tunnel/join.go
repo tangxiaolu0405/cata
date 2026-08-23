@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,32 @@ func (j *JoinManager) Status(code string) (approved bool, token string, err erro
 		return false, "", fmt.Errorf("join code expired")
 	}
 	return st.Approved, st.Token, nil
+}
+
+// PendingJoin 待批准的 join 请求（UI 展示用）。
+type PendingJoin struct {
+	Code      string    `json:"code"`
+	MachineID string    `json:"machine_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Pending 列出所有待批准（未过期、未批准）的 join 请求，旧→新。
+// 供 UI 直接展示机器并一键批准，无需人工复制 code。
+func (j *JoinManager) Pending() []PendingJoin {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.purgeExpiredLocked()
+	var out []PendingJoin
+	for code, st := range j.pending {
+		if st.Approved {
+			continue
+		}
+		out = append(out, PendingJoin{Code: code, MachineID: st.MachineID, ExpiresAt: st.ExpiresAt})
+	}
+	sort.Slice(out, func(i, k int) bool {
+		return out[i].ExpiresAt.Before(out[k].ExpiresAt)
+	})
+	return out
 }
 
 func (j *JoinManager) purgeExpiredLocked() {
