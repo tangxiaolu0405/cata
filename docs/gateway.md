@@ -120,6 +120,48 @@ cata-gateway init --force            # 覆盖已有文件
 
 环境变量可覆盖：`CATA_GATEWAY_EDITION`、`CATA_SERVER_MODE`、`CATA_SERVER_AUTO_START`、`CATA_BIN`。
 
+## 独立部署（install_gateway.sh）
+
+把 `cata-gateway` 单独跑在一台机器上时，用仓库根目录的 `install_gateway.sh`：
+它从 GitHub Releases 下载二进制、写 `~/.cata/gateway.json`、再启动（**编译已在 CI 完成，
+脚本不本地编译**）。
+
+**Linux / macOS（一键，从远端拉脚本执行）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_gateway.sh | \
+  GATEWAY_UI_PASSWORD=你的口令 bash
+```
+
+**下载到本地再执行**（便于审查 / 离线）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tangxiaolu0405/cata/main/install_gateway.sh -o install_gateway.sh
+chmod +x install_gateway.sh
+GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh
+```
+
+启动方式与环境变量：
+
+| 参数 / 变量 | 说明 |
+|------|------|
+| `GATEWAY_UI_PASSWORD` | 控制台访问口令；**设了才启用登录页**，否则仅本机/局域网可访问 |
+| `GATEWAY_UI_LISTEN` | 监听地址，默认 `0.0.0.0:8787` |
+| `GATEWAY_EDITION` | 默认 `channel`（仅 gateway）；`base` 会额外拉起本机 cata server |
+| `INSTALL_DIR` | 二进制安装目录，默认 `~/.local/bin` |
+| `GATEWAY_REPO` | 自定义仓库，默认 `tangxiaolu0405/cata` |
+| `--version=v1.2.3` | 指定 release tag，默认 latest |
+| `--run=systemd` | 生成并启用 systemd unit（需 root）；默认 nohup 后台 + pidfile |
+
+登录安全：设了口令后，UI 所有请求需登录会话 cookie；**连续 5 次登录失败封该 IP 10 分钟**
+（阈值/时长可改 `gateway.json` 的 `login_ban_max_attempts` / `login_ban_duration_seconds`）。
+
+示例：指定版本 + systemd 托管
+
+```bash
+GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=systemd
+```
+
 ## 三种部署模式
 
 | 模式 | gateway | cata worker | 传输 | 状态 |
@@ -175,7 +217,7 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 | `cata_url` / `CATA_URL` | 忽略 | 设置即进入 remote 模式 |
 | `worker_root` / `CATA_WORKER_ROOT` | ✓（渠道沙箱） | ✓（远端 cwd 基址） |
 
-见 `gateway.example.json`、`gateway.example.channel.json`、`README.md` Gateway 节。
+见 `gateway.example.json`、`gateway.example.channel.json`、本文件「独立部署」节。
 
 ## 扩展顺序（建议）
 
