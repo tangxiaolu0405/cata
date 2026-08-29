@@ -55,7 +55,10 @@ func (t *TermGrid) refreshBlink(blink bool) {
 			}
 		}
 	}
-	fyne.Do(t.TextGrid.Refresh) // TODO fix root cause in refresh on wrong thread
+	// Fyne 要求 UI 刷新在主线程执行：refreshBlink 可能由本 widget 的 Refresh()
+	// （渲染回调，主线程）或 runBlink 的 ticker goroutine（后台）触发，统一经 fyne.Do
+	// 调度到主线程，避免跨线程触碰 Fyne canvas 对象。
+	fyne.Do(t.TextGrid.Refresh)
 
 	switch {
 	case shouldBlink && t.tickerCancel == nil:

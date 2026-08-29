@@ -100,3 +100,46 @@ func TestWatchSupervisorKeepsAlive(t *testing.T) {
 	default:
 	}
 }
+
+// TestSupervisorWatchEnvOverrides 环境变量 CATA_SUPERVISOR_INTERVAL/DEADLINE 应覆盖默认值。
+func TestSupervisorWatchEnvOverrides(t *testing.T) {
+	t.Setenv("CATA_SUPERVISOR_INTERVAL", "2")
+	t.Setenv("CATA_SUPERVISOR_DEADLINE", "7")
+	i, d := supervisorWatchDefaults()
+	if i != 2*time.Second || d != 7*time.Second {
+		t.Fatalf("interval=%v deadline=%v", i, d)
+	}
+}
+
+// TestSupervisorWatchEnvInvalidConfigFallback 非法/非正环境变量应回落代码默认。
+func TestSupervisorWatchEnvInvalidConfigFallback(t *testing.T) {
+	t.Setenv("CATA_SUPERVISOR_INTERVAL", "abc")
+	t.Setenv("CATA_SUPERVISOR_DEADLINE", "-3")
+	i, d := supervisorWatchDefaults()
+	if i != 5*time.Second || d != 30*time.Second {
+		t.Fatalf("interval=%v deadline=%v", i, d)
+	}
+}
+
+// TestSupervisorWatchEnvVsExplicitConfig 显式 cfg 优先于环境变量。
+func TestSupervisorWatchEnvVsExplicitConfig(t *testing.T) {
+	t.Setenv("CATA_SUPERVISOR_DEADLINE", "7")
+	stopped := make(chan struct{}, 1)
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 15 * time.Millisecond,
+		Deadline: 30 * time.Millisecond, // 显式传入，覆盖环境变量 7s
+		AliveFn:  func() bool { return false },
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	go watch()
+	select {
+	case <-stopped:
+		// ok：~30ms 内触发，说明用的是显式 Deadline 而非环境变量 7s
+	case <-time.After(time.Second):
+		t.Fatal("explicit deadline not respected")
+	}
+}

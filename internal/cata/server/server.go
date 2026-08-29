@@ -46,6 +46,11 @@ type Server struct {
 
 	idleMu    sync.Mutex
 	idleTimer *time.Timer
+
+	// stopOnce 保证 Stop() 只执行一次：多并发调用源（空闲回收 / managed 空连接 / SIGTERM /
+	// keep-alive supervisor 心跳）同时触发时，资源只释放一遍（mcp.Shutdown / socket close /
+	// cancel），避免重复 close 或日志刷屏。
+	stopOnce sync.Once
 }
 
 // NewServer 创建传统多空间服务器实例（legacy）。managed 为 true 时无客户端连接后自动停止。
@@ -185,15 +190,17 @@ func (s *Server) setupSignalHandling() {
 	}()
 }
 
-// Stop 优雅停止。
+// Stop 优雅停止（幂等：多次/并发调用只执行一次）。
 func (s *Server) Stop() {
-	mcp.Shutdown()
-	s.cancel()
-	if s.socketSrv != nil {
-		s.socketSrv.Stop()
-	}
-	time.Sleep(100 * time.Millisecond)
-	log.Println("Server stopped")
+	s.stopOnce.Do(func() {
+		mcp.Shutdown()
+		s.cancel()
+		if s.socketSrv != nil {
+			s.socketSrv.Stop()
+		}
+		time.Sleep(100 * time.Millisecond)
+		log.Println("Server stopped")
+	})
 }
 
 // Wait 阻塞直到收到停止信号。

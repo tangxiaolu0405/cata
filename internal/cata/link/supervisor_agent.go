@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -144,12 +145,30 @@ func SupervisorAlive() bool {
 // 关键：kill supervisor（含 SIGKILL）后 agent 不会收到任何信号（detachCmd 脱离进程组），
 // 只能靠「supervisor 控制口失联」自检——失联持续满 Deadline 即认为 supervisor 已死。
 type SupervisorWatchConfig struct {
-	// Interval 探测间隔（默认 5s）。
+	// Interval 探测间隔（默认 5s；可用环境变量 CATA_SUPERVISOR_INTERVAL 覆盖，单位秒）。
 	Interval time.Duration
-	// Deadline 失联持续多久判定 supervisor 死亡（默认 30s）。
+	// Deadline 失联持续多久判定 supervisor 死亡（默认 30s；
+	// 可用环境变量 CATA_SUPERVISOR_DEADLINE 覆盖，单位秒）。
 	Deadline time.Duration
 	// AliveFn 探测函数（默认 SupervisorAlive；测试注入）。
 	AliveFn func() bool
+}
+
+// supervisorWatchDefaults 读取环境变量覆盖（单位秒；非法/未设置回落代码默认）。
+func supervisorWatchDefaults() (interval, deadline time.Duration) {
+	interval = 5 * time.Second
+	deadline = 30 * time.Second
+	if v := os.Getenv("CATA_SUPERVISOR_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			interval = time.Duration(n) * time.Second
+		}
+	}
+	if v := os.Getenv("CATA_SUPERVISOR_DEADLINE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			deadline = time.Duration(n) * time.Second
+		}
+	}
+	return interval, deadline
 }
 
 // WatchSupervisorAndStop 后台监控 supervisor 存活；失联超过 Deadline 时调用 stop()
@@ -157,13 +176,15 @@ type SupervisorWatchConfig struct {
 // 避免「supervisor 死了 agent 变成孤儿继续占资源/持隧道」。
 // 返回可直接 go 的闭包；stop 应为幂等（server.Stop 是幂等的）。
 func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
-	interval := cfg.Interval
-	if interval <= 0 {
-		interval = 5 * time.Second
+	// 优先级：显示传入 > 环境变量 > 代码默认。
+	envInterval, envDeadline := supervisorWatchDefaults()
+	interval := envInterval
+	if cfg.Interval > 0 {
+		interval = cfg.Interval
 	}
-	deadline := cfg.Deadline
-	if deadline <= 0 {
-		deadline = 30 * time.Second
+	deadline := envDeadline
+	if cfg.Deadline > 0 {
+		deadline = cfg.Deadline
 	}
 	aliveFn := cfg.AliveFn
 	if aliveFn == nil {

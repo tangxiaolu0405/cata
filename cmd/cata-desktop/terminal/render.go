@@ -24,7 +24,10 @@ func (r *render) MinSize() fyne.Size {
 }
 
 func (r *render) Refresh() {
-	fyne.Do(func() { // TODO fix root cause in refresh on wrong thread
+	// Fyne 渲染刷新必须落在主线程：Render.Refresh() 由框架可能在任意线程触发
+	// （PTY 输出 goroutine 经 fyne.DoAndWait 调度后仍保留这层保险），
+	// 光标位置/样式的画布操作统一回主线程执行以免跨线程 panic。
+	fyne.Do(func() {
 		r.moveCursor()
 		r.term.refreshCursor()
 	})
