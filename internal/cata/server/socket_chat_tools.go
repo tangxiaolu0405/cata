@@ -265,7 +265,7 @@ func (ss *SocketServer) appendChatToolResult(history *[]llm.Message, res chatToo
 		Role:       "tool",
 		ToolCallID: res.tc.ID,
 		Name:       res.name,
-		Content:    res.out,
+		Content:    serverRedactor.Redact(res.out),
 	})
 }
 

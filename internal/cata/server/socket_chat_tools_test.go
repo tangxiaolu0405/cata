@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"cata/internal/cata/secrets"
 	"cata/internal/llm"
 )
 
@@ -54,4 +55,41 @@ func TestManageMCPToolSequential(t *testing.T) {
 	if chatToolParallelSafe("manage_mcp") {
 		t.Fatal("manage_mcp should be sequential (mutates config + reloads MCP)")
 	}
+}
+
+// TestAppendChatToolResultRedacts 验证工具结果进入 history 前已知 secret 被掩盖。
+func TestAppendChatToolResultRedacts(t *testing.T) {
+	// 构造一个含已知 secret 的脱敏器（不依赖启动时的真实收集）。
+	old := serverRedactor
+	serverRedactor = secrets.New(4)
+	serverRedactor.Add("sk-live-secret-2024")
+	defer func() { serverRedactor = old }()
+
+	ss := &SocketServer{}
+	hist := []llm.Message{}
+	res := chatToolExecResult{
+		tc:   llm.ToolCall{ID: "t1", Function: llm.ToolCallFunction{Name: "run_command"}},
+		out:  "cat ~/.config: sk-live-secret-2024 leaked HERE",
+		name: "run_command",
+	}
+	ss.appendChatToolResult(&hist, res)
+	if len(hist) != 1 {
+		t.Fatalf("history len=%d", len(hist))
+	}
+	content := hist[0].Content
+	if containsStr(content, "sk-live-secret-2024") {
+		t.Fatalf("secret leaked into history: %q", content)
+	}
+	if !containsStr(content, "***REDACTED***") {
+		t.Fatalf("expected redaction placeholder, got %q", content)
+	}
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

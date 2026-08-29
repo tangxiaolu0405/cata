@@ -378,6 +378,8 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 		log.Printf("Failed to marshal LLM log entry: %v", err)
 		return
 	}
+	// 写盘前脱敏：掩盖已知 secret（api_key / token / password）的明文，防止密钥进 llm.log。
+	data = redactLogBytes(data)
 
 	// 按产出区拆分的 llm/<sanitized>.log 目录可能不存在：os.O_CREATE 不建父目录，
 	// 不 MkdirAll 会静默写失败（命中观测等 LLM 日志数据全部丢失）。
