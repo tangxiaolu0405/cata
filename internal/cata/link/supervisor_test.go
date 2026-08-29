@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
@@ -46,4 +47,56 @@ func TestStopAllAgentsStopsRegistered(t *testing.T) {
 	// pid 文件不存在 → 各 agent 视为未运行，stopAllAgents 应逐个跳过并返回。
 	s := &Supervisor{}
 	s.stopAllAgents() // 不应 panic
+}
+
+// TestWatchSupervisorStopsOnUnreachable kill supervisor（含 SIGKILL）后 agent 收不到信号，
+// WatchSupervisorAndStop 应在失联超过 Deadline 后调用 stop()，让 agent 优雅退出。
+func TestWatchSupervisorStopsOnUnreachable(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	alive := func() bool { return false } // supervisor 已死
+
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 20 * time.Millisecond,
+		Deadline: 60 * time.Millisecond,
+		AliveFn:  alive,
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	go watch()
+
+	select {
+	case <-stopped:
+		// ok：失联超时后 stop 被调用
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop was not called after supervisor became unreachable")
+	}
+}
+
+// TestWatchSupervisorKeepsAlive supervisor 存活时 watch 不应触发 stop。
+func TestWatchSupervisorKeepsAlive(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	alive := func() bool { return true }
+
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 20 * time.Millisecond,
+		Deadline: 60 * time.Millisecond,
+		AliveFn:  alive,
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	done := make(chan struct{})
+	go func() { watch(); close(done) }()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-stopped:
+		t.Fatal("stop called while supervisor alive")
+	default:
+	}
 }

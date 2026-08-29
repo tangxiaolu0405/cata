@@ -14,6 +14,7 @@ import (
 	"cata/internal/cata/client"
 	"cata/internal/cata/clock"
 	"cata/internal/cata/config"
+	"cata/internal/cata/link"
 	"cata/internal/cata/server"
 	"cata/internal/cata/update"
 	"cata/internal/cata/version"
@@ -189,7 +190,7 @@ func runAgent(args []string) {
 	wsID := ""
 	idleTimeout := 300
 	keepAlive := false
-	link := false
+	withTunnel := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -204,7 +205,7 @@ func runAgent(args []string) {
 		case a == "--keep-alive":
 			keepAlive = true
 		case a == "--link":
-			link = true
+			withTunnel = true
 		case a == "--managed":
 			// 兼容：agent 生命周期由 supervisor/link/chat 管理，非传统 managed server。
 		case a == "-h" || a == "--help":
@@ -261,7 +262,7 @@ func runAgent(args []string) {
 	}
 	defer removeAgentPID(ws.ID)
 
-	if link {
+	if withTunnel {
 		// 隧道是长连接（断线自动重连）：放后台 goroutine，主流程走 srv.Wait()。
 		// 进程退出（Stop/信号）时随进程结束；断线重连不影响 chat socket 服务。
 		go func() {
@@ -269,6 +270,15 @@ func runAgent(args []string) {
 				log.Printf("cata agent: tunnel: %v", err)
 			}
 		}()
+	}
+
+	// 常驻 agent（--keep-alive）依赖 supervisor 保活；supervisor 被 kill（含 SIGKILL）
+	// 时 agent 收不到信号（detachCmd 脱离进程组），这里靠控制口心跳自检并优雅退出，
+	// 避免 supervisor 死后 agent 变成孤儿继续占资源/持隧道。
+	if keepAlive {
+		go link.WatchSupervisorAndStop(link.SupervisorWatchConfig{}, func() {
+			srv.Stop()
+		})()
 	}
 
 	srv.Wait()

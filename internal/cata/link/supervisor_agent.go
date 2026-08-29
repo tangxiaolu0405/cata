@@ -140,6 +140,52 @@ func SupervisorAlive() bool {
 	return resp.Success && resp.Message == "pong"
 }
 
+// SupervisorWatchConfig keep-alive agent 对 supervisor 的存活探测参数。
+// 关键：kill supervisor（含 SIGKILL）后 agent 不会收到任何信号（detachCmd 脱离进程组），
+// 只能靠「supervisor 控制口失联」自检——失联持续满 Deadline 即认为 supervisor 已死。
+type SupervisorWatchConfig struct {
+	// Interval 探测间隔（默认 5s）。
+	Interval time.Duration
+	// Deadline 失联持续多久判定 supervisor 死亡（默认 30s）。
+	Deadline time.Duration
+	// AliveFn 探测函数（默认 SupervisorAlive；测试注入）。
+	AliveFn func() bool
+}
+
+// WatchSupervisorAndStop 后台监控 supervisor 存活；失联超过 Deadline 时调用 stop()
+// 让 agent 优雅退出。任何 kill supervisor 方式（含 SIGKILL）都能收敛到停止 agent，
+// 避免「supervisor 死了 agent 变成孤儿继续占资源/持隧道」。
+// 返回可直接 go 的闭包；stop 应为幂等（server.Stop 是幂等的）。
+func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
+	interval := cfg.Interval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	deadline := cfg.Deadline
+	if deadline <= 0 {
+		deadline = 30 * time.Second
+	}
+	aliveFn := cfg.AliveFn
+	if aliveFn == nil {
+		aliveFn = SupervisorAlive
+	}
+	return func() {
+		lastAlive := time.Now()
+		for {
+			time.Sleep(interval)
+			if aliveFn() {
+				lastAlive = time.Now()
+				continue
+			}
+			if time.Since(lastAlive) >= deadline {
+				log.Printf("supervisor unreachable for %s — shutting down keep-alive agent", deadline)
+				stop()
+				return
+			}
+		}
+	}
+}
+
 // EnsureSupervisorDaemon 幂等拉起常驻 supervisor 守护（cata link add 后自动调用）。
 func EnsureSupervisorDaemon() error {
 	if SupervisorAlive() {

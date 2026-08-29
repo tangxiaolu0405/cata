@@ -22,6 +22,8 @@
 
 - **gateway（云端）**：一个对外渠道。部署在任意位置，注册上来的 worker 都能用。
 - **supervisor（每机器一个）**：只负责本机注册工作空间的 agent 进程生命周期；不转发对话、不持隧道。
+  `kill supervisor`（任一信号，含 SIGKILL）都会收敛到停止全部保活 agent：SIGTERM/SIGINT 走级联
+  `stopAllAgents`；SIGKILL 下各 agent 靠控制口心跳（失联 ~30s）自行优雅退出，不留孤儿进程。
 - **agent（每工作空间一个）**：`cata agent --workspace <id>`，绑定单一工作空间（一个实际上的 LLM loop），
   服务本机 `~/.cata/sockets/<ws_id>.sock`；注册且配了网关时自持 WSS 隧道。
 
