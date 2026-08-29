@@ -16,6 +16,7 @@ var slashCommands = []cmdDef{
 	{Name: "help", Desc: "show available commands"},
 	{Name: "status", Desc: "session status"},
 	{Name: "retry", Desc: "retry last message"},
+	{Name: "attach", Desc: "add attachment: /attach <path> (clear: /attach clear)"},
 }
 
 func matchSlashCmds(prefix string) []cmdDef {

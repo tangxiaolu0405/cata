@@ -46,12 +46,20 @@ func truncateRunes(s string, maxRunes int) string {
 }
 
 // cloneMessagesForLLMLog 深拷贝消息列表，供 llm.log 原样记录（不截断、不压缩正文）。
+// 媒体 base64 数据不出 llm.log（防泄露与膨胀）：只保留 MediaRef 的 id/mime 引用。
 func cloneMessagesForLLMLog(msgs []Message) []Message {
 	out := make([]Message, len(msgs))
 	for i, m := range msgs {
 		out[i] = m
 		if len(m.ToolCalls) > 0 {
 			out[i].ToolCalls = append([]ToolCall(nil), m.ToolCalls...)
+		}
+		if len(m.Media) > 0 {
+			refs := make([]MediaRef, len(m.Media))
+			for j, ref := range m.Media {
+				refs[j] = MediaRef{ID: ref.ID, MIME: ref.MIME} // Data 显式置零，不出日志
+			}
+			out[i].Media = refs
 		}
 	}
 	return out
@@ -89,8 +97,21 @@ type Client struct {
 	streamHTTPClient *http.Client
 	adapter          APIAdapter
 	card             *RoleCard // 角色卡片：身份 + 协议 + 采样 + 注入策略（NewClientForRole 挂载）
+	// llmCfg 保留完整配置（capabilities / models），用于多模态能力路由与出站编码。
+	llmCfg config.LLMConfig
 	// lastRetrieved 本轮组装时检索命中的记忆 source 列表（命中观测；appendLLMLog 记录）。
 	lastRetrieved []string
+	// onModelSwitch 多模态路由发生模型切换时回调（from, to）。server 用它下发 model_switch 事件。
+	onModelSwitch func(from, to string)
+	// notifiedModel 已通知过的目标模型（防每轮/每 URL 重试重复通知；回主模型后清空）。
+	notifiedModel string
+	// lastEffectiveModel 最近一次 BuildRequest 实际使用的模型（含 chat_vision 切换），供 stats 展示。
+	lastEffectiveModel string
+}
+
+// SetModelSwitchHook 注册模型切换回调（如附图切到 chat_vision）。可传 nil 清除。
+func (c *Client) SetModelSwitchHook(hook func(from, to string)) {
+	c.onModelSwitch = hook
 }
 
 func resolveInitialAPIURL(apiFormat, configured string) (active, configuredOut string) {
@@ -401,7 +422,7 @@ func (c *Client) attachRoleCard(role Role) error {
 
 // NewClientFromLLMConfig 从 LLMConfig 片段创建客户端（api_format 决定协议，provider 仅标签）。
 func NewClientFromLLMConfig(llmCfg config.LLMConfig, model string) (*Client, error) {
-	return NewClientFromConfig(
+	c, err := NewClientFromConfig(
 		llmCfg.Provider,
 		llmCfg.APIFormat,
 		llmCfg.APIKey,
@@ -410,6 +431,11 @@ func NewClientFromLLMConfig(llmCfg config.LLMConfig, model string) (*Client, err
 		llmCfg.MaxTokens,
 		time.Duration(llmCfg.Timeout)*time.Second,
 	)
+	if err != nil {
+		return nil, err
+	}
+	c.llmCfg = llmCfg
+	return c, nil
 }
 
 // NewClient 创建新的 LLM 客户端（从环境变量或配置读取）
@@ -565,7 +591,23 @@ type Message struct {
 	// role=tool 时必填
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	Name       string `json:"name,omitempty"`
+	// Media 仅 role=user 且为「多模态轮次」使用：出站时编码为 content[]（text + image_url）。
+	// history 只保留引用（id/mime）；base64 数据随请求携带，不出进 llm.log。
+	Media []MediaRef `json:"media,omitempty"`
 }
+
+// MediaRef 单张附件的引用（history 内不存二进制）。
+type MediaRef struct {
+	ID   string `json:"id,omitempty"`
+	MIME string `json:"mime,omitempty"`
+	// Data 出站时填充的 base64 图片数据（仅多模态轮次使用；写入 llm.log 前必须剥离）。
+	Data string `json:"-"`
+	// URL 可选：某些供应商走 http(s) 直链而非 data URL。
+	URL string `json:"url,omitempty"`
+}
+
+// HasMedia 该消息是否携带图片附件。
+func (m Message) HasMedia() bool { return len(m.Media) > 0 }
 
 // ChatRequest 聊天请求
 type ChatRequest struct {

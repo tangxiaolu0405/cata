@@ -1,7 +1,9 @@
 package client
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -144,6 +146,10 @@ func (m *model) tryComposeSend(seq uint64) (tea.Model, tea.Cmd) {
 
 func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	trimmed := strings.TrimSpace(line)
+	// /attach <path> 是带参数命令，须在 matchSlash 精确匹配前处理。
+	if strings.HasPrefix(trimmed, "/attach") {
+		return m.handleAttachCmd(trimmed), nil
+	}
 	if name, ok := matchSlash(trimmed); ok && !strings.Contains(trimmed, "\n") {
 		switch name {
 		case "exit", "quit", "q":
@@ -197,7 +203,22 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	m.lastIn = line
 	m.stats.turns++
 	m.stats.state = "thinking"
-	m.appendLog(styleUser.Render("you: ")+line+"\n\n", true)
+	// 附件：同行内 `@<path>` 提取 + /attach 队列合并，随 chat 发送。
+	sendText, inlinePaths := splitAttachmentTokens(line)
+	attachments := make([]attachReq, 0, len(inlinePaths)+len(m.attachQueue))
+	for _, p := range inlinePaths {
+		attachments = append(attachments, attachReq{Path: p})
+	}
+	for _, p := range m.attachQueue {
+		attachments = append(attachments, attachReq{Path: p})
+	}
+	hadQueue := len(m.attachQueue) > 0
+	queueTip := ""
+	if hadQueue {
+		queueTip = " (" + queueSummary(m.attachQueue) + ")"
+	}
+	m.attachQueue = nil // 发送即提交；失败可 /attach retry 或重输
+	m.appendLog(styleUser.Render("you: ")+line+queueTip+"\n\n", true)
 	m.streaming = true
 	m.cancelRequested = false
 	m.input.Blur()
@@ -207,7 +228,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		outCwd = m.cwd
 	}
 	rt := m.runtime
-	if err := m.sess.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: &rt, ShowThinking: m.showThinking}); err != nil {
+	if err := m.sess.write(req{Command: "chat", Text: sendText, Attachments: attachments, Stream: true, Cwd: outCwd, Runtime: &rt, ShowThinking: m.showThinking}); err != nil {
 		m.streaming = false
 		m.cancelRequested = false
 		m.input.Focus()
@@ -215,4 +236,57 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 	}
 	return m, waitStream(m.sess)
+}
+
+// handleAttachCmd 处理 /attach 命令：加附件、清空、查看队列。
+func (m *model) handleAttachCmd(cmd string) tea.Model {
+	// 兼容 /attach clear / /attach list；空参数列出当前队列。
+	fields := strings.Fields(strings.TrimSpace(cmd))
+	arg := ""
+	if len(fields) >= 2 {
+		arg = strings.TrimPrefix(fields[1], "@")
+	}
+	switch arg {
+	case "clear":
+		m.attachQueue = nil
+		m.appendLog("— attachment queue cleared\n", true)
+	case "list", "":
+		if len(m.attachQueue) == 0 {
+			m.appendLog("— no pending attachments (use /attach <path> 或行内 @path)\n", true)
+		} else {
+			m.appendLog("— pending: "+queueSummary(m.attachQueue)+"\n", true)
+		}
+	default:
+		m.attachQueue = append(m.attachQueue, arg)
+		if len(m.attachQueue) > 12 {
+			m.attachQueue = m.attachQueue[len(m.attachQueue)-12:]
+		}
+		m.appendLog("— queued ["+fmt.Sprintf("%d", len(m.attachQueue))+"] "+arg+" (发送时一并提交；/attach clear 清空)\n", true)
+	}
+	m.syncInputSize()
+	return m
+}
+
+// queueSummary 渲染附件队列为 "[1] a.png, [2] b.png" 形式。
+func queueSummary(paths []string) string {
+	parts := make([]string, 0, len(paths))
+	for i, p := range paths {
+		parts = append(parts, fmt.Sprintf("[%d] %s", i+1, filepath.Base(p)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// splitAttachmentTokens 从输入行中提取 @<path> 附件 token（空格分隔），
+// 从文本中剥离并返回路径列表。仅当 token 形如 @xxx 且去掉 @ 后非空时识别。
+func splitAttachmentTokens(line string) (text string, paths []string) {
+	fields := strings.Fields(line)
+	var keep []string
+	for _, f := range fields {
+		if strings.HasPrefix(f, "@") && len(f) > 1 {
+			paths = append(paths, strings.TrimPrefix(f, "@"))
+			continue
+		}
+		keep = append(keep, f)
+	}
+	return strings.Join(keep, " "), paths
 }

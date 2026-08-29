@@ -21,6 +21,19 @@ type req struct {
 	Cwd          string            `json:"cwd,omitempty"`
 	Runtime      *brain.RuntimeEnv `json:"runtime,omitempty"`
 	ShowThinking bool              `json:"show_thinking,omitempty"`
+	Attachments  []attachReq       `json:"attachments,omitempty"`
+}
+
+// attachReq 单个附件请求（与 server.AttachmentReq 的 JSON 对齐）：path 与 inline 二选一。
+type attachReq struct {
+	Path   string        `json:"path,omitempty"`
+	Inline *inlineAttach `json:"inline,omitempty"`
+}
+
+// inlineAttach 客户端已编码的附件内容（TUI 粘贴/拖拽等场景）。
+type inlineAttach struct {
+	MIME   string `json:"mime,omitempty"`
+	Base64 string `json:"base64,omitempty"`
 }
 
 type resp struct {

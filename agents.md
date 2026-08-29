@@ -82,9 +82,15 @@
 
 ---
 
-## 多模态（设计，未实现）
+## 多模态（已实现：A 出站编码/路由 + B 附件摄取/TUI + M2/M3/M4 基础）
 
-终端 chat 计划支持**图片附件**（路径 / 粘贴），并按 **`llm.capabilities` + `models.chat_vision`** 在纯文本模型与 vision 模型间切换；history 存附件引用，出站前编码为 OpenAI 式 `content[]`。详见 **`design.md` §多模态**。
+终端 chat 支持**图片附件**（TUI 输入 `@路径` 或 `/attach <path>` 累积队列），按 **`llm.capabilities` + `models.chat_vision`** 在纯文本模型与 vision 模型间切换；history 存附件引用，出站前编码为 OpenAI 式 `content[]`。详见 **`design.md` §多模态**。
+
+- 用法：`cata chat` 里输入 `看图 @./a.png`（`@` 前缀路径剥离为附件）；或 `/attach a.png` 加入待发送队列（发送时一并提交，`/attach clear` 清空）。附件相对产出区或 `llm.attachment_dir` 白名单。
+- 服务端校验：路径安全（产出区/白名单）、MIME 白名单（png/jpeg/webp/gif；audio/document 按模型 capabilities）、单张 ≤10MiB，读取 base64 注入 user 消息；逐条被拒发 `attachment_rejected` 事件。
+- 能力路由：带图时当前模型支持 image 则用；否则 `models["chat_vision"]`；否则报错不丢图。切换时下发 `model_switch` 事件，侧栏展示真实模型（`→` 后缀）。
+- 压缩：先去掉最早带 Media 的 user 轮（保留文本），再裁条数；每张图按 `llm.image_token_estimate`（默认 1000）计入预算。
+- short-term 记忆只记 `[attachments: a.png]` 摘要，不写 base64；llm.log 不出 base64（日志克隆剥离 Media.Data）。
 
 ## LLM（DeepSeek）
 

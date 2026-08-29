@@ -111,6 +111,21 @@ type LLMConfig struct {
 	// 仅对支持该扩展的网关生效；OpenAI / Gemini OpenAI 兼容层等不会下发 thinking 字段。
 	Thinking string `json:"thinking,omitempty"`
 	Enabled  bool   `json:"enabled"`
+	// Capabilities 按模型名声明的多模态能力（text/image/audio/document）；缺省对未知模型保守视为仅 text。
+	Capabilities map[string]ModelCapCfg `json:"capabilities,omitempty"`
+	// AttachmentDir 可选：允许读取附件的白名单目录（默认仅产出区）。空 = 产出区即可。
+	AttachmentDir string `json:"attachment_dir,omitempty"`
+	// ImageTokenEstimate 单张图片估算占用的输入 token（无 tiktoken 时的保守估计；
+	// 用于会话压缩预算与超窗判定）。0 = 用默认 1000。
+	ImageTokenEstimate int `json:"image_token_estimate,omitempty"`
+}
+
+// ModelCapCfg LLMConfig.Capabilities 中单个模型的配置。
+type ModelCapCfg struct {
+	Modalities          []string `json:"modalities,omitempty"`             // text | image（v2+ 可加 audio/document）
+	MaxImagesPerMessage int      `json:"max_images_per_message,omitempty"` // 单条 user 消息最多几张图；0=不限制计数
+	MaxImageBytes       int      `json:"max_image_bytes,omitempty"`        // 单张解码后上限；0=默认 10MiB
+	ImageMIMEAllow      []string `json:"image_mime_allow,omitempty"`       // 白名单 MIME；空=放行 png/jpeg/webp/gif
 }
 
 // ServerConfig 服务器配置。

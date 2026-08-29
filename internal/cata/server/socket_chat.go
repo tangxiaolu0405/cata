@@ -43,7 +43,7 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
 // chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
 // promptPeak 为本连接会话内已达最高 prompt 档位（sticky，chat_reset 清零）。
-func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, chatWS *brain.Workspace, promptPeak *brain.PromptProfile, showThinking bool) (err error) {
+func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, attachments []AttachmentReq, chatWS *brain.Workspace, promptPeak *brain.PromptProfile, showThinking bool) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	cc := brain.ChatContextFrom(ctx)
@@ -65,8 +65,22 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	_ = config.InitBrainPath()
 
 	text := strings.TrimSpace(userText)
-	if text == "" {
-		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": "empty message"})
+	// 附附件时允许纯图消息（text 可为空）；否则空消息报错。
+	// 逐条失败不中断：被拒项发 attachment_rejected 事件，合法项继续。
+	media, rejects := ingestAttachments(cc.OutputCwd, attachments)
+	for _, r := range rejects {
+		_ = ss.emitStreamLine(conn, map[string]interface{}{
+			"type":   "attachment_rejected",
+			"path":   r.Path,
+			"reason": r.Reason,
+		})
+	}
+	if text == "" && len(media) == 0 {
+		msg := "empty message"
+		if len(rejects) > 0 {
+			msg = "全部附件被拒绝（attachment_rejected），无可用内容"
+		}
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 		return fmt.Errorf("empty message")
 	}
@@ -77,12 +91,22 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 		return err
 	}
+	// 多模态模型切换（如附图切到 chat_vision）实时下发 model_switch 事件，TUI 可提示用户。
+	client.SetModelSwitchHook(func(from, to string) {
+		_ = ss.emitStreamLine(conn, map[string]interface{}{
+			"type": "model_switch", "from": from, "to": to, "reason": "attachments",
+		})
+	})
 
 	// 会话首条消息（含 chat_reset 后的新会话）输出诊断，便于定位「cata 没处理 / 无响应」。
 	if len(*history) == 0 {
 		ss.emitFirstMessageDiagnosticsWithOutCwd(conn, client, chatWS, cc.OutputCwd, text)
 	}
-	*history = append(*history, llm.Message{Role: "user", Content: text})
+	userMsg := llm.Message{Role: "user", Content: text}
+	for _, m := range media {
+		userMsg.Media = append(userMsg.Media, llm.MediaRef{ID: m.ID, MIME: m.MIME, Data: m.Data})
+	}
+	*history = append(*history, userMsg)
 
 	if len(ss.buildTerminalChatToolsForTier(ContextTierLight, cc.WS, cc.OutputCwd, cc.Runtime)) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
@@ -272,7 +296,12 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 				return ss.emitChatDone(conn, lr, false, false, "tool_args_unparsed", hint)
 			}
 			*history = append(*history, llm.Message{Role: "assistant", Content: asst})
-			if err := brain.AppendChatTurnFor(chatWS, text, asst); err != nil {
+			// short-term 记忆：正文 + 附件摘要（不写 base64，防脑子膨胀与泄露）。
+			memText := text
+			if sum := sanitizeAttachmentsForMemory(media); sum != "" {
+				memText = strings.TrimSpace(text + " " + sum)
+			}
+			if err := brain.AppendChatTurnFor(chatWS, memText, asst); err != nil {
 				log.Printf("short-term memory: %v", err)
 			}
 			if chatWS != nil && task != nil {
@@ -530,11 +559,22 @@ func isFatalBrowserError(err error, output string) bool {
 }
 
 // trimHistoryToTokenBudget 从最早的用户/助手/tool 消息裁掉，使估算 token ≤ budget。
+// 优先去掉早期 user 轮的图片 Media（保留文本），再裁整条消息——图片 token 成本最高
+// （ImageTokenEstimate），去图能最快降预算且不丢对话语义（design.md §会话压缩）。
 func trimHistoryToTokenBudget(ctx context.Context, client *llm.Client, msgs []llm.Message, tools []llm.Tool, budget int) []llm.Message {
 	if budget <= 0 || len(msgs) == 0 {
 		return msgs
 	}
 	out := append([]llm.Message(nil), msgs...)
+	// 阶段一：从最早带图 user 轮剥掉 Media（保留文本），每剥一轮重估一次。
+	for len(out) > 1 && client.EstimatedChatInputTokens(ctx, out, tools) > budget {
+		idx := firstMediaUserIndex(out)
+		if idx < 0 {
+			break
+		}
+		out[idx].Media = nil
+	}
+	// 阶段二：仍超预算才裁整条消息。
 	for len(out) > 1 && client.EstimatedChatInputTokens(ctx, out, tools) > budget {
 		drop := firstDroppableIndex(out)
 		if drop < 0 {
@@ -543,6 +583,16 @@ func trimHistoryToTokenBudget(ctx context.Context, client *llm.Client, msgs []ll
 		out = append(out[:drop], out[drop+1:]...)
 	}
 	return out
+}
+
+// firstMediaUserIndex 返回最早的带 Media 的 user 消息下标；无则 -1。
+func firstMediaUserIndex(msgs []llm.Message) int {
+	for i, m := range msgs {
+		if m.Role == "user" && len(m.Media) > 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func firstDroppableIndex(msgs []llm.Message) int {
@@ -572,6 +622,7 @@ func (ss *SocketServer) emitChatStats(ctx context.Context, conn net.Conn, client
 		"type":               "stats",
 		"round":              round,
 		"model":              client.ModelName(),
+		"effective_model":    client.LastEffectiveModel(),
 		"model_role":         "chat",
 		"prompt_tokens":      in,
 		"completion_tokens":  out,

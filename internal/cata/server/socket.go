@@ -63,9 +63,24 @@ type Request struct {
 	Runtime *brain.RuntimeEnv `json:"runtime,omitempty"`
 	// ShowThinking 为 true 时流式下发 thinking 事件（客户端 --show-thinking）
 	ShowThinking bool `json:"show_thinking,omitempty"`
+	// Attachments 附件列表：path（相对产出区或附件白名单目录；服务端校验并 base64 注入）
+	// 或 inline（剪贴板粘贴等已编码的 base64 内容）。逐条失败的会发 attachment_rejected 事件。
+	Attachments []AttachmentReq `json:"attachments,omitempty"`
 	// RunAs 会话类型标记："" 普通对话；"scheduled" 定时任务（调度框架自发起，
 	// 强制 full 工具档并跳过任务状态机，避免后台运行污染前台任务）。
 	RunAs string `json:"run_as,omitempty"`
+}
+
+// InlineAttachment 客户端已编码的附件内容（TUI 粘贴/拖拽等场景）。
+type InlineAttachment struct {
+	MIME   string `json:"mime,omitempty"`
+	Base64 string `json:"base64,omitempty"`
+}
+
+// AttachmentReq 单个附件请求：path 与 inline 二选一。
+type AttachmentReq struct {
+	Path   string            `json:"path,omitempty"`
+	Inline *InlineAttachment `json:"inline,omitempty"`
 }
 
 // Response 服务器响应
@@ -107,6 +122,7 @@ func NewSocketServerAt(srv *Server, socketPath string) (*SocketServer, error) {
 	}
 
 	reg := NewToolRegistry()
+	initServerRedactor()
 	ss := &SocketServer{
 		server:      srv,
 		boundWS:     srv.workspace,
@@ -274,7 +290,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if req.RunAs == "scheduled" {
 				chatCtx = WithScheduledRun(chatCtx)
 			}
-			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, ws, &chatPromptPeak, req.ShowThinking); err != nil {
+			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, req.Attachments, ws, &chatPromptPeak, req.ShowThinking); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			// chat 结束后 drain connLineReader 残留行：pump 在停止竞态窗口可能已读入

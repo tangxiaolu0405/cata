@@ -342,10 +342,10 @@ socket_chat history (user/assistant/tool only)
     index.json 超 2800 bytes → 触发 summary 压缩
 ```
 
-### 多模态（设计，未实现）
+### 多模态（已实现 A/B + M2/M3 + M4 基础：出站编码 + 能力路由 + 附件摄取 + TUI /attach/@路径 + 事件 + 压缩与 token 估算）
 
-**目标**：终端 chat 可向模型附带**图片**（后续可扩 PDF/音频）；**换模型**时只改配置，不改业务代码路径。  
-**非目标（v1）**：演进 LLM、Summarize、MCP 默认不走 vision；不做视频流；不在 `~/.cata` 脑子正文里存原图。
+**目标**：终端 chat 可向模型附带**图片**（音频/PDF 基础已就绪，按模型 capabilities 启用）；**换模型**时只改配置，不改业务代码路径。  
+**非目标（v1）**：演进 LLM、Summarize、MCP 默认不走 vision；不做视频流；不在 `~/.cata` 脑子正文里存原图；PDF 出站编码需先转图/文本（无内建转换器）。
 
 #### 现状缺口
 
@@ -539,11 +539,11 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM 差异集中在 **EncodeUserContent**�
 
 | 阶段 | 内容 | 验收 |
 |------|------|------|
-| **M0** | `capabilities` 配置解析；`ResolveChatModel`；无附件时行为不变 | 改 config 换模型名即可 |
-| **M1** | `AttachmentStore` + socket `attachments` + history `MediaRef` + wire 数组 | `chat` + JSON 附件路径可问图 |
-| **M2** | TUI `/attach`、发送栏附件提示、`model_switch` 事件 | 交互式附图 |
-| **M3** | 粘贴图、压缩策略、token 估算调优 | 长会话不爆窗 |
-| **M4** | 文档页（PDF→图或 text extract）、音频 | 按所选模型 capabilities 启用 |
+| **M0** ✅ | `capabilities` 配置解析；`ResolveChatModel`；无附件时行为不变 | 改 config 换模型名即可 |
+| **M1** ✅ | socket `attachments` + history `MediaRef` + wire 数组 | `chat` + 附件路径可问图 |
+| **M2** ✅ | TUI `/attach`、发送栏附件提示、`model_switch` / `attachment_rejected` 事件 | 交互式附图 |
+| **M3** ✅（粘贴图即协议 inline 已支持） | 压缩优先去旧轮 Media、按图 token 估算（`image_token_estimate`） | 长会话不爆窗 |
+| **M4** 🟡 基础 | audio wire（`input_audio`）+ 能力路由；PDF 需先转图/文本（v1 无内建转换器） | 按所选模型 capabilities 启用 |
 
 **建议改动的包**（实现时）：`internal/cata/config`、`internal/llm`（Message、wire、tokens）、`internal/cata/server`（ingest、history）、`internal/cata/client`（TUI、session req）、新建 `internal/attachment`（可选）。
 

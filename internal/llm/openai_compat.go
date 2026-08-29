@@ -72,6 +72,12 @@ func resolveWireThinking(apiURL string, tools []Tool, forceDisabled bool) *wireT
 }
 
 func messagesForChatCompletionsWire(messages []Message, includeReasoningContent bool) []map[string]interface{} {
+	return messagesForChatCompletionsWireWithCaps(messages, includeReasoningContent, ModelCaps{Modalities: map[string]bool{"text": true}})
+}
+
+// messagesForChatCompletionsWireWithCaps 同前，但按模型能力编码带图消息（content[]）。
+// 调用方（BuildRequest 前）应先用 capsForModel 解析目标模型能力；带图文本模型会在此被拒绝。
+func messagesForChatCompletionsWireWithCaps(messages []Message, includeReasoningContent bool, caps ModelCaps) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
 		mm := map[string]interface{}{"role": m.Role}
@@ -79,7 +85,14 @@ func messagesForChatCompletionsWire(messages []Message, includeReasoningContent 
 		if onlyToolCalls {
 			mm["content"] = nil
 		} else {
-			mm["content"] = m.Content
+			content, err := encodeContentForWire(caps, m)
+			if err != nil {
+				// 带图消息但模型不支持 image：不静默丢图，交给调用层报错。
+				// 此处用占位文本，确保请求 JSON 仍合法；更早的能力路由应已拦截。
+				mm["content"] = "[image attachment not supported by current model]"
+			} else {
+				mm["content"] = content
+			}
 		}
 		if len(m.ToolCalls) > 0 {
 			mm["tool_calls"] = m.ToolCalls
@@ -98,7 +111,7 @@ func messagesForChatCompletionsWire(messages []Message, includeReasoningContent 
 	return out
 }
 
-func marshalOpenAIChatBody(apiURL, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) ([]byte, error) {
+func marshalOpenAIChatBody(apiURL, model string, caps ModelCaps, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) ([]byte, error) {
 	useThinkingExt := supportsDeepSeekThinkingWire(apiURL)
 	responses := isResponsesAPIURL(apiURL)
 	req := wireChatRequest{
@@ -108,12 +121,12 @@ func marshalOpenAIChatBody(apiURL, model string, messages []Message, maxTokens i
 	}
 	if responses {
 		// xAI / OpenAI Responses：messages→input，max_tokens→max_output_tokens
-		req.Input = messagesForChatCompletionsWire(messages, false)
+		req.Input = messagesForChatCompletionsWireWithCaps(messages, false, caps)
 		if maxTokens > 0 {
 			req.MaxOutputTokens = maxTokens
 		}
 	} else {
-		req.Messages = messagesForChatCompletionsWire(messages, useThinkingExt)
+		req.Messages = messagesForChatCompletionsWireWithCaps(messages, useThinkingExt, caps)
 		req.Thinking = resolveWireThinking(apiURL, tools, disableThinking)
 		if maxTokens > 0 {
 			req.MaxTokens = maxTokens
@@ -128,8 +141,8 @@ func marshalOpenAIChatBody(apiURL, model string, messages []Message, maxTokens i
 	return json.Marshal(req)
 }
 
-func (p *OpenAICompatAdapter) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
-	reqBody, err := marshalOpenAIChatBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream, disableThinking)
+func (p *OpenAICompatAdapter) BuildRequest(apiURL string, apiKey string, model string, caps ModelCaps, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
+	reqBody, err := marshalOpenAIChatBody(apiURL, model, caps, messages, maxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}

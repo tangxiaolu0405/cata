@@ -14,7 +14,18 @@
     "timeout": 600,
     "context_window": 1000000,
     "thinking": "auto",
-    "enabled": true
+    "enabled": true,
+    "capabilities": {
+      "_comment": "可选：按模型名声明多模态能力。modalities 支持 text|image|audio|document；配了带图会路由到 chat_vision 模型（llm.models.chat_vision）",
+      "deepseek-v4-flash": { "modalities": ["text"] },
+      "qwen-vl-plus": {
+        "modalities": ["text", "image"],
+        "max_images_per_message": 5,
+        "max_image_bytes": 10485760
+      }
+    },
+    "image_token_estimate": 1000,
+    "attachment_dir": ""
   },
   "llm_previous_qwen": {
     "_comment": "原千问/DashScope 配置备份（JSON 无注释，用此对象保留）。恢复时复制字段到 llm。",

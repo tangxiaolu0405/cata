@@ -508,3 +508,12 @@ func (c *Client) nonStreamFallbackRound(ctx context.Context, messages []Message,
 
 // ModelName 当前客户端使用的模型名。
 func (c *Client) ModelName() string { return c.model }
+
+// LastEffectiveModel 最近一次 BuildRequest 实际使用的模型（多模态切换后为 chat_vision 等）。
+// 无多模态时与 ModelName 相同；供 stats 展示真实模型名。
+func (c *Client) LastEffectiveModel() string {
+	if c.lastEffectiveModel != "" {
+		return c.lastEffectiveModel
+	}
+	return c.model
+}

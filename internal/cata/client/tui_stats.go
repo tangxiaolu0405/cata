@@ -63,6 +63,12 @@ func (m *model) applyStats(ev map[string]any) {
 	if s, ok := ev["model"].(string); ok && s != "" {
 		m.stats.chatModel = s
 	}
+	// 多模态切换后展示真实使用模型（chat_vision 等）；与主模型相同时留空。
+	if s, ok := ev["effective_model"].(string); ok && s != "" && s != m.stats.chatModel {
+		m.stats.effectiveModel = s
+	} else {
+		m.stats.effectiveModel = ""
+	}
 	if s, ok := ev["prompt_profile"].(string); ok && s != "" {
 		m.stats.promptProfile = s
 	}
@@ -197,7 +203,8 @@ func sidebarShortModel(name string) string {
 	return name[:20] + "…"
 }
 
-func sidebarModelLine(chatModel string) string {
+// sidebarModelLine 主对话模型行：chat 模型 +（多模态切换后的）effective 模型提示 + 其它角色。
+func sidebarModelLine(chatModel, effectiveModel string) string {
 	byRole := llm.ModelsByRole()
 	chat := strings.TrimSpace(chatModel)
 	if chat == "" {
@@ -207,6 +214,9 @@ func sidebarModelLine(chatModel string) string {
 		return ""
 	}
 	line := sidebarShortModel(chat)
+	if eff := strings.TrimSpace(effectiveModel); eff != "" && eff != chat {
+		line += " → " + sidebarShortModel(eff)
+	}
 	var alt []string
 	if evo := byRole["evolution"]; evo != "" && evo != chat {
 		alt = append(alt, "evo:"+sidebarShortModel(evo))
@@ -251,7 +261,7 @@ func (m *model) appendContextSidebarSections(lines []string, innerW int) []strin
 	if m.stats.mode != "" {
 		body = append(body, m.stats.mode)
 	}
-	if model := sidebarModelLine(m.stats.chatModel); model != "" {
+	if model := sidebarModelLine(m.stats.chatModel, m.stats.effectiveModel); model != "" {
 		body = append(body, model)
 	}
 	if len(body) == 0 {

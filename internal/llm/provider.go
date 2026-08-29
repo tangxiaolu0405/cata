@@ -62,7 +62,8 @@ func (f *ToolCallFunction) UnmarshalJSON(data []byte) error {
 type APIAdapter interface {
 	Format() string
 	// BuildRequest 构建 HTTP 请求；disableThinking 仅 OpenAI 兼容网关的 thinking 扩展字段有效。
-	BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error)
+	// caps 为目标模型的多模态能力（带图消息据此编码为 content[]）。
+	BuildRequest(apiURL string, apiKey string, model string, caps ModelCaps, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error)
 	ParseResponse(body []byte) (string, []ToolCall, error)
 	GetAPIKeyHeader(apiKey string) (string, string)
 }

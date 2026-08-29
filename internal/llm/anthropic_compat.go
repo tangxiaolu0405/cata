@@ -35,19 +35,27 @@ type anthropicWireTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// anthropicImageSource Anthropic image block 的 base64 source。
+type anthropicImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	Source    *anthropicImageSource `json:"source,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     json.RawMessage       `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   string                `json:"content,omitempty"`
 }
 
 func (AnthropicCompatAdapter) Format() string { return APIFormatAnthropic }
 
-func messagesToAnthropicWire(messages []Message) (system string, out []anthropicWireMessage, err error) {
+func messagesToAnthropicWire(messages []Message, caps ModelCaps) (system string, out []anthropicWireMessage, err error) {
 	var systemParts []string
 	appendUserBlocks := func(blocks []anthropicContentBlock) {
 		if len(blocks) == 0 {
@@ -61,6 +69,33 @@ func messagesToAnthropicWire(messages []Message) (system string, out []anthropic
 		}
 		out = append(out, anthropicWireMessage{Role: "user", Content: blocks})
 	}
+	// userBlocks 组装一条 user 消息：文本 + 图片（图片 block 为 base64 source）。
+	userBlocks := func(m Message) ([]anthropicContentBlock, error) {
+		var blocks []anthropicContentBlock
+		if strings.TrimSpace(m.Content) != "" {
+			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+		}
+		if len(m.Media) > 0 && !caps.SupportsImage() {
+			return nil, fmt.Errorf("模型不支持 image，无法发送图片附件")
+		}
+		for _, ref := range m.Media {
+			if mediaModality(ref.MIME) != "image" {
+				return nil, fmt.Errorf("Anthropic v1 仅支持图片附件，收到 %q", ref.MIME)
+			}
+			if ref.Data == "" {
+				return nil, fmt.Errorf("附件 %q 缺少 data（出站前未填充 base64）", ref.ID)
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "image",
+				Source: &anthropicImageSource{
+					Type:      "base64",
+					MediaType: ref.MIME,
+					Data:      ref.Data,
+				},
+			})
+		}
+		return blocks, nil
+	}
 	for _, m := range messages {
 		switch m.Role {
 		case "system":
@@ -68,10 +103,14 @@ func messagesToAnthropicWire(messages []Message) (system string, out []anthropic
 				systemParts = append(systemParts, m.Content)
 			}
 		case "user":
-			if strings.TrimSpace(m.Content) == "" {
+			if strings.TrimSpace(m.Content) == "" && len(m.Media) == 0 {
 				continue
 			}
-			appendUserBlocks([]anthropicContentBlock{{Type: "text", Text: m.Content}})
+			blocks, uerr := userBlocks(m)
+			if uerr != nil {
+				return "", nil, uerr
+			}
+			appendUserBlocks(blocks)
 		case "assistant":
 			blocks, berr := assistantMessageToAnthropicBlocks(m)
 			if berr != nil {
@@ -146,8 +185,8 @@ func anthropicToolChoice(toolChoice string) interface{} {
 	}
 }
 
-func marshalAnthropicBody(model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
-	system, msgs, err := messagesToAnthropicWire(messages)
+func marshalAnthropicBody(model string, caps ModelCaps, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
+	system, msgs, err := messagesToAnthropicWire(messages, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -171,9 +210,9 @@ func marshalAnthropicBody(model string, messages []Message, maxTokens int, tempe
 	return json.Marshal(req)
 }
 
-func (p *AnthropicCompatAdapter) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
+func (p *AnthropicCompatAdapter) BuildRequest(apiURL string, apiKey string, model string, caps ModelCaps, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool, disableThinking bool) (*http.Request, error) {
 	_ = disableThinking // Anthropic 无 thinking 字段；保留签名与 OpenAI 适配器一致
-	reqBody, err := marshalAnthropicBody(model, messages, maxTokens, temperature, tools, toolChoice, stream)
+	reqBody, err := marshalAnthropicBody(model, caps, messages, maxTokens, temperature, tools, toolChoice, stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal anthropic request: %w", err)
 	}

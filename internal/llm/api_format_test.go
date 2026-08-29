@@ -37,7 +37,7 @@ func TestMessagesToAnthropicWire(t *testing.T) {
 		}}},
 		{Role: "tool", ToolCallID: "tc1", Content: "file body"},
 	}
-	system, out, err := messagesToAnthropicWire(msgs)
+	system, out, err := messagesToAnthropicWire(msgs, ModelCaps{Modalities: map[string]bool{"text": true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,6 +49,41 @@ func TestMessagesToAnthropicWire(t *testing.T) {
 	}
 	if out[1].Role != "assistant" {
 		t.Fatalf("assistant role=%s", out[1].Role)
+	}
+}
+
+// TestMessagesToAnthropicWireImage 验证 Anthropic user 消息带图时编码为 image block（base64 source）。
+func TestMessagesToAnthropicWireImage(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "看图", Media: []MediaRef{{ID: "a.png", MIME: "image/png", Data: "QUJD"}}},
+	}
+	_, out, err := messagesToAnthropicWire(msgs, ModelCaps{Modalities: map[string]bool{"text": true, "image": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("out len=%d", len(out))
+	}
+	blocks, ok := out[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("blocks=%v", out[0].Content)
+	}
+	if blocks[0].Type != "text" || blocks[0].Text != "看图" {
+		t.Fatalf("text block=%v", blocks[0])
+	}
+	if blocks[1].Type != "image" || blocks[1].Source == nil ||
+		blocks[1].Source.MediaType != "image/png" || blocks[1].Source.Data != "QUJD" {
+		t.Fatalf("image block=%v", blocks[1])
+	}
+}
+
+// TestMessagesToAnthropicWireImageNoCaps 文本模型遇图应报错（不静默丢图）。
+func TestMessagesToAnthropicWireImageNoCaps(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "看图", Media: []MediaRef{{ID: "a.png", MIME: "image/png", Data: "QUJD"}}},
+	}
+	if _, _, err := messagesToAnthropicWire(msgs, ModelCaps{Modalities: map[string]bool{"text": true}}); err == nil {
+		t.Fatal("text model with image should error")
 	}
 }
 
@@ -153,6 +188,7 @@ func TestMarshalResponsesUsesMaxOutputTokens(t *testing.T) {
 	b, err := marshalOpenAIChatBody(
 		"https://api.x.ai/v1/responses",
 		"grok-3",
+		ModelCaps{Modalities: map[string]bool{"text": true}},
 		[]Message{{Role: "user", Content: "hi"}},
 		128, 0.7, nil, "", false, false,
 	)

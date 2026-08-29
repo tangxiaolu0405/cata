@@ -82,8 +82,22 @@ func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Messag
 	return n
 }
 
+// DefaultImageTokenEstimate 单张图片默认估算 token（无 tiktoken 时按 512×512 tile 粗算的保守占位）。
+// 设计见 design.md §多模态 Token 与保护：估算不足以精算，只用于压缩预算与超窗判定。
+const DefaultImageTokenEstimate = 1000
+
+// imageTokenEstimate 返回配置的图片 token 估算；未配置时用默认。
+// 音频/文档附件 v1 同量级占位（不区分 modality 的成本）。
+func imageTokenEstimate() int {
+	if config.Config != nil && config.Config.LLM.ImageTokenEstimate > 0 {
+		return config.Config.LLM.ImageTokenEstimate
+	}
+	return DefaultImageTokenEstimate
+}
+
 func estimateMessagesTokens(msgs []Message) int {
 	var chars int
+	nMedia := 0
 	for _, m := range msgs {
 		chars += utf8.RuneCountInString(m.Content)
 		chars += utf8.RuneCountInString(m.Name)
@@ -93,11 +107,16 @@ func estimateMessagesTokens(msgs []Message) int {
 			chars += utf8.RuneCountInString(tc.Function.Arguments)
 		}
 		chars += 16
+		nMedia += len(m.Media)
 	}
-	if chars <= 0 {
-		return 0
+	var n int
+	if chars > 0 {
+		n = int(float64(chars) / charsPerTokenEstimate)
 	}
-	return int(float64(chars) / charsPerTokenEstimate)
+	if nMedia > 0 {
+		n += nMedia * imageTokenEstimate()
+	}
+	return n
 }
 
 func estimateToolsTokens(tools []Tool) int {

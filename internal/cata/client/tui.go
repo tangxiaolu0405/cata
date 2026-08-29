@@ -75,6 +75,7 @@ type paneStats struct {
 	evolveSec           int
 	evolveLast          string
 	chatModel           string
+	effectiveModel      string
 	promptProfile       string
 	subagentRunning     int
 	subagentMax         int
@@ -127,6 +128,8 @@ type model struct {
 	slashList      *list.Model
 	hoverPane      hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
 	subagents      []subagentRecord
+	// attachQueue /attach 命令累积的待发送附件（发送时与行内 @path 合并提交；成功后清空）。
+	attachQueue []string
 }
 
 type streamTickMsg struct {
@@ -446,6 +449,20 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.sess.lastExecCwd = str(ev.raw["cwd"])
 		if m.displayMode != "quiet" {
 			m.appendLog(formatToolResultLine("exec_done", ev.raw, m.displayMode)+"\n", true)
+		}
+	case "attachment_rejected":
+		p := str(ev.raw["path"])
+		r := str(ev.raw["reason"])
+		msg := "! 附件被拒绝: " + p
+		if r != "" {
+			msg += " (" + r + ")"
+		}
+		m.appendLog(styledLogLine(styleErr, msg), true)
+	case "model_switch":
+		from := str(ev.raw["from"])
+		to := str(ev.raw["to"])
+		if from != "" && to != "" && from != to {
+			m.appendLog(styledLogLine(styleDim, fmt.Sprintf("— 多模态模型切换: %s → %s", from, to)), true)
 		}
 	case "error":
 		m.closeThinking()

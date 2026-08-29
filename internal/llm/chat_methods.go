@@ -146,7 +146,28 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	log.Printf("LLM Request: URL=%s, Model=%s, format=%s label=%s adapter=%T, stream=%v, APIKey present=%v",
 		c.apiURL, c.model, c.apiFormat, c.providerLabel, c.adapter, stream, c.apiKey != "")
 
-	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, temperature, tools, toolChoice, stream, disableThinking)
+	// 多模态路由：本轮带图时若有可用 vision 模型则换用（models["chat_vision"]），否则报错不静默丢图。
+	effectiveModel := c.model
+	if messagesHaveMedia(req.Messages) {
+		m, err := resolveModelForMessages(c.llmCfg, c.model, req.Messages)
+		if err != nil {
+			return nil, err
+		}
+		effectiveModel = m
+	}
+	// 模型切换通知（每轮仅一次；会话回到主模型后重置，便于下次附图再次通知）。
+	if c.onModelSwitch != nil {
+		switch {
+		case effectiveModel != c.model && c.notifiedModel != effectiveModel:
+			c.onModelSwitch(c.model, effectiveModel)
+			c.notifiedModel = effectiveModel
+		case effectiveModel == c.model:
+			c.notifiedModel = ""
+		}
+	}
+	c.lastEffectiveModel = effectiveModel
+	caps := capsForModel(c.llmCfg, effectiveModel)
+	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, effectiveModel, caps, req.Messages, req.MaxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
 		return nil, err
 	}
