@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"cata/internal/cata/config"
 	"cata/internal/cata/version"
@@ -47,11 +50,76 @@ func main() {
 		printUsage()
 	case "init":
 		runInit(args[1:])
+	case "passwd":
+		runPasswd(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", args[0])
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+// runPasswd 生成 ui_password 的 bcrypt hash，写入 ~/.cata/gateway.json 的 ui_password 字段。
+// 用法：cata-gateway passwd            # 交互输入口令
+//
+//	cata-gateway passwd <口令>    # 直接传入（注意 shell 历史）
+//	cata-gateway passwd --hash-only # 只打印 hash 不写配置
+func runPasswd(args []string) {
+	hashOnly := false
+	password := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--hash-only":
+			hashOnly = true
+		case "-h", "--help":
+			fmt.Println("Usage: cata-gateway passwd [口令] [--hash-only]")
+			fmt.Println("  生成 ui_password 的 bcrypt hash 并写入 ~/.cata/gateway.json")
+			fmt.Println("  --hash-only  只打印 hash，不写配置（可自行粘贴到 gateway.json 的 ui_password）")
+			return
+		default:
+			if password != "" {
+				fmt.Fprintf(os.Stderr, "cata-gateway passwd: unexpected extra arg %q\n", args[i])
+				os.Exit(2)
+			}
+			password = args[i]
+		}
+	}
+	if password == "" {
+		// 交互输入（不关闭终端回显；如需隐藏输入可用 `echo` 传参或环境变量）。
+		fmt.Print("输入控制台口令: ")
+		b, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		fmt.Println()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cata-gateway passwd: read: %v\n", err)
+			os.Exit(1)
+		}
+		password = strings.TrimSpace(b)
+	}
+	if password == "" {
+		fmt.Fprintln(os.Stderr, "cata-gateway passwd: 口令不能为空")
+		os.Exit(2)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata-gateway passwd: %v\n", err)
+		os.Exit(1)
+	}
+	out := string(hash)
+	if hashOnly {
+		fmt.Println(out)
+		return
+	}
+	cfg, extras, err := gateway.LoadGatewayDocument()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cata-gateway passwd: load config: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.UIPassword = out
+	if err := gateway.SaveGatewayDocument(cfg, extras); err != nil {
+		fmt.Fprintf(os.Stderr, "cata-gateway passwd: save: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("ui_password 已更新为 bcrypt hash（写入 %s）\n重启 cata-gateway 生效。\n", gateway.ConfigPath())
 }
 
 func printUsage() {
@@ -63,6 +131,7 @@ func printUsage() {
 	fmt.Println("  cata-gateway telegram     Telegram only (UI still if enabled)")
 	fmt.Println("  cata-gateway qq           QQ WebSocket only (experimental; UI if enabled)")
 	fmt.Println("  cata-gateway init         Create ~/.cata/gateway.json from template")
+	fmt.Println("  cata-gateway passwd      Generate bcrypt hash for ui_password and write config")
 	fmt.Println("  cata-gateway version      Print version")
 	fmt.Println()
 	fmt.Println("Web UI (default http://0.0.0.0:8787, phone: http://<本机局域网IP>:8787):")

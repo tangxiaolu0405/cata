@@ -1,8 +1,12 @@
 package ui
 
 import (
+	"crypto/tls"
+	"net/http"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestIPBanTriggerAndReset(t *testing.T) {
@@ -71,6 +75,63 @@ func TestSessionStoreValid(t *testing.T) {
 	s.destroy(tok)
 	if s.valid(tok) {
 		t.Fatal("session invalid after destroy")
+	}
+}
+
+// TestSessionStoreBcrypt 验证 ui_password 存 bcrypt hash 时校验正确、明文口令可登录。
+func TestSessionStoreBcrypt(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newSessionStore(string(hash), time.Hour)
+	if isPlainPassword(string(hash)) {
+		t.Fatal("bcrypt hash should not be detected as plain")
+	}
+	if _, ok := s.create("secret"); !ok {
+		t.Fatal("bcrypt store should accept correct plaintext")
+	}
+	if _, ok := s.create("wrong"); ok {
+		t.Fatal("bcrypt store must reject wrong password")
+	}
+}
+
+// TestSessionSlidingExpiry 验证滑动过期：活跃访问刷新 lastSeen，闲置超时才失效。
+func TestSessionSlidingExpiry(t *testing.T) {
+	s := newSessionStore("secret", 100*time.Millisecond)
+	tok, ok := s.create("secret")
+	if !ok {
+		t.Fatal("create failed")
+	}
+	time.Sleep(60 * time.Millisecond)
+	if !s.valid(tok) {
+		t.Fatal("should still be valid before idle timeout")
+	}
+	// 距上次访问不到 100ms，应持续有效（滑动续期）。
+	time.Sleep(60 * time.Millisecond)
+	if !s.valid(tok) {
+		t.Fatal("sliding window should keep session alive while active")
+	}
+	// 闲置超过 window 后失效。
+	time.Sleep(150 * time.Millisecond)
+	if s.valid(tok) {
+		t.Fatal("session should expire after idle timeout")
+	}
+}
+
+// TestIsSecureRequest 验证 X-Forwarded-Proto=https 与 TLS 判定。
+func TestIsSecureRequest(t *testing.T) {
+	if isSecureRequest(&http.Request{}) {
+		t.Fatal("plain http should not be secure")
+	}
+	r := &http.Request{Header: http.Header{}}
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if !isSecureRequest(r) {
+		t.Fatal("X-Forwarded-Proto=https should be secure")
+	}
+	r2 := &http.Request{TLS: &tls.ConnectionState{}}
+	if !isSecureRequest(r2) {
+		t.Fatal("TLS request should be secure")
 	}
 }
 

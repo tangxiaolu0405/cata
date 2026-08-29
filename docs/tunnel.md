@@ -92,28 +92,30 @@ agent 启动参数：
 
 单帧上限 8 MiB（`MaxFrameBytes`），超过断开。
 
-### 逐机器 token（两层鉴权）
+### 逐机器 token 鉴权
 
-- **HTTP 握手层**：`Authorization: Bearer <gateway_token>`（网关准入口令，共享），挡掉互联网乱扫。
 - **hello 帧层**：`machine_id + machine_token`，网关按 machine_id 查表比对 sha256 hash——**每机器独立 token**，
-  单机泄露可单独吊销，不影响其它机器（替代 v1 全网共享 token）。
+  单机泄露可单独吊销，不影响其它机器（替代 v1 全网共享 token）。HTTP 握手层已不再需要固定 gateway_token。
 - token 落盘 `~/.cata/machines.json`（网关侧，0600），**只存 hash 不存明文**。
 
 ### join 流程（机器首次接入）
 
 机器侧 `cata link join <gateway_url>`（无需任何固定口令）：
 
-1. 本地发 POST `/cata/v1/join/request {machine_id}`，**携带自定义协议头 `X-Cata-Join: cata-tunnel.v1`**
-   → 网关最外层校验该头后发一次性 join code（10 分钟有效，内存态）；
-2. 机器进入待批准状态，**已在登录的网关 UI 自动弹出待批准提示**（无需复制 code）；
-3. 管理员在 UI 点「批准」→ 网关签发 machine_token（machines.json 存 hash），状态改 approved；
-4. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
-5. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
+1. 本地 GET `/cata/v1/join/challenge`（带 `X-Cata-Join` 头）→ 网关签发**一次性挑战**（nonce + HMAC 签名，60s 有效、内存态）；
+2. 本地 POST `/cata/v1/join/request {machine_id}`，**携带 `X-Cata-Join: cata-tunnel.v1` + `X-Cata-Challenge: nonce` + `X-Cata-Challenge-Sig: sig`**
+   → 网关最外层校验协议头、校验挑战签名且一次性未复用后发 join code（10 分钟有效）；
+3. 机器进入待批准状态，**已在登录的网关 UI 自动弹出待批准提示**（无需复制 code）；
+4. 管理员在 UI 点「批准」→ 网关签发 machine_token（machines.json 存 hash），状态改 approved；
+5. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
+6. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
 
-**join 端点防爆破（两层）**：
-- **协议头拦截**：`request`/`status` 最外层校验 `X-Cata-Join: cata-tunnel.v1`，未携带/不符的请求
+**join 端点防爆破/防伪造（三层）**：
+- **协议头拦截**：`challenge`/`request`/`status` 最外层校验 `X-Cata-Join: cata-tunnel.v1`，未携带/不符的请求
   （随机扫描器、爆破器）**直接 400 丢弃**并记录 IP 告警，连限流/状态机都进不去。
-- **IP 限流**：通过协议头校验后套内存态 RateLimiter（60s 窗口最多 10 次，**超限拉黑 10 分钟**，
+- **挑战-应答**：`request` 必须回显网关本轮签发的 nonce+签名且一次性——即使抓到固定协议头，
+  没有本轮的挑战签名也无法伪造/重放 join。
+- **IP 限流**：通过前两层后套内存态 RateLimiter（60s 窗口最多 10 次，**超限拉黑 10 分钟**，
   返回 429 + Retry-After）。拉黑池为临时态，网关重启清空（攻击者继续刷会再次被拉黑，故不持久化）。
 
 **首次引导**：一台机器首次接入需本机 `cata link join`（保证"有人在这台机器上、且同意接入"）；之后新增工作空间即可远程 register。
@@ -167,7 +169,7 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 - `edition: remote` 或 `cata_server.mode: remote`（或设了 `cata_url`）进入 remote 模式。
 - remote 模式**不**拉起本机 cata server；worker 在各机器由 `cata agent --link` 自持隧道。
-- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/join/*`（机器首次接入，协议头拦截 + IP 限流）。
+- 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/join/*`（机器首次接入，协议头拦截 + 挑战-应答 + IP 限流）。
   `/cata/v1/agents` 与批准（approve）已改为 UI 进程内调用，不再暴露为远端无鉴权 API。
 
 ## 会话路由

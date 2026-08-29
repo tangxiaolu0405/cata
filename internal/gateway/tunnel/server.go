@@ -10,18 +10,59 @@ import (
 	"time"
 )
 
-// NewHandler 挂载隧道端点（/cata/v1/tunnel）与 join 流程（/cata/v1/join/request|status）。
-// gateway_token 已移除：join 靠自定义协议头 X-Cata-Join 区分 cata 自身报文并自动拦截碰撞/爆破，
-// 授权靠一次性 code + 管理员在 UI 批准；隧道握手鉴权用逐机器 token（machine_token，hello 帧）。
+// NewHandler 挂载隧道端点（/cata/v1/tunnel）与 join 流程（/cata/v1/join/challenge|request|status）。
+// gateway_token 已移除：join 靠自定义协议头 X-Cata-Join + 挑战-应答（一次性 nonce+签名）区分
+// cata 自身报文并自动拦截碰撞/爆破/重放；授权靠一次性 code + 管理员在 UI 批准；
+// 隧道握手鉴权用逐机器 token（machine_token，hello 帧）。
 func NewHandler(reg *Registry, opts HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/cata/v1/tunnel", Handler(reg, opts))
 	if opts.Join != nil {
-		// join 端点：最外层协议头拦截（不符直接 400，连限流/状态机都不进入）→ 限流防爆破。
-		mux.Handle("/cata/v1/join/request", gateJoinProto(rateLimitJoin(opts.Limiter, JoinRequestHandler(opts.Join))))
+		// 层级：协议头拦截（不符 400）→ 限流（防爆破）→ 业务。
+		// challenge 端点签发一次性挑战；request 校验挑战（防伪造/重放）。
+		mux.Handle("/cata/v1/join/challenge", gateJoinProto(rateLimitJoin(opts.Limiter, JoinChallengeHandler(opts.Join))))
+		mux.Handle("/cata/v1/join/request", gateJoinProto(rateLimitJoin(opts.Limiter, gateJoinChallenge(opts.Join, JoinRequestHandler(opts.Join)))))
 		mux.Handle("/cata/v1/join/status", gateJoinProto(rateLimitJoin(opts.Limiter, JoinStatusHandler(opts.Join))))
 	}
 	return mux
+}
+
+// JoinChallengeHeaderName 机器回显挑战用的自定义头（随 X-Cata-Join 一起带）。
+const (
+	JoinChallengeHeaderName    = "X-Cata-Challenge"
+	JoinChallengeSigHeaderName = "X-Cata-Challenge-Sig"
+)
+
+// JoinChallengeHandler GET /cata/v1/join/challenge → 签发一次性挑战（nonce + HMAC 签名）。
+// 机器在 /request 回显；gateway 校验通过才进 join 状态机。60s 有效、一次性。
+func JoinChallengeHandler(j *JoinManager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		challenge, sig, err := j.NewChallenge()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]any{"challenge": challenge, "sig": sig})
+	})
+}
+
+// gateJoinChallenge request 端挑战校验中间件：一次性 nonce+签名不符则 400。
+func gateJoinChallenge(j *JoinManager, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := j.VerifyChallenge(
+			r.Header.Get(JoinChallengeHeaderName),
+			r.Header.Get(JoinChallengeSigHeaderName),
+		); err != nil {
+			log.Printf("cata-gateway: join challenge invalid from %s (%v): possible forgery/replay", clientIP(r), err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // JoinProtoHeader 自定义握手协议头：标记「cata 自身的 join 报文」，与随机扫描/爆破流量区分。
@@ -89,12 +130,20 @@ func JoinRequestHandler(j *JoinManager) http.Handler {
 func JoinStatusHandler(j *JoinManager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
-		approved, token, err := j.Status(code)
+		st, err := j.Status(code)
 		if err != nil {
 			http.Error(w, err.Error(), 404)
 			return
 		}
-		writeJSON(w, map[string]any{"approved": approved, "machine_token": token})
+		approvedAt := ""
+		if !st.ApprovedAt.IsZero() {
+			approvedAt = st.ApprovedAt.Format(time.RFC3339)
+		}
+		writeJSON(w, map[string]any{
+			"approved":      st.Approved,
+			"machine_token": st.Token,
+			"approved_at":   approvedAt,
+		})
 	})
 }
 

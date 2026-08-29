@@ -42,19 +42,36 @@ func TestJoinBaseURL(t *testing.T) {
 
 func TestJoinRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/cata/v1/join/request" {
-			t.Errorf("path = %s, want /cata/v1/join/request", r.URL.Path)
+		switch r.URL.Path {
+		case "/cata/v1/join/challenge":
+			fmt.Fprint(w, `{"challenge":"nonce-1","sig":"sig-1"}`)
+			return
+		case "/cata/v1/join/request":
+			// 校验协议头 + 挑战头被正确携带。
+			if r.Header.Get(JoinProtoHeaderName) != JoinProtoHeaderValue {
+				t.Errorf("missing %s header", JoinProtoHeaderName)
+			}
+			if r.Header.Get(JoinChallengeHeaderName) != "nonce-1" {
+				t.Errorf("challenge header = %q, want nonce-1", r.Header.Get(JoinChallengeHeaderName))
+			}
+			if r.Header.Get(JoinChallengeSigHeaderName) != "sig-1" {
+				t.Errorf("sig header = %q, want sig-1", r.Header.Get(JoinChallengeSigHeaderName))
+			}
+			var body struct {
+				MachineID string `json:"machine_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			if body.MachineID != "test-machine" {
+				t.Errorf("machine_id = %q, want test-machine", body.MachineID)
+			}
+			fmt.Fprint(w, `{"join_code":"abc123"}`)
+			return
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
-		var body struct {
-			MachineID string `json:"machine_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode: %v", err)
-		}
-		if body.MachineID != "test-machine" {
-			t.Errorf("machine_id = %q, want test-machine", body.MachineID)
-		}
-		fmt.Fprint(w, `{"join_code":"abc123"}`)
 	}))
 	defer srv.Close()
 

@@ -264,7 +264,8 @@ func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(24 * time.Hour.Seconds()),
 	})
 	writeJSON(w, map[string]any{"ok": true})
@@ -284,6 +285,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 	writeJSON(w, map[string]any{"ok": true})

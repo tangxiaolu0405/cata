@@ -19,9 +19,16 @@ type JoinResult struct {
 
 // JoinProtoHeader 自定义握手协议头：区分「cata 自身的 join 报文」与随机扫描/爆破流量。
 // 网关端据此在最外层直接拦截未携带该头的请求（连限流/状态机都不进入），降低爆破面。
+// 配合挑战-应答（JoinChallengeHeader*）：机器先取一次性挑战，request 回显，防伪造/重放。
 const (
 	JoinProtoHeaderName  = "X-Cata-Join"
 	JoinProtoHeaderValue = "cata-tunnel.v1"
+)
+
+// JoinChallengeHeaderName 机器回显一次性挑战用的自定义头（随 X-Cata-Join 一起带）。
+const (
+	JoinChallengeHeaderName    = "X-Cata-Challenge"
+	JoinChallengeSigHeaderName = "X-Cata-Challenge-Sig"
 )
 
 // Join 机器首次接入网关：POST join/request 拿一次性 code → 轮询 status 等管理员批准 →
@@ -90,7 +97,39 @@ func joinBaseURL(gatewayURL string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
+// joinFetchChallenge GET /cata/v1/join/challenge 取一次性挑战（nonce + HMAC 签名）。
+func joinFetchChallenge(base string) (challenge, sig string, err error) {
+	req, err := http.NewRequest(http.MethodGet, base+"/cata/v1/join/challenge", nil)
+	if err != nil {
+		return "", "", fmt.Errorf("join challenge: %w", err)
+	}
+	req.Header.Set(JoinProtoHeaderName, JoinProtoHeaderValue)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("join challenge: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("join challenge: status %d", resp.StatusCode)
+	}
+	var out struct {
+		Challenge string `json:"challenge"`
+		Sig       string `json:"sig"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", "", err
+	}
+	if out.Challenge == "" || out.Sig == "" {
+		return "", "", fmt.Errorf("join challenge: empty response")
+	}
+	return out.Challenge, out.Sig, nil
+}
+
 func joinRequest(base, machineID string) (string, error) {
+	challenge, sig, err := joinFetchChallenge(base)
+	if err != nil {
+		return "", err
+	}
 	body, _ := json.Marshal(map[string]string{"machine_id": machineID})
 	req, err := http.NewRequest(http.MethodPost, base+"/cata/v1/join/request", bytes.NewReader(body))
 	if err != nil {
@@ -98,6 +137,8 @@ func joinRequest(base, machineID string) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(JoinProtoHeaderName, JoinProtoHeaderValue)
+	req.Header.Set(JoinChallengeHeaderName, challenge)
+	req.Header.Set(JoinChallengeSigHeaderName, sig)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("join request: %w", err)
@@ -130,10 +171,16 @@ func pollJoinStatus(base, code string, timeout time.Duration) (string, error) {
 					var out struct {
 						Approved     bool   `json:"approved"`
 						MachineToken string `json:"machine_token"`
+						ApprovedAt   string `json:"approved_at"`
 					}
 					if json.NewDecoder(resp.Body).Decode(&out) == nil {
 						resp.Body.Close()
 						if out.Approved && out.MachineToken != "" {
+							if ts := strings.TrimSpace(out.ApprovedAt); ts != "" {
+								fmt.Printf("网关已批准（%s），领取逐机器 token 成功\n", ts)
+							} else {
+								fmt.Println("网关已批准，领取逐机器 token 成功")
+							}
 							return out.MachineToken, nil
 						}
 					} else {

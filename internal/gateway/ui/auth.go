@@ -4,11 +4,14 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // 登录页 + 连续失败封 IP 防护（仅当配置了 ui_password 时启用）。
@@ -105,17 +108,25 @@ func (b *ipBan) bannedRemaining(ip string) time.Duration {
 	return 0
 }
 
-// sessionStore 内存态登录会话（cookie → 创建时间）。
+// sessionStore 内存态登录会话（cookie → 上次活动时间）。
+// 口令支持两种形态：
+//   - bcrypt hash（以 $2 开头）：推荐，配置里存 hash 而非明文（用 `cata-gateway passwd` 生成）；
+//   - 明文（无前缀）：向后兼容旧配置，校验用常量时间比较，并打一次警告建议换 hash。
+//
+// 会话滑动过期：每次有效访问刷新 lastSeen，连续 idle 超过 maxAge 才失效。
 type sessionStore struct {
 	mu       sync.RWMutex
-	entries  map[string]time.Time
+	entries  map[string]time.Time // token → lastSeen
 	maxAge   time.Duration
-	password string
+	password string // bcrypt hash 或明文（旧配置）
 }
 
 func newSessionStore(password string, maxAge time.Duration) *sessionStore {
 	if maxAge <= 0 {
 		maxAge = 24 * time.Hour
+	}
+	if isPlainPassword(password) {
+		log.Printf("cata-gateway: ui_password 为明文存储，建议改用 bcrypt hash（cata-gateway passwd 生成后写入 ui_password）")
 	}
 	return &sessionStore{
 		entries:  map[string]time.Time{},
@@ -124,12 +135,30 @@ func newSessionStore(password string, maxAge time.Duration) *sessionStore {
 	}
 }
 
-// create 校验口令并生成会话 token（常量时间比较口令）。
-func (s *sessionStore) create(password string) (token string, ok bool) {
+// isPlainPassword 判断口令是否非 bcrypt hash（bcrypt hash 固定以 $2 开头）。
+func isPlainPassword(pw string) bool {
+	pw = strings.TrimSpace(pw)
+	return pw == "" || !(strings.HasPrefix(pw, "$2a$") || strings.HasPrefix(pw, "$2b$") || strings.HasPrefix(pw, "$2y$"))
+}
+
+// verifyPassword 校验用户输入口令：bcrypt hash 用 bcrypt.Compare，明文用常量时间比较。
+func (s *sessionStore) verifyPassword(input string) bool {
 	if s.password == "" {
-		return "", false
+		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(s.password), []byte(strings.TrimSpace(password))) != 1 {
+	input = strings.TrimSpace(input)
+	if isPlainPassword(s.password) {
+		return subtle.ConstantTimeCompare([]byte(s.password), []byte(input)) == 1
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(s.password), []byte(input)); err != nil {
+		return false
+	}
+	return true
+}
+
+// create 校验口令并生成会话 token。
+func (s *sessionStore) create(password string) (token string, ok bool) {
+	if !s.verifyPassword(password) {
 		return "", false
 	}
 	token = randSessionToken()
@@ -139,21 +168,23 @@ func (s *sessionStore) create(password string) (token string, ok bool) {
 	return token, true
 }
 
-// valid 校验会话 cookie 是否仍有效（未过期、未被清）。
+// valid 校验会话 cookie 是否仍有效（滑动过期：有效访问刷新 lastSeen）。
 func (s *sessionStore) valid(token string) bool {
 	if token == "" {
 		return false
 	}
-	s.mu.RLock()
-	created, ok := s.entries[token]
-	s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lastSeen, ok := s.entries[token]
 	if !ok {
 		return false
 	}
-	if time.Since(created) > s.maxAge {
-		s.destroy(token)
+	if time.Since(lastSeen) > s.maxAge {
+		delete(s.entries, token)
 		return false
 	}
+	// 滑动续期：活跃会话不因绝对时间过期，只有连续闲置超时才失效。
+	s.entries[token] = time.Now()
 	return true
 }
 
@@ -171,6 +202,19 @@ func randSessionToken() string {
 	var b [32]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// isSecureRequest 判断请求是否走 TLS（或经反代以 https 转发）：用于会话 cookie 的 Secure 属性。
+// 未启用 HTTPS 时不标记 Secure，避免纯 http（局域网）场景 cookie 被浏览器拒收导致无法登录。
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))) {
+	case "https", "wss":
+		return true
+	}
+	return false
 }
 
 // normalizeUIClientIP 对传入 IP 字符串去端口、trim，供 ipBan 计数用。

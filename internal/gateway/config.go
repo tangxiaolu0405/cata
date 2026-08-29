@@ -67,8 +67,10 @@ type Config struct {
 	SocketPath         string           `json:"socket_path,omitempty"`
 	CataURL            string           `json:"cata_url,omitempty"`  // 模式二/三预留
 	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
-	// UIPassword 控制台访问口令（HTTP Basic）。空 = 不启用（仍受 LAN-only 限制）。
-	// 局域网内有其他设备时建议设置，避免任何人驱动对话/批准 exec 确认。
+	// UIPassword 控制台访问口令。支持两种形态：
+	//   - bcrypt hash（以 $2 开头，推荐）：用 `cata-gateway passwd` 生成后写入；
+	//   - 明文（向后兼容，启动时打警告建议换 hash）。
+	// 空 = 不启用登录页（仍受 LAN-only 限制）。
 	UIPassword string `json:"ui_password,omitempty"`
 	// LoginBanMaxAttempts 连续登录失败封禁阈值（默认 5）；仅 ui_password 启用时生效。
 	LoginBanMaxAttempts int `json:"login_ban_max_attempts,omitempty"`

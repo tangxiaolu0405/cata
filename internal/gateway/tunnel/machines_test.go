@@ -77,8 +77,11 @@ func TestJoinManagerLifecycle(t *testing.T) {
 	}
 
 	// 批准前 status 返回未批准。
-	approved, _, _ := j.Status(code)
-	if approved {
+	st, err := j.Status(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Approved {
 		t.Fatal("should not be approved before ApproveJoin")
 	}
 
@@ -92,10 +95,14 @@ func TestJoinManagerLifecycle(t *testing.T) {
 	}
 
 	// 批准后 status 返回 token。
-	approved, token, err := j.Status(code)
-	if err != nil || !approved || token == "" {
-		t.Fatalf("after approve: approved=%v token=%q err=%v", approved, token, err)
+	st, err = j.Status(code)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if !st.Approved || st.Token == "" {
+		t.Fatalf("after approve: %+v err=%v", st, err)
+	}
+	token := st.Token
 
 	// 该 token 应能通过 machines store 校验。
 	if !j.store.ValidateMachine("machine-x", token) {

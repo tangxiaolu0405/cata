@@ -30,11 +30,14 @@ func TestHandleJoinApprove(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	// 批准后 Status 应返回 token 且能通过 store 校验。
-	_, token, err := join.Status(code)
-	if err != nil || token == "" {
-		t.Fatalf("after approve, status should return token: %v", err)
+	st, err := join.Status(code)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !store.ValidateMachine("machine-x", token) {
+	if !st.Approved || st.Token == "" {
+		t.Fatalf("after approve, status should return approved token: %+v", st)
+	}
+	if !store.ValidateMachine("machine-x", st.Token) {
 		t.Fatal("approved machine token should validate")
 	}
 }
