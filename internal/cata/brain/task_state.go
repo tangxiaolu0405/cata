@@ -22,6 +22,10 @@ const (
 	TaskStatusPaused  = "paused"
 )
 
+// FailCodeBudgetExhausted 预算耗尽失败码（与 server 包 FailCodeBudgetExhausted 同值；
+// brain 需独立定义，避免引入 server 造成循环依赖）。
+const FailCodeBudgetExhausted = "budget_exhausted"
+
 // TaskState 可恢复任务状态（home 脑子格 tasks/current.json）。
 // Acceptance 与终止限额均由 LLM/用户按任务指定；系统不套统一业务标准。
 type TaskState struct {
@@ -146,6 +150,10 @@ func TaskResumeProgressMessage(st *TaskState, resumed bool) string {
 	if len(st.Acceptance) > 0 {
 		msg += fmt.Sprintf(" acceptance=%d criteria", len(st.Acceptance))
 	}
+	// 预算耗尽恢复：MaxToolRounds 已放开到全局硬顶（0），提示模型按需继续、不必再受旧上限约束。
+	if st.MaxToolRounds == 0 && st.Round > 0 {
+		msg += "（任务轮次预算已放开到全局硬顶，可继续执行）"
+	}
 	return msg
 }
 
@@ -223,6 +231,12 @@ func BeginOrResumeTask(w *Workspace, userText, outputCwd string) (*TaskState, bo
 	}
 	if resuming && (prev.Status == TaskStatusFailed || prev.Status == TaskStatusPaused) {
 		if isContinueUtterance(userText) {
+			// 预算耗尽类的失败是「可恢复」的：继续时放开任务级轮次预算
+			// （0 = 仅受全局 chat.hard_max_tool_rounds 硬顶约束），避免同一过小预算
+			// 在恢复后再次熔断同一任务（原 MaxToolRounds 保留会造成反复撞同一上限）。
+			if prev.FailCode == FailCodeBudgetExhausted {
+				prev.MaxToolRounds = 0
+			}
 			prev.Status = TaskStatusRunning
 			prev.FailCode = ""
 			prev.FailReason = ""

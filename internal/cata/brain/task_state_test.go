@@ -21,12 +21,25 @@ func TestBeginOrResumeAndFailRecover(t *testing.T) {
 		t.Fatalf("start: st=%+v resumed=%v err=%v", st, resumed, err)
 	}
 
-	if err := MarkTaskFailed(w, st, "budget_exhausted", "budget", 3, 0, 0, "run_command", "fp"); err != nil {
+	// 声明一个偏小的任务级预算，模拟复杂任务被预算耗尽熔断。
+	if _, err := UpdateTaskContract(w, TaskContract{
+		Goal:          "fix the bug",
+		MaxToolRounds: intPtr(14),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = LoadCurrentTask(w)
+	st.MaxToolRounds = 14
+
+	if err := MarkTaskFailed(w, st, "budget_exhausted", "budget", 14, 0, 0, "run_command", "fp"); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadCurrentTask(w)
 	if err != nil || loaded.Status != TaskStatusFailed {
 		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	}
+	if loaded.MaxToolRounds != 14 {
+		t.Fatalf("expect declared budget kept before resume, got %d", loaded.MaxToolRounds)
 	}
 
 	st2, resumed2, err := BeginOrResumeTask(w, "继续", root)
@@ -35,6 +48,13 @@ func TestBeginOrResumeAndFailRecover(t *testing.T) {
 	}
 	if st2.ID != st.ID {
 		t.Fatalf("id changed %s -> %s", st.ID, st2.ID)
+	}
+	// 预算耗尽恢复：任务级预算应放开到全局硬顶（0），避免再次被同一上限熔断。
+	if st2.MaxToolRounds != 0 {
+		t.Fatalf("budget should be released to hard ceiling after resume, got %d", st2.MaxToolRounds)
+	}
+	if st2.FailCode != "" || st2.FailReason != "" {
+		t.Fatalf("fail markers should clear: %+v", st2)
 	}
 
 	if err := MarkTaskFailed(w, st2, "no_progress", "stuck", 5, 0, 4, "read_file", "fp2"); err != nil {

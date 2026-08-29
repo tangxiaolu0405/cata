@@ -273,7 +273,9 @@ func (t *declareTaskTool) Schema() llm.Tool {
 		Name: "declare_task",
 		Description: "Persist recoverable task contract: goal, acceptance, steps, and THIS task's loop limits. " +
 			"Termination limits are task-specific (not global): set max_tool_rounds / max_consecutive_failures / max_stale_rounds for this job. " +
-			"0 disables that breaker (except hard ceiling). Call early on multi-step work.",
+			"Round limits should be generous: complex multi-step jobs (data fetch→transform→analysis→report) routinely exceed 20 tool rounds; " +
+			"default max_tool_rounds to 0 (hard ceiling only) unless you know the job is short, and raise it if a long job gets 'budget_exhausted'. " +
+			"Call early on multi-step work.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"goal":{"type":"string"},"acceptance":{"type":"array","items":{"type":"string"},"description":"Done criteria for THIS task"},"steps":{"type":"array","items":{"type":"string"}},"max_tool_rounds":{"type":"integer","description":"Task tool-round budget; 0=use hard ceiling only"},"max_consecutive_failures":{"type":"integer","description":"Stop after N all-fail tool rounds; 0=off"},"max_stale_rounds":{"type":"integer","description":"Stop after N identical-outcome rounds; 0=off"}},"required":["goal"]}`),
 	}}
 }
