@@ -61,7 +61,7 @@ func tunnelWSURL(gatewayURL, agentID string) (string, error) {
 	if gw == "" {
 		return "", fmt.Errorf("empty gateway url")
 	}
-	u, err := url.Parse(gw)
+	u, err := url.Parse(normalizeGatewayURL(gw))
 	if err != nil {
 		return "", err
 	}

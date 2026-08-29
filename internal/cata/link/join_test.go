@@ -20,6 +20,11 @@ func TestJoinBaseURL(t *testing.T) {
 		{"ws://127.0.0.1:8799", "http://127.0.0.1:8799", false},
 		{"wss://gw.example.com", "https://gw.example.com", false},
 		{"http://gw:8080/", "http://gw:8080", false},
+		// 无 scheme：自动补 http://，避免 localhost 被 url.Parse 误当 scheme。
+		{"localhost:8799", "http://localhost:8799", false},
+		{"127.0.0.1:8788", "http://127.0.0.1:8788", false},
+		{"gw.example.com", "http://gw.example.com", false},
+		{"192.168.1.5:8800", "http://192.168.1.5:8800", false},
 		{"ftp://x", "", true},
 		{"", "", true},
 	}
@@ -37,6 +42,27 @@ func TestJoinBaseURL(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("joinBaseURL(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestTunnelWSURLNoScheme 隧道连接同样要接受无 scheme 的网关地址（自动补 http:// 再转 ws://）。
+func TestTunnelWSURLNoScheme(t *testing.T) {
+	got, err := tunnelWSURL("localhost:8799", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ws://localhost:8799/cata/v1/tunnel?agent=agent-1" {
+		t.Fatalf("got %q", got)
+	}
+	got, err = tunnelWSURL("https://gw.example.com", "a2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "wss://gw.example.com/cata/v1/tunnel?agent=a2" {
+		t.Fatalf("got %q", got)
+	}
+	if _, err := tunnelWSURL("ftp://x", "a"); err == nil {
+		t.Fatal("ftp should be rejected")
 	}
 }
 

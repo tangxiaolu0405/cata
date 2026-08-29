@@ -100,7 +100,7 @@ agent 启动参数：
 
 ### join 流程（机器首次接入）
 
-机器侧 `cata link join <gateway_url>`（无需任何固定口令）：
+机器侧 `cata link join <gateway_url>`（无需任何固定口令）。`gateway_url` 可省略 scheme（如 `localhost:8799` / `192.168.1.5:8799`），机器侧自动按 `http://` 处理；或显式写 `https://…`（推荐公网）。
 
 1. 本地 GET `/cata/v1/join/challenge`（带 `X-Cata-Join` 头）→ 网关签发**一次性挑战**（nonce + HMAC 签名，60s 有效、内存态）；
 2. 本地 POST `/cata/v1/join/request {machine_id}`，**携带 `X-Cata-Join: cata-tunnel.v1` + `X-Cata-Challenge: nonce` + `X-Cata-Challenge-Sig: sig`**

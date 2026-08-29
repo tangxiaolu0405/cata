@@ -76,12 +76,28 @@ func Join(gatewayURL, gatewayToken string) (*JoinResult, error) {
 // JoinPollTimeout 机器侧 join 轮询超时（略大于 code TTL，给管理员充足时间）。
 const JoinPollTimeout = 11 * time.Minute
 
+// normalizeGatewayURL 补全用户输入的网关地址的默认 scheme：
+// 形如 localhost:8799 / 192.168.1.5:8788 / gw.example.com 的「无 scheme」输入统一按 http:// 处理，
+// 避免 url.Parse 把 localhost 误当 scheme（scheme:opaque 形态）报 unsupported schema。
+func normalizeGatewayURL(gw string) string {
+	gw = strings.TrimSpace(gw)
+	if gw == "" {
+		return gw
+	}
+	// 已带 scheme（http/https/ws/wss://）或明显协议形态则原样返回。
+	if strings.Contains(gw, "://") {
+		return gw
+	}
+	// 无 scheme：形如 host[:port] / path 前缀 → 补 http://。
+	return "http://" + gw
+}
+
 func joinBaseURL(gatewayURL string) (string, error) {
 	gw := strings.TrimSpace(gatewayURL)
 	if gw == "" {
 		return "", fmt.Errorf("gateway url required")
 	}
-	u, err := url.Parse(gw)
+	u, err := url.Parse(normalizeGatewayURL(gw))
 	if err != nil {
 		return "", err
 	}
