@@ -101,6 +101,42 @@ func TestWatchSupervisorKeepsAlive(t *testing.T) {
 	}
 }
 
+// TestWatchSupervisorBusyDefersShutdown 失联超时但仍有活跃会话（Busy=true）时，
+// 不应立即 stop（EOF 根因回归）；空闲后才 stop。
+func TestWatchSupervisorBusyDefersShutdown(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	busy := true // 先 busy
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 20 * time.Millisecond,
+		Deadline: 40 * time.Millisecond,
+		AliveFn:  func() bool { return false }, // supervisor 死了
+		Busy:     func() bool { return busy },
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	go watch()
+
+	// busy 期间（持续 200ms > deadline）不应 stop。
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-stopped:
+		t.Fatal("stop called while busy chat session active")
+	default:
+	}
+
+	// 转为空闲后应在一次 deadline 内 stop。
+	busy = false
+	select {
+	case <-stopped:
+		// ok
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop not called after becoming idle")
+	}
+}
+
 // TestSupervisorWatchEnvOverrides 环境变量 CATA_SUPERVISOR_INTERVAL/DEADLINE 应覆盖默认值。
 func TestSupervisorWatchEnvOverrides(t *testing.T) {
 	t.Setenv("CATA_SUPERVISOR_INTERVAL", "2")

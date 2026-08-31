@@ -102,6 +102,12 @@ func (s *Server) ClientDisconnected() {
 	}
 }
 
+// HasActiveChat 是否仍有活跃 chat 会话（supervisor 心跳据此推断 agent 是否空闲，
+// 忙碌时不因 supervisor 短暂失联而自杀）。
+func (s *Server) HasActiveChat() bool {
+	return s.socketSrv != nil && s.socketSrv.ChatSessions() > 0
+}
+
 // touchActivity 取消空闲回收计时（新 chat 会话开始时调用）。
 func (s *Server) touchActivity() {
 	if s.idleTimeout <= 0 {

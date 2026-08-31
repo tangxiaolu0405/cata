@@ -143,7 +143,7 @@ func SupervisorAlive() bool {
 
 // SupervisorWatchConfig keep-alive agent 对 supervisor 的存活探测参数。
 // 关键：kill supervisor（含 SIGKILL）后 agent 不会收到任何信号（detachCmd 脱离进程组），
-// 只能靠「supervisor 控制口失联」自检——失联持续满 Deadline 即认为 supervisor 已死。
+// 只能靠「supervisor 控制口失联」自检。
 type SupervisorWatchConfig struct {
 	// Interval 探测间隔（默认 5s；可用环境变量 CATA_SUPERVISOR_INTERVAL 覆盖，单位秒）。
 	Interval time.Duration
@@ -152,6 +152,13 @@ type SupervisorWatchConfig struct {
 	Deadline time.Duration
 	// AliveFn 探测函数（默认 SupervisorAlive；测试注入）。
 	AliveFn func() bool
+	// Busy 返回当前是否有活跃会话（chat 流式/工具执行中）。非 nil 且返回 true 时，
+	// 即使 supervisor 失联也**推迟**退出——避免正在进行的对话/任务被心跳误杀；
+	// 等到空闲或 supervisor 恢复后再判。
+	Busy func() bool
+	// OnLost 失联超时 + 空闲（或无条件）时调用；默认内部 stop()（保持旧行为）。
+	// 传入后由调用方决定：可改为「先尝试重启 supervisor、再决定是否退出」。
+	OnLost func()
 }
 
 // supervisorWatchDefaults 读取环境变量覆盖（单位秒；非法/未设置回落代码默认）。
@@ -171,12 +178,15 @@ func supervisorWatchDefaults() (interval, deadline time.Duration) {
 	return interval, deadline
 }
 
-// WatchSupervisorAndStop 后台监控 supervisor 存活；失联超过 Deadline 时调用 stop()
-// 让 agent 优雅退出。任何 kill supervisor 方式（含 SIGKILL）都能收敛到停止 agent，
+// WatchSupervisorAndStop 后台监控 supervisor 存活；失联超过 Deadline 时触发
+// OnLost（默认 stop()）。任何 kill supervisor 方式（含 SIGKILL）都能收敛，
 // 避免「supervisor 死了 agent 变成孤儿继续占资源/持隧道」。
+//
+// 若配置了 Busy（有活跃会话返回 true）且当前忙碌，则**推迟**判定：继续探测，
+// 直到空闲或 supervisor 恢复（防止正在进行的 chat/任务被误杀——EOF 根因）。
 // 返回可直接 go 的闭包；stop 应为幂等（server.Stop 是幂等的）。
 func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
-	// 优先级：显示传入 > 环境变量 > 代码默认。
+	// 优先级：显式传入 > 环境变量 > 代码默认。
 	envInterval, envDeadline := supervisorWatchDefaults()
 	interval := envInterval
 	if cfg.Interval > 0 {
@@ -190,6 +200,10 @@ func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
 	if aliveFn == nil {
 		aliveFn = SupervisorAlive
 	}
+	onLost := cfg.OnLost
+	if onLost == nil {
+		onLost = stop
+	}
 	return func() {
 		lastAlive := time.Now()
 		for {
@@ -199,8 +213,14 @@ func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
 				continue
 			}
 			if time.Since(lastAlive) >= deadline {
+				// 忙碌（有活跃会话）时不死机：日志提示并继续等到空闲。
+				if cfg.Busy != nil && cfg.Busy() {
+					log.Printf("supervisor unreachable for %s — busy chat session active, deferring shutdown", deadline)
+					lastAlive = time.Now() // 重置：避免长期持会话时频繁刷日志
+					continue
+				}
 				log.Printf("supervisor unreachable for %s — shutting down keep-alive agent", deadline)
-				stop()
+				onLost()
 				return
 			}
 		}

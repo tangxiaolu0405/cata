@@ -275,8 +275,12 @@ func runAgent(args []string) {
 	// 常驻 agent（--keep-alive）依赖 supervisor 保活；supervisor 被 kill（含 SIGKILL）
 	// 时 agent 收不到信号（detachCmd 脱离进程组），这里靠控制口心跳自检并优雅退出，
 	// 避免 supervisor 死后 agent 变成孤儿继续占资源/持隧道。
+	// 但**有活跃 chat 会话时不死机**：Busy 返回 HasActiveChat，待会话结束或在当前
+	// 空闲期再收敛，避免正在进行的对话/任务被心跳误杀（EOF 根因）。
 	if keepAlive {
-		go link.WatchSupervisorAndStop(link.SupervisorWatchConfig{}, func() {
+		go link.WatchSupervisorAndStop(link.SupervisorWatchConfig{
+			Busy: srv.HasActiveChat,
+		}, func() {
 			srv.Stop()
 		})()
 	}

@@ -5,7 +5,7 @@
 
 ## A. Server.Stop() 并发安全（真实 bug 风险）
 
-- **状态**: `done`（commit 见 F 完成后本次提交）
+- **状态**: `done`（提交 `c448aef` 引入 sync.Once；`096b603` 后的 `supervisor heartbeat` 修正见下）
 - **问题**: `Server.Stop()` 有 5 个并发调用点，无 `sync.Once` 保护：
   1. idle 空闲回收（`internal/cata/server/server.go`）
   2. managed 空连接回收（`go s.Stop()`）
@@ -16,6 +16,10 @@
   `ln.Addr()` 无保护，并发触发可能重复 close / 异常或日志刷屏。
 - **修法**: `Server` 增加 `stopOnce sync.Once`，`Stop()` 包 `once.Do`；补并发测试
   （`server_stop_test.go`：并发 Stop 幂等 + Stop 后 Wait 返回）。
+- **后续修正（EOF 根因）**: 心跳兜底 `WatchSupervisorAndStop` 曾无条件在失联 30s 后
+  stop，导致**正在进行的 chat/任务被误杀**（TUI EOF）。现在 `Busy` 配置（agent 传
+  `srv.HasActiveChat`）使有活跃会话时推迟退出，空闲或 supervisor 恢复后才判；
+  `Server.HasActiveChat()` 暴露会话状态。回归测试 `TestWatchSupervisorBusyDefersShutdown`。
 
 ## B. supervisor 心跳参数可配
 
