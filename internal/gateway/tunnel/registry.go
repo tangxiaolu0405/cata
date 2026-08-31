@@ -58,14 +58,20 @@ func (r *Registry) registerConn(a *agentConn) error {
 	return nil
 }
 
-// Unregister 移除 agent（断开时调用）。
-func (r *Registry) Unregister(agentID string) {
+// UnregisterConn 移除 agent 连接（该连接断开时调用）。只有在注册表中该 agent_id
+// 仍指向**本连接**时才删除：新连接顶替旧连接后，旧连接的 readLoop 结束也会走到这里，
+// 若无条件 delete 会把刚注册的新连接误删（竞态，见 TestReRegisterReplacesStaleConnection
+// 偶发超时）。被顶替的旧连接已由 registerConn 关闭，这里不应再清理新连接。
+func (r *Registry) UnregisterConn(a *agentConn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if a, ok := r.agents[agentID]; ok {
-		a.closeAllStreams()
+	if a == nil {
+		return
 	}
-	delete(r.agents, agentID)
+	if cur, ok := r.agents[a.info.AgentID]; ok && cur == a {
+		a.closeAllStreams()
+		delete(r.agents, a.info.AgentID)
+	}
 }
 
 // OnlineAgents 返回当前在线 agent 列表（稳定排序）。
@@ -372,7 +378,9 @@ func (a *agentConn) startHeartbeat(ctx context.Context, interval time.Duration) 
 func (a *agentConn) closeFromGateway() {
 	if a.closed.CompareAndSwap(false, true) {
 		a.closeAllStreams()
-		_ = a.ws.Close()
+		if a.ws != nil {
+			_ = a.ws.Close()
+		}
 	}
 }
 

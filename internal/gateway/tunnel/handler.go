@@ -106,7 +106,8 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 			_ = ws.Close()
 			return
 		}
-		defer reg.Unregister(agentID)
+		// 按连接身份注销：被新连接顶替的旧连接结束时不会误删新注册（见 UnregisterConn）。
+		defer reg.UnregisterConn(ac)
 		log.Printf("cata-gateway: agent online: %s (name=%q root=%q addr=%s)", agentID, hello.Name, hello.RootPath, r.RemoteAddr)
 		// 网关侧心跳：周期 ping + 读 deadline，检测 NAT/静默断网的半开连接，
 		// 让陈旧注册自愈（worker 重连顶替、worker 侧无感知时可被网关踢掉）。

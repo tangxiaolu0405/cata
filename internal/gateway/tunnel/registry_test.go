@@ -250,6 +250,42 @@ func TestReRegisterReplacesStaleConnection(t *testing.T) {
 	}
 }
 
+// TestUnregisterConnIdentity 竞态回归：UnregisterConn 只删除「注册表里仍指向自己」的连接。
+// 新连接顶替旧连接后，旧连接 readLoop 结束调 UnregisterConn(旧连接) 不得误删新连接——
+// 这是 TestReRegisterReplacesStaleConnection 偶发 5s 超时的根因（旧版 Unregister(agentID)
+// 无条件 delete，会把刚替换进来的新连接删掉）。
+func TestUnregisterConnIdentity(t *testing.T) {
+	reg := NewRegistry()
+	connA := &agentConn{info: AgentInfo{AgentID: "ws-1"}}
+	connB := &agentConn{info: AgentInfo{AgentID: "ws-1"}}
+
+	if err := reg.registerConn(connA); err != nil {
+		t.Fatal(err)
+	}
+	// 顶替：registerConn(connB) 应替换为 connB（并关闭旧连接）。
+	if err := reg.registerConn(connB); err != nil {
+		t.Fatal(err)
+	}
+	reg.mu.Lock()
+	cur := reg.agents["ws-1"]
+	reg.mu.Unlock()
+	if cur != connB {
+		t.Fatal("replacement not installed")
+	}
+
+	// 旧连接（connA）注销：不得删除当前注册的 connB。
+	reg.UnregisterConn(connA)
+	if _, ok := reg.FindAgent("ws-1"); !ok {
+		t.Fatal("stale unregister removed replacement connection")
+	}
+
+	// 当前连接（connB）注销：应删除。
+	reg.UnregisterConn(connB)
+	if _, ok := reg.FindAgent("ws-1"); ok {
+		t.Fatal("current connection unregister should remove agent")
+	}
+}
+
 // TestRegistryMachineGrouping 验证机器标识分组：Machines 去重、FindAgentByMachine 按机器找 agent。
 func TestRegistryMachineGrouping(t *testing.T) {
 	reg := NewRegistry()
