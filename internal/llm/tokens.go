@@ -83,7 +83,7 @@ func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Messag
 }
 
 // DefaultImageTokenEstimate 单张图片默认估算 token（无 tiktoken 时按 512×512 tile 粗算的保守占位）。
-// 设计见 design.md §多模态 Token 与保护：估算不足以精算，只用于压缩预算与超窗判定。
+// 设计见 agents.md §多模态 Token 与保护：估算不足以精算，只用于压缩预算与超窗判定。
 const DefaultImageTokenEstimate = 1000
 
 // imageTokenEstimate 返回配置的图片 token 估算；未配置时用默认。

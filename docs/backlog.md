@@ -30,7 +30,7 @@
   未设置回落默认；显式传入 cfg 优先于环境变量；保留测试注入 `AliveFn`。
   测试：环境覆盖 / 非法回落 / 显式优先。
 
-## C. M4 遗留：PDF 文档页（design.md 标 🟡）
+## C. M4 遗留：PDF 文档页（agents.md §多模态 标 🟡）
 
 - **状态**: `todo`
 - **问题**: audio wire（`input_audio`）已落地；PDF 出站会报「需先转图/文本」（`internal/llm/capability.go`）。

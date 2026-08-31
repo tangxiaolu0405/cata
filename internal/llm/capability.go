@@ -8,7 +8,7 @@ import (
 )
 
 // 多模态能力（A 层：出站编码 + 模型能力路由）。
-// 设计见 design.md §多模态：history 存引用（MediaRef{id,mime}），出站再编码为 content[]；
+// 设计见 agents.md §多模态：history 存引用（MediaRef{id,mime}），出站再编码为 content[]；
 // 按模型名声明 capabilities，缺省对未知模型保守视为仅 text。
 
 // ModelCaps 单个模型的多模态能力（由 config.ModelCapCfg 归一化）。

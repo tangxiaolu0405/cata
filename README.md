@@ -157,8 +157,7 @@ internal/
 
 ## 设计文档
 
-- `agents.md` — 项目边界与 AI 约束（与代码对齐）
-- `design.md` — 完整系统设计（双根存储、Context 组装、演进、TUI 协议）
+- `agents.md` — 项目级 AI 上下文（给 agent 阅读项目本身）：架构、双根存储、Context 组装、演进、多模态、TUI 协议与 AI 约束（合并自原 `agents.md` + `design.md`）
 - `brain/directory-plan.md` — 脑子 vs 产出区 vs 项目 `.cata`
 - `internal/cata/brain/guidance/` — 引导层模板（constraints / behavior / delegate-guide）→ `cata init` seed 到 `~/.cata/global/`
 - `internal/llm/rolecards/` — 角色卡片（chat / worker / evolve 的身份 + 协议，编译期 embed）

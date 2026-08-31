@@ -71,7 +71,7 @@ type chatToolExecResult struct {
 	name string
 }
 
-// Tool display verbosity levels (design.md §分级显示).
+// Tool display verbosity levels (agents.md §分级显示).
 const (
 	displaySilent  = "silent"
 	displayNormal  = "normal"

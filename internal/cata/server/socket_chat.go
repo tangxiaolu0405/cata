@@ -560,7 +560,7 @@ func isFatalBrowserError(err error, output string) bool {
 
 // trimHistoryToTokenBudget 从最早的用户/助手/tool 消息裁掉，使估算 token ≤ budget。
 // 优先去掉早期 user 轮的图片 Media（保留文本），再裁整条消息——图片 token 成本最高
-// （ImageTokenEstimate），去图能最快降预算且不丢对话语义（design.md §会话压缩）。
+// （ImageTokenEstimate），去图能最快降预算且不丢对话语义（agents.md §Context 组装）。
 func trimHistoryToTokenBudget(ctx context.Context, client *llm.Client, msgs []llm.Message, tools []llm.Tool, budget int) []llm.Message {
 	if budget <= 0 || len(msgs) == 0 {
 		return msgs
