@@ -87,6 +87,17 @@ func (m *SessionManager) Get(key SessionKey) (*CataConn, error) {
 	return m.GetWithCwd(key, cwd)
 }
 
+// CurrentCwd 返回该会话当前连接的产出区（无会话时返回 ""）。
+// 区别于 Get：Get 总是回退到 worker 默认目录；切过 /dir 的会话要用实际 cwd。
+func (m *SessionManager) CurrentCwd(key SessionKey) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.sessions[key]; ok {
+		return c.Cwd()
+	}
+	return ""
+}
+
 // GetWithCwd 获取或创建会话连接，使用显式 cwd（如 web 项目真实路径）。
 func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, error) {
 	return m.GetWithCwdDialer(key, cwd, nil)

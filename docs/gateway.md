@@ -75,6 +75,20 @@ gateway 发给 cata 的 `cwd` 固定布局：
 - 每个渠道会话一个目录（文件工具、`run_command` 沙箱）
 - 脑子解析、`~/.cata/config.json`、evolve 规则与终端 chat **无差别**
 
+### 会话内切换工作目录（Telegram / QQ）
+
+渠道会话默认产出区是上面的 worker 目录；如需在**已使用过的项目目录**里工作，
+会话内直接发（与 `cata chat --dir <path>` 等价）：
+
+```
+/dir                    # 显示当前产出区
+/dir ~/stock            # 切换到 ~/stock（~ 展开；必须是存在的目录）
+```
+
+- 切换即刻生效：后续对话的工具、命令、文件操作与脑子格解析都以新目录为准
+- 失败（目录不存在等）会明确报错，原产出区保持不变
+- `/help` 中同样列出
+
 ## 发行档位（edition）
 
 同一 `cata-gateway` 二进制，由 `~/.cata/gateway.json` 的 `edition` 决定行为（非不同安装包）：

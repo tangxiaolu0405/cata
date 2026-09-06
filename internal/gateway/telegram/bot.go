@@ -127,6 +127,11 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 	case text == "/help":
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, helpText(), nil)
 		return
+	case strings.HasPrefix(text, "/dir"):
+		reply, _ := gateway.HandleWorkdirCommand(b.sessions, key, strings.TrimPrefix(text, "/dir"))
+		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, reply, nil)
+		ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", reply)
+		return
 	}
 
 	unlock := b.locks.Lock(key)
@@ -342,10 +347,12 @@ func helpText() string {
 /start — 欢迎
 /help — 本帮助
 /clear — 清空 cata 会话历史
+/dir <path> — 切换产出区到已使用的项目目录（/dir 单独发显示当前目录）
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket
-- 每个 Telegram chat 产出区: ~/.cata_worker/telegram/<chat_id>/
+- 每个 Telegram chat 默认产出区: ~/.cata_worker/telegram/<chat_id>/
+- /dir ~/project 可切到任意存在目录（与 cata chat --dir 等价）
 - 危险命令会弹出 Run/Cancel 按钮确认`)
 }
 
