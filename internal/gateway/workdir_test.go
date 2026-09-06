@@ -285,3 +285,40 @@ func TestAgentBindingRemoteCwd(t *testing.T) {
 		t.Fatalf("远程 cwd=%q want %q", conn.Cwd(), proj)
 	}
 }
+
+// TestGetWithCwdDialerRebuildsOnRebind 换绑 agent 后连接必须重建（不能复用 cwd 相同的旧连接）。
+func TestGetWithCwdDialerRebuildsOnRebind(t *testing.T) {
+	home, proj1, proj2 := mkTestSetup(t)
+	ws1 := reqWsID(t, proj1)
+	ws2 := reqWsID(t, proj2)
+	root := filepath.Join(home, "w")
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	key := SessionKeyFor("qq", "1")
+
+	// 先建默认（worker，无 dialer）连接。
+	c0, err := m.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c0.DialKey() != "" {
+		t.Fatalf("默认连接应无 dialer，got %q", c0.DialKey())
+	}
+
+	// 绑定 ws1（dialer）→ 连接应重建为 dialer、cwd=proj1。
+	c1, err := m.GetWithCwdDialer(key, proj1, DialLocalAgent(ws1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c1.DialKey() != "dialer" || c1.Cwd() != proj1 {
+		t.Fatalf("绑定后连接应 dialer+cwd=proj1，got dialer=%q cwd=%q", c1.DialKey(), c1.Cwd())
+	}
+
+	// 换绑 ws2（cwd 不同）→ 必须重建到 proj2。
+	c2, err := m.GetWithCwdDialer(key, proj2, DialLocalAgent(ws2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Cwd() != proj2 {
+		t.Fatalf("换绑后 cwd=%q want %q", c2.Cwd(), proj2)
+	}
+}

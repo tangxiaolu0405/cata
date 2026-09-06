@@ -50,6 +50,15 @@ func NewConnWithDialer(socketPath, cwd string, dialFunc func() (net.Conn, error)
 // Cwd 返回该连接绑定的产出区。
 func (c *Conn) Cwd() string { return c.cwd }
 
+// DialKey 返回拨号标识："" = 默认 Unix socket；"dialer" = 自定义 dialFunc。
+// 供上层判断连接的目标是否变化（如换绑 agent 后须重建，而非复用 cwd 相同的旧连接）。
+func (c *Conn) DialKey() string {
+	if c.dialFunc != nil {
+		return "dialer"
+	}
+	return ""
+}
+
 // Healthy 报告缓存连接是否仍可用（conn 非 nil）。
 // 连接在读写错误后由 invalidate 置 nil，因此 nil 即失效（隧道抖动自愈后需重建）。
 // 不做在线 ping——保持轻量，避免与进行中的 ChatAs 竞争同一连接。

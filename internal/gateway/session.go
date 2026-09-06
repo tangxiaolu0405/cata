@@ -177,14 +177,26 @@ func (m *SessionManager) GetWithCwd(key SessionKey, cwd string) (*CataConn, erro
 	return m.GetWithCwdDialer(key, cwd, nil)
 }
 
+// dialerIdentity 归一化拨号标识：nil = 默认 socket（""）；非 nil = 自定义拨号（"dialer"）。
+func dialerIdentity(d func() (net.Conn, error)) string {
+	if d != nil {
+		return "dialer"
+	}
+	return ""
+}
+
 // GetWithCwdDialer 获取或创建会话连接；dialer 非 nil 时该连接用自定义拨号
-// （remote 模式按项目路由到对应在线 agent），否则走默认 connFactory。
+// （remote 模式按项目路由到对应在线 agent，本地按绑定 agent 拨其 per-ws socket），
+// 否则走默认 connFactory。
 // 缓存的连接若已失效（隧道抖动/断线后 socketclient 已标记失效），自动重建。
+// 关键：**dialer 变化也重建**——绑定/换绑后必须拨到新 agent 的 socket，
+// 不能复用旧的（否则换绑后消息仍发到旧工作空间）。
 func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer func() (net.Conn, error)) (*CataConn, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	dialerKey := dialerIdentity(dialer)
 	if c, ok := m.sessions[key]; ok {
-		if c.Cwd() == cwd {
+		if c.Cwd() == cwd && c.DialKey() == dialerKey {
 			if !c.Healthy() {
 				log.Printf("session %s: cached conn unhealthy, rebuilding", key)
 				_ = c.Close()
@@ -193,6 +205,9 @@ func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer fun
 				return c, nil
 			}
 		} else {
+			// cwd 或 dialer 变化：旧连接不再匹配（如换绑 agent），必须重建。
+			log.Printf("session %s: conn demux changed (cwd %q dialer %q -> cwd %q dialer %q), rebuilding",
+				key, c.Cwd(), c.DialKey(), cwd, dialerKey)
 			_ = c.Close()
 			delete(m.sessions, key)
 		}
