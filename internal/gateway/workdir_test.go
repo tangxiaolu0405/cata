@@ -260,8 +260,8 @@ func TestConnForMessageUnbound(t *testing.T) {
 	}
 }
 
-// TestAgentBindingRemoteCwd 远程模式绑定也指向工作空间根（不解析本地/不拉起）。
-func TestAgentBindingRemoteCwd(t *testing.T) {
+// TestAgentBindingRemoteRoutesToBoundAgent 远程模式按绑定 agent 拨隧道（不再发到默认 agent）。
+func TestAgentBindingRemoteRoutesToBoundAgent(t *testing.T) {
 	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
@@ -274,15 +274,29 @@ func TestAgentBindingRemoteCwd(t *testing.T) {
 	path := filepath.Join(home, "binding.json")
 	b := NewAgentBinding(path)
 	b.Set("telegram", ws)
+
+	var dialed []string
 	m := NewRemoteSessionManagerWithStore(home, func(_ string, cwd string) *CataConn {
 		return NewCataConn("", cwd)
 	}, nil)
+	// 注入 agent 隧道拨号器：记录拨谁。
+	m.remoteDial = func(agentID string) func() (net.Conn, error) {
+		dialed = append(dialed, agentID)
+		return func() (net.Conn, error) { return &eofConn{}, nil }
+	}
+
 	conn, err := m.ConnForMessage(b, "telegram", SessionKeyFor("tg", "5"))
 	if err != nil {
 		t.Fatalf("远程转发失败：%v", err)
 	}
+	if len(dialed) != 1 || dialed[0] != ws {
+		t.Fatalf("应拨绑定 agent 的隧道，dialed=%v want [%s]", dialed, ws)
+	}
 	if conn.Cwd() != proj {
 		t.Fatalf("远程 cwd=%q want %q", conn.Cwd(), proj)
+	}
+	if conn.DialKey() != "dialer" {
+		t.Fatalf("远程转发连接应带隧道 dialer，got %q", conn.DialKey())
 	}
 }
 

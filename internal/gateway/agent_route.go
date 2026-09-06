@@ -37,6 +37,13 @@ func (sessions *SessionManager) ConnForMessage(binding *AgentBinding, channel st
 		return nil, fmt.Errorf("%s 渠道绑定 agent %q 不在工作区注册表 —— 请 /dir 重新选择", channel, binding.Agent(channel))
 	}
 	if sessions.IsRemote() {
+		// remote 模式：优先按绑定 agent 拨其隧道；无绑定拨默认 agent（兜底）。
+		if sessions.remoteDial != nil {
+			if d := sessions.remoteDial(agentID); d != nil {
+				log.Printf("channel %q sessions: remote forward -> agent=%s cwd=%s", channel, agentID, root)
+				return sessions.GetWithCwdDialer(key, root, d)
+			}
+		}
 		log.Printf("channel %q sessions: remote -> default agent cwd=%s", channel, root)
 		return sessions.GetWithCwd(key, root)
 	}

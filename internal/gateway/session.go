@@ -30,6 +30,8 @@ type SessionManager struct {
 	// dirListSeen 该会话是否已看过 /dir 工作区列表：未看列表不允许序号切换
 	// （序号按最近使用排序，重启后可能变化，须先确认列表）。
 	dirListSeen map[SessionKey]bool
+	// remoteDial remote 模式下按绑定 agent 拨其隧道（nil = 退化为默认 connFactory）。
+	remoteDial func(agentID string) func() (net.Conn, error)
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
@@ -82,12 +84,22 @@ func RemoteSessionManagerForDefaultAgent(cfg Config, reg *tunnel.Registry) (*Ses
 	if reg == nil {
 		return nil, fmt.Errorf("remote registry required")
 	}
-	return NewRemoteSessionManager(cfg.WorkerRoot, func(_ string, _ string) *CataConn {
+	m := NewRemoteSessionManager(cfg.WorkerRoot, func(_ string, _ string) *CataConn {
 		agentID, root := defaultAgentTarget(cfg, reg)
 		return NewCataConnWithDialer("", root, func() (net.Conn, error) {
 			return reg.DialAgent(agentID)
 		})
-	}), nil
+	})
+	// 按绑定 agent 拨隧道（渠道转发的首选；default 仅作未指定时兜底）。
+	m.remoteDial = func(agentID string) func() (net.Conn, error) {
+		if reg == nil || agentID == "" {
+			return nil
+		}
+		return func() (net.Conn, error) {
+			return reg.DialAgent(agentID)
+		}
+	}
+	return m, nil
 }
 
 // defaultAgentTarget 返回当前默认通道 agent：优先 cfg.DefaultAgentID，否则第一个在线。
