@@ -15,25 +15,19 @@ import (
 	"cata/internal/cata/socketclient"
 )
 
-// workTestHome 测试 CATA_HOME 短目录（unix socket 路径有 ~104 字节上限）。
+// workTestHome 测试 CATA_HOME：返回一个**足够短**的目录。
+// unix socket 路径上限约 104 字节，而 per-ws socket 路径 = {home}/sockets/<ws_id>.sock，
+// ws_id 又由 home 路径派生——home 太长会直接 bind 失败（CI 上 ~/.cata_worker 可写即踩中）。
+// 统一用 /tmp 下的短目录（Linux/macOS 均存在且短），保证各平台一致稳定。
 func workTestHome(t *testing.T) string {
 	t.Helper()
-	home, err := os.UserHomeDir()
+	dir, err := os.MkdirTemp("/tmp", "cw")
 	if err != nil {
-		t.Fatal(err)
-	}
-	base := filepath.Join(home, ".cata_worker", "gw-tests")
-	if err := os.MkdirAll(base, 0755); err != nil {
-		dir, err := os.MkdirTemp("/tmp", "cata-gwtest-")
+		// 受限环境（无 /tmp 写权限）：退化为系统临时目录。
+		dir, err = os.MkdirTemp("", "cw")
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
-		return dir
-	}
-	dir, err := os.MkdirTemp(base, "t")
-	if err != nil {
-		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
