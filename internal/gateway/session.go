@@ -23,6 +23,8 @@ type SessionManager struct {
 	socketPath  string
 	workerRoot  string
 	connFactory ConnFactory
+	// remote 远程模式（隧道拨远端 agent）：本地 per-ws 拉起/解析不适用。
+	remote bool
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
@@ -43,8 +45,14 @@ func NewRemoteSessionManager(workerRoot string, connFactory ConnFactory) *Sessio
 	return &SessionManager{
 		workerRoot:  workerRoot,
 		connFactory: connFactory,
+		remote:      true,
 		sessions:    make(map[SessionKey]*CataConn),
 	}
+}
+
+// IsRemote 是否 remote（远端隧道）模式：本地 per-ws 拉起/解析逻辑不适用。
+func (m *SessionManager) IsRemote() bool {
+	return m.remote
 }
 
 // RemoteSessionManagerForDefaultAgent 创建 remote 模式通道会话管理器：

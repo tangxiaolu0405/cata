@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"cata/internal/cata/brain"
+	"cata/internal/cata/link"
 )
 
 // HandleWorkdirCommand 处理渠道会话（telegram / qq / web）的产出区切换命令 /dir：
@@ -11,8 +14,11 @@ import (
 //   - 否则解析为绝对路径（~ 展开）、校验为**存在的目录**，把会话连接切换到该 cwd
 //
 // 切换后后续 chat 请求以新 cwd 发出：server 端按 cwd 解析产出区并绑定脑子格
-// （传统 server 走 ResolveWorkspace，与 `cata chat --dir <path>` 等价），
-// 从而在 IM 渠道里沿用本地 TUI 用过的项目工作目录。
+// （与 `cata chat --dir <path>` 等价），从而在 IM 渠道里沿用本地 TUI 用过的项目目录。
+//
+// 目标目录的 agent「不在线」时：本地模式会自动解析其工作区并拉起 per-ws agent
+// （link.EnsureAgent），切换完成即可直接对话；解析失败（非项目目录）回退默认
+// worker socket。remote 模式保持拨默认云端 agent。
 // 返回 (回复文本, 是否已处理)。任何失败保留原 cwd 不变。
 func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) (string, bool) {
 	cur := sessions.CurrentCwd(key)
@@ -57,10 +63,29 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	if abs == cur {
 		return "已在产出区: " + cur, true
 	}
-	// GetWithCwd 在 cwd 变化时重建会话连接：后续 chat 用新产出区。
-	if _, err := sessions.GetWithCwd(key, abs); err != nil {
-		return "切换失败: " + err.Error(), true
+	// 本地模式：解析目标工作区并确保其 agent 在线（目标「不在线」也自动拉起）。
+	assured := false
+	if !sessions.IsRemote() {
+		if ws, werr := brain.ResolveWorkspaceNoGlobal(abs); werr == nil && ws != nil && strings.TrimSpace(ws.ID) != "" {
+			if aerr := link.EnsureAgent(ws.ID); aerr == nil {
+				// 会话连接拨该工作区的 per-ws agent socket：切换即在线。
+				if _, err := sessions.GetWithCwdDialer(key, abs, DialLocalAgent(ws.ID)); err == nil {
+					assured = true
+				}
+			}
+		}
 	}
-	return "产出区已切换:\n" + cur + "\n→\n" + abs +
-		"\n\n接下来的对话在此目录工作（按 git / workspace.yaml 绑定脑子格）。\n/clear 可清空本会话历史。", true
+	if !assured {
+		// 非项目目录 / remote 模式 / 拉起失败：回退默认会话连接（worker socket）。
+		if _, err := sessions.GetWithCwd(key, abs); err != nil {
+			return "切换失败: " + err.Error(), true
+		}
+	}
+	reply := "产出区已切换:\n" + cur + "\n→\n" + abs +
+		"\n\n接下来的对话在此目录工作（按 git / workspace.yaml 绑定脑子格）。"
+	if assured {
+		reply += "\n工作区 agent 已自动就绪（在线）。"
+	}
+	reply += "\n/clear 可清空本会话历史。"
+	return reply, true
 }
