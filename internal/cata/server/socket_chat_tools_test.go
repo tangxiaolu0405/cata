@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"cata/internal/cata/secrets"
@@ -125,5 +127,45 @@ func TestExtractWrittenBytes(t *testing.T) {
 		if ok != c.ok || (ok && got != c.want) {
 			t.Fatalf("extractWrittenBytes(%q)=%d,%v want %d,%v", c.in, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// TestUnifiedDiff 验证统一 diff 生成：改动内容正确、相同内容返回空。
+func TestUnifiedDiff(t *testing.T) {
+	d, err := unifiedDiff("f.go", "line1\nline2\n", "line1\nline2-changed\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(d, "line2") || !strings.Contains(d, "line2-changed") {
+		t.Fatalf("diff=%q", d)
+	}
+	if !strings.Contains(d, "--- f.go") || !strings.Contains(d, "+++ f.go") {
+		t.Fatalf("missing diff headers: %q", d)
+	}
+	// 相同内容 → 空 diff。
+	same, err := unifiedDiff("f.go", "a\nb\n", "a\nb\n")
+	if err != nil || same != "" {
+		t.Fatalf("same content diff=%q err=%v", same, err)
+	}
+}
+
+// TestFileDiffSinkIdempotent 验证 ctx diff sink：写入一次生效、重复不覆盖（幂等）。
+func TestFileDiffSinkIdempotent(t *testing.T) {
+	var sink string
+	ctx := withFileDiffSink(context.Background(), &sink)
+	emitFileDiff(ctx, "/a", "old\n", "new\n")
+	if !strings.Contains(sink, "new") {
+		t.Fatalf("sink not filled: %q", sink)
+	}
+	// 第二次（不同内容）不再覆盖。
+	emitFileDiff(ctx, "/a", "x\n", "y\n")
+	if strings.Contains(sink, "y") {
+		t.Fatalf("sink overwritten: %q", sink)
+	}
+	// 无 sink 的 ctx 调用安全（不 panic、不写入）。
+	var plain string
+	emitFileDiff(context.Background(), "/a", "x", "y")
+	if plain != "" {
+		t.Fatal("plain ctx should not write")
 	}
 }

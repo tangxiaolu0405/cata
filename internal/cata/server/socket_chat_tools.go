@@ -70,6 +70,7 @@ type chatToolExecResult struct {
 	tc   llm.ToolCall
 	out  string
 	name string
+	diff string // 文件写入工具成功时生成的 unified diff（供 file_written 事件展示）
 }
 
 // Tool display verbosity levels (agents.md §分级显示).
@@ -239,8 +240,12 @@ func (ss *SocketServer) runChatToolBatchParallel(
 			cc := brain.ChatContextFrom(ctx)
 			ss.emitChatStats(ctx, conn, client, history, tools, round, llm.StreamUsage{}, sessPromptTok, sessCompletionTok, cc.Profile, cc.OutputCwd, name, chatWS, subagentRunningFrom(ctx))
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name, "level": toolDisplayLevelForStart(name)})
-			out, terr := ss.runTerminalTool(ctx, conn, tc)
-			results[i] = chatToolExecResult{tc: tc, out: mergeToolOutputError(out, terr), name: name}
+			// 每次工具执行用独立 ctx + diff sink：写入工具成功时把 unified diff 填进来，
+			// 供 file_written 事件展示（并行执行时互不串扰）。
+			var diff string
+			tctx := withFileDiffSink(ctx, &diff)
+			out, terr := ss.runTerminalTool(tctx, conn, tc)
+			results[i] = chatToolExecResult{tc: tc, out: mergeToolOutputError(out, terr), name: name, diff: diff}
 		}(i, tc)
 	}
 
@@ -292,6 +297,10 @@ func (ss *SocketServer) maybeEmitFileWritten(conn net.Conn, res chatToolExecResu
 	// 尽量从 out 提取字节数（"wrote N bytes" / "appended N bytes" / "N -> M bytes"）。
 	if n, ok := extractWrittenBytes(res.out); ok {
 		ev["bytes"] = n
+	}
+	// 写入工具生成的 unified diff：TUI verbose 模式展示改动内容。
+	if res.diff != "" {
+		ev["diff"] = res.diff
 	}
 	_ = ss.emitStreamLine(conn, ev)
 }

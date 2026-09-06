@@ -41,11 +41,15 @@
 
 ## D. 协议预留事件：file_written / diff（agents.md 标注预留）
 
-- **状态**: `done`（`file_written` 已落地；`diff` 仍预留）
-- **方案**: 工具环收口（`socket_chat_tools.go` 的 `maybeEmitFileWritten`）对成功写入工具
-  （create_file / append_file / search_replace）解析 `resolved=` 路径发 `file_written` 事件
-  （`name/path/bytes/id`）；TUI 主区一行 `✎ create_file → /abs/path (N bytes)`（`--quiet`
-  隐藏正文，侧栏运行详情始终记录）。解析器有单测。`diff` 事件待定协议后补充。
+- **状态**: `done`
+- **方案**: `file_written` + `diff` 均已落地。
+  - `maybeEmitFileWritten`：写入工具（create_file / append_file / search_replace）成功时
+    解析 `resolved=` 路径发 `file_written{name,path,bytes,id}`；TUI 主区一行
+    `✎ create_file → /abs/path (N bytes)`（`--quiet` 隐正文，侧栏详情常记）。
+  - `diff`：每次工具执行派生独立 ctx + diff sink（`withFileDiffSink`，并行不串扰），
+    写入工具成功后用 go-difflib 生成 unified diff（`emitFileDiff`，幂等）填入；
+    `file_written` 事件附 diff 字段，TUI verbose 模式展示全文、auto 记入侧栏详情。
+  - 解析器与 diff 生成均有单测。
 
 ## E. gateway 模式二/三 与 per-agent token（v2 架构级）
 

@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pmezard/go-difflib/difflib"
+
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 	"cata/internal/cata/protocol"
@@ -29,6 +31,50 @@ func workspaceFileLimits() (maxRead, maxWrite int) {
 func resolveWorkspaceFile(ctx context.Context, rel string) (string, error) {
 	cc := brain.ChatContextFrom(ctx)
 	return brain.ResolveChatFilePathFor(cc.WS, cc.OutputCwd, rel)
+}
+
+// fileDiffSinkKey ctx 中携带的 diff 输出槽：工具执行前由工具环用 withFileDiffSink 注入，
+// 写入工具成功后把 unified diff 文本填入，收口点击该值发 file_written 事件。
+type fileDiffSinkKey struct{}
+
+// withFileDiffSink 派生携带 diff sink 的 ctx（每次工具执行独立，并行互不串扰）。
+func withFileDiffSink(ctx context.Context, sink *string) context.Context {
+	return context.WithValue(ctx, fileDiffSinkKey{}, sink)
+}
+
+// fileDiffSinkFrom 取出 ctx 中的 diff sink；无则返回 nil（非文件工具路径）。
+func fileDiffSinkFrom(ctx context.Context) *string {
+	if v, ok := ctx.Value(fileDiffSinkKey{}).(*string); ok {
+		return v
+	}
+	return nil
+}
+
+// emitFileDiff 若 ctx 有 diff sink（且内容为空）则填入 unified diff（old→new）。
+// 幂等：已有内容不覆盖（防止嵌套工具重复写）。
+func emitFileDiff(ctx context.Context, name, old, new string) {
+	sink := fileDiffSinkFrom(ctx)
+	if sink == nil || *sink != "" {
+		return
+	}
+	if d, err := unifiedDiff(name, old, new); err == nil {
+		*sink = d
+	}
+}
+
+// unifiedDiff 用 go-difflib 生成老/新内容的 unified diff（无内容差异返回空）。
+func unifiedDiff(name, old, new string) (string, error) {
+	if old == new {
+		return "", nil
+	}
+	ud := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(old),
+		B:        difflib.SplitLines(new),
+		FromFile: name,
+		ToFile:   name,
+		Context:  3,
+	}
+	return difflib.GetUnifiedDiffString(ud)
 }
 
 func toolReadFile(ctx context.Context, argsJSON string) (string, error) {
@@ -173,6 +219,7 @@ func toolSearchReplace(ctx context.Context, argsJSON string) (string, error) {
 	if err := os.WriteFile(full, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
+	emitFileDiff(ctx, full, content, newContent)
 	return fmt.Sprintf("search_replace %s resolved=%s: %d replacement(s), %d -> %d bytes", p.Path, full, n, len(content), len(newContent)), nil
 }
 
@@ -197,10 +244,14 @@ func toolAppendFile(ctx context.Context, argsJSON string) (string, error) {
 		return "", fmt.Errorf("append_file: content exceeds max_write_bytes (%d)", maxWrite)
 	}
 	var prev int64
+	var prevContent string
 	if st, err := os.Stat(full); err == nil {
 		prev = st.Size()
 		if prev+int64(add) > int64(maxWrite) {
 			return "", fmt.Errorf("append_file: file would exceed max_write_bytes")
+		}
+		if b, err := os.ReadFile(full); err == nil {
+			prevContent = string(b)
 		}
 	}
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -212,5 +263,6 @@ func toolAppendFile(ctx context.Context, argsJSON string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	emitFileDiff(ctx, full, prevContent, prevContent+p.Content)
 	return fmt.Sprintf("append_file %s resolved=%s: appended %d bytes (was %d)", p.Path, full, n, prev), nil
 }

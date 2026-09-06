@@ -470,6 +470,7 @@ func (t *createFileTool) Execute(ctx context.Context, _ net.Conn, argsJSON strin
 	if err := os.WriteFile(full, []byte(p.Content), 0644); err != nil {
 		return "", err
 	}
+	emitFileDiff(ctx, full, "", p.Content)
 	return fmt.Sprintf("create_file %s resolved=%s: wrote %d bytes", p.Path, full, len(p.Content)), nil
 }
 

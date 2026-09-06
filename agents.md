@@ -337,8 +337,8 @@ socket_chat history (user/assistant/tool only)
 
 斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach`。
 
-**预留**（server 未发或未接）：`diff`（`file_written` 已落地：写入工具成功时发
-`file_written{name,path,bytes,id}`，TUI 主区一行提示、侧栏运行详情记录）。
+**预留**（server 未发或未接）：无（`file_written` 与 `diff` 均已落地：写入工具成功时发
+`file_written{name,path,bytes,id,diff}`——unified diff 在 verbose 模式展示全文、auto 记入侧栏详情）。
 
 ### 分级显示（已落地 v0.1.16）
 

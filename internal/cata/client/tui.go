@@ -459,7 +459,8 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		}
 		m.appendLog(styledLogLine(styleErr, msg), true)
 	case "file_written":
-		// 文件写入成功提示：主区一行（quiet 下隐藏正文），侧栏运行详情始终记录。
+		// 文件写入成功提示：主区一行（quiet 下隐藏正文），侧栏运行详情始终记录；
+		// verbose 模式附带 unified diff 内容。
 		p := str(ev.raw["path"])
 		name := str(ev.raw["name"])
 		msg := "✎ " + name + " → " + p
@@ -470,6 +471,13 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			m.appendLog(styledLogLine(styleDim, msg), true)
 		}
 		m.appendRunDetail(msg)
+		if diff := str(ev.raw["diff"]); diff != "" {
+			// diff 文本多行：verbose 展示全文，auto 也记入侧栏详情（可点状态查看）。
+			m.appendRunDetail(diff)
+			if m.displayMode == "verbose" {
+				m.appendLog(styleDim.Render(diff)+"\n", true)
+			}
+		}
 	case "model_switch":
 		from := str(ev.raw["from"])
 		to := str(ev.raw["to"])
