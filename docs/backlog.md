@@ -32,17 +32,20 @@
 
 ## C. M4 遗留：PDF 文档页（agents.md §多模态 标 🟡）
 
-- **状态**: `todo`
-- **问题**: audio wire（`input_audio`）已落地；PDF 出站会报「需先转图/文本」（`internal/llm/capability.go`）。
-- **修法**: 探测 `pdftotext` 系统命令做文本提取（缺失时仍报错提示），让 document modality 模型可用；
-  或在 server 侧 ingest PDF 时预转文本。需确认模型 capabilities 语义后再动。
+- **状态**: `done`
+- **方案**: server 侧 ingest 识别 `application/pdf`，用系统 `pdftotext`（poppler-utils）提取文本，
+  作为 `attachmentDoc` 拼入 user 消息正文（`[pdf:name]\n<text>`），**不依赖模型 document
+  modality**——任何文本模型都能读 PDF 内容。逐份截断 `pdfMaxExtractBytes`（256KB）防爆；
+  `pdftotext` 缺失时拒绝并提示安装。记忆摘要只记文件名 `[pdf: …]`。
+  测试：假 pdftotext 提取成功 / 缺失拒绝提示。
 
 ## D. 协议预留事件：file_written / diff（agents.md 标注预留）
 
-- **状态**: `todo`
-- **问题**: server 从未发 `file_written` / `diff` 事件，TUI 也未接。
-- **修法**: 定义事件格式 → server 在 `create_file`/`append_file` 后发 `file_written`（path/bytes），
-  可选 `diff`；TUI 在主区/侧栏展示。中价值，需定协议。
+- **状态**: `done`（`file_written` 已落地；`diff` 仍预留）
+- **方案**: 工具环收口（`socket_chat_tools.go` 的 `maybeEmitFileWritten`）对成功写入工具
+  （create_file / append_file / search_replace）解析 `resolved=` 路径发 `file_written` 事件
+  （`name/path/bytes/id`）；TUI 主区一行 `✎ create_file → /abs/path (N bytes)`（`--quiet`
+  隐藏正文，侧栏运行详情始终记录）。解析器有单测。`diff` 事件待定协议后补充。
 
 ## E. gateway 模式二/三 与 per-agent token（v2 架构级）
 

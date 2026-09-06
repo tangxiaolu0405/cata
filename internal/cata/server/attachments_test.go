@@ -29,7 +29,7 @@ func TestIngestAttachmentsOK(t *testing.T) {
 	imgPath := filepath.Join(dir, "a.png")
 	writeTestPNG(t, imgPath)
 
-	media, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "a.png"}})
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "a.png"}})
 	if len(rejects) != 0 {
 		t.Fatalf("rejects=%v", rejects)
 	}
@@ -57,7 +57,7 @@ func TestIngestAttachmentsInline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	media, rejects := ingestAttachments(dir, []AttachmentReq{{
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{{
 		Inline: &InlineAttachment{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString(raw)},
 	}})
 	if len(rejects) != 0 {
@@ -74,7 +74,7 @@ func TestIngestAttachmentsRejectsNonImage(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("hello"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	media, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "x.txt"}})
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "x.txt"}})
 	if len(media) != 0 || len(rejects) != 1 {
 		t.Fatalf("media=%d rejects=%d", len(media), len(rejects))
 	}
@@ -86,7 +86,7 @@ func TestIngestAttachmentsRejectsNonImage(t *testing.T) {
 func TestIngestAttachmentsEscapesRejected(t *testing.T) {
 	dir := t.TempDir()
 	// 路径逃逸：相对路径 ../outside 应拒绝。
-	media, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "../outside.png"}})
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "../outside.png"}})
 	if len(media) != 0 || len(rejects) != 1 {
 		t.Fatalf("media=%d rejects=%d", len(media), len(rejects))
 	}
@@ -97,7 +97,7 @@ func TestIngestAttachmentsMixedPartial(t *testing.T) {
 	imgPath := filepath.Join(dir, "a.png")
 	writeTestPNG(t, imgPath)
 	// 一合法 + 一非法：合法保留，非法进 rejects（不整体中断）。
-	media, rejects := ingestAttachments(dir, []AttachmentReq{
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{
 		{Path: "a.png"},
 		{Path: "x.txt"},
 	})
@@ -114,5 +114,53 @@ func TestSanitizeAttachmentsForMemory(t *testing.T) {
 	}
 	if strings.Contains(s, "QUJD") {
 		t.Fatal("base64 should not leak into memory")
+	}
+}
+
+// TestIngestPDFExtractsText 用假 pdftotext（在 PATH）验证 PDF 提取为文本附件，
+// 且不进 media（不需要模型 document modality）。
+func TestIngestPDFExtractsText(t *testing.T) {
+	// 假 pdftotext：忽略输入/输出，向 stdout 打固定文本（模拟提取）。
+	bin := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'hello pdf body'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	media, docs, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "doc.pdf"}})
+	if len(rejects) != 0 {
+		t.Fatalf("rejects=%v", rejects)
+	}
+	if len(media) != 0 {
+		t.Fatalf("pdf must not become media: %v", media)
+	}
+	if len(docs) != 1 || docs[0].Name != "doc.pdf" || !strings.Contains(docs[0].Text, "hello pdf body") {
+		t.Fatalf("docs=%+v", docs)
+	}
+}
+
+// TestIngestPDFNoPdftotext 系统无 pdftotext 时，PDF 附件应被拒并提示安装 poppler-utils。
+func TestIngestPDFNoPdftotext(t *testing.T) {
+	// PATH 指向空目录，确保 LookPath("pdftotext") 失败。
+	t.Setenv("PATH", t.TempDir())
+
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	media, docs, rejects := ingestAttachments(dir, []AttachmentReq{{Path: "doc.pdf"}})
+	if len(media) != 0 || len(docs) != 0 || len(rejects) != 1 {
+		t.Fatalf("media=%d docs=%d rejects=%d", len(media), len(docs), len(rejects))
+	}
+	if !strings.Contains(rejects[0].Reason, "pdftotext") {
+		t.Fatalf("reason=%q, want pdftotext hint", rejects[0].Reason)
 	}
 }

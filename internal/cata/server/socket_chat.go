@@ -65,9 +65,9 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	_ = config.InitBrainPath()
 
 	text := strings.TrimSpace(userText)
-	// 附附件时允许纯图消息（text 可为空）；否则空消息报错。
+	// 附附件时允许纯图/纯文本提取消息（text 可为空）；否则空消息报错。
 	// 逐条失败不中断：被拒项发 attachment_rejected 事件，合法项继续。
-	media, rejects := ingestAttachments(cc.OutputCwd, attachments)
+	media, docs, rejects := ingestAttachments(cc.OutputCwd, attachments)
 	for _, r := range rejects {
 		_ = ss.emitStreamLine(conn, map[string]interface{}{
 			"type":   "attachment_rejected",
@@ -75,7 +75,7 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			"reason": r.Reason,
 		})
 	}
-	if text == "" && len(media) == 0 {
+	if text == "" && len(media) == 0 && len(docs) == 0 {
 		msg := "empty message"
 		if len(rejects) > 0 {
 			msg = "全部附件被拒绝（attachment_rejected），无可用内容"
@@ -105,6 +105,12 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	userMsg := llm.Message{Role: "user", Content: text}
 	for _, m := range media {
 		userMsg.Media = append(userMsg.Media, llm.MediaRef{ID: m.ID, MIME: m.MIME, Data: m.Data})
+	}
+	// PDF 提取的文本并入 user 正文（无需模型 document modality，任何文本模型可读）。
+	for _, d := range docs {
+		block := fmt.Sprintf("\n\n[pdf:%s]\n%s", d.Name, d.Text)
+		userMsg.Content = strings.TrimSpace(userMsg.Content + "\n" + block)
+		log.Printf("pdf extract: %s (%d chars → user message)", d.Name, len(d.Text))
 	}
 	*history = append(*history, userMsg)
 
@@ -296,10 +302,21 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 				return ss.emitChatDone(conn, lr, false, false, "tool_args_unparsed", hint)
 			}
 			*history = append(*history, llm.Message{Role: "assistant", Content: asst})
-			// short-term 记忆：正文 + 附件摘要（不写 base64，防脑子膨胀与泄露）。
+			// short-term 记忆：正文 + 附件摘要（图片/PDF 只记文件名，不写 base64 或提取文本）。
 			memText := text
+			parts := []string{}
 			if sum := sanitizeAttachmentsForMemory(media); sum != "" {
-				memText = strings.TrimSpace(text + " " + sum)
+				parts = append(parts, sum)
+			}
+			if len(docs) > 0 {
+				names := make([]string, 0, len(docs))
+				for _, d := range docs {
+					names = append(names, d.Name)
+				}
+				parts = append(parts, "[pdf: "+strings.Join(names, ", ")+"]")
+			}
+			if len(parts) > 0 {
+				memText = strings.TrimSpace(memText + " " + strings.Join(parts, " "))
 			}
 			if err := brain.AppendChatTurnFor(chatWS, memText, asst); err != nil {
 				log.Printf("short-term memory: %v", err)

@@ -458,6 +458,18 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			msg += " (" + r + ")"
 		}
 		m.appendLog(styledLogLine(styleErr, msg), true)
+	case "file_written":
+		// 文件写入成功提示：主区一行（quiet 下隐藏正文），侧栏运行详情始终记录。
+		p := str(ev.raw["path"])
+		name := str(ev.raw["name"])
+		msg := "✎ " + name + " → " + p
+		if n, ok := ev.raw["bytes"].(float64); ok && n > 0 {
+			msg += fmt.Sprintf(" (%d bytes)", int(n))
+		}
+		if m.displayMode != "quiet" {
+			m.appendLog(styledLogLine(styleDim, msg), true)
+		}
+		m.appendRunDetail(msg)
 	case "model_switch":
 		from := str(ev.raw["from"])
 		to := str(ev.raw["to"])

@@ -337,7 +337,8 @@ socket_chat history (user/assistant/tool only)
 
 斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach`。
 
-**预留**（server 未发或未接）：`file_written`、`diff`。
+**预留**（server 未发或未接）：`diff`（`file_written` 已落地：写入工具成功时发
+`file_written{name,path,bytes,id}`，TUI 主区一行提示、侧栏运行详情记录）。
 
 ### 分级显示（已落地 v0.1.16）
 
@@ -364,7 +365,7 @@ Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` /
 ## 多模态（已实现 A/B + M2/M3 + M4 基础：出站编码 + 能力路由 + 附件摄取 + TUI /attach/@路径 + 事件 + 压缩与 token 估算）
 
 **目标**：终端 chat 可向模型附带**图片**（音频/PDF 基础已就绪，按模型 capabilities 启用）；**换模型**时只改配置，不改业务代码路径。
-**非目标（v1）**：演进 LLM、Summarize、MCP 默认不走 vision；不做视频流；不在 `~/.cata` 脑子正文里存原图；PDF 出站编码需先转图/文本（无内建转换器）。
+**非目标（v1）**：演进 LLM、Summarize、MCP 默认不走 vision；不做视频流；不在 `~/.cata` 脑子正文里存原图。
 
 ### 能力模型（可切换多模态模型）
 
@@ -436,7 +437,8 @@ type MediaRef struct {
 - **text-only 模型**：`content` 仍为 string；媒体轮次在出站前**拒绝**或要求用户改配置
 - **vision 模型**：user 消息 `content` 为数组 `[{type:text}, {type:image_url, image_url:{url: data:<mime>;base64,…}}]`
 - **audio 模型**：`{type:input_audio, input_audio:{data, format}}`（`audioFormatFromMIME`：wav/mp3/mp4/ogg/flac/aac/webm）
-- **document（PDF）**：v1 无内建转换器，出站报「需先转图/文本」（M4 标注）
+- **document（PDF）**：server 侧 ingest 时用系统 `pdftotext` 提取为文本拼入 user 正文
+  （不依赖模型 document modality；`pdftotext` 缺失则拒绝并提示安装 poppler-utils）
 - **Anthropic 适配器**：图片编码为 content blocks（`{type:image, source:{type:base64, media_type, data}}`）
 
 `assistant` / `tool` / `system` **保持字符串**。
@@ -508,7 +510,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 | **M1** ✅ | socket `attachments` + history `MediaRef` + wire 数组 | `chat` + 附件路径可问图 |
 | **M2** ✅ | TUI `/attach`、发送栏附件提示、`model_switch` / `attachment_rejected` 事件 | 交互式附图 |
 | **M3** ✅ | 压缩优先去旧轮 Media、按图 token 估算（`image_token_estimate`） | 长会话不爆窗 |
-| **M4** 🟡 基础 | audio wire（`input_audio`）+ 能力路由 + Anthropic 图片；PDF 需先转图/文本（v1 无内建转换器） | 按所选模型 capabilities 启用 |
+| **M4** ✅ | audio wire（`input_audio`）+ 能力路由 + Anthropic 图片 + **PDF 文本提取**（pdftotext 拼入 user 正文） | 按所选模型 capabilities 启用 |
 
 **刻意不做（与多模态相关）**：不把图片写入 `memory/short/current.md` 全文；不让 evolve 自动选 vision 模型；不在 v1 支持「管道 `cata chat < img.png`」。
 

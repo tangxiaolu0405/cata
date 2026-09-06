@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -255,9 +256,87 @@ func (ss *SocketServer) runChatToolBatchParallel(
 			"type": "tool_result", "id": res.tc.ID, "name": res.name, "output": res.out,
 			"level": toolResultLevel(res.name, res.out, nil),
 		})
+		// 文件写入成功（无 error 标记）时附带 file_written 事件，TUI 可展示落盘路径。
+		ss.maybeEmitFileWritten(conn, res)
 		ss.appendChatToolResult(history, res)
 	}
 	return results, nil
+}
+
+// fileWriteTools 产生落盘结果的文件写入工具（成功 out 里带 resolved= 绝对路径）。
+var fileWriteTools = map[string]bool{
+	"create_file":    true,
+	"append_file":    true,
+	"search_replace": true,
+}
+
+// maybeEmitFileWritten 对成功的文件写入工具结果发 file_written 事件（path/bytes/op）。
+// 解析复用 out 里已含的 resolved= 路径与字节数，不重复 stat。
+func (ss *SocketServer) maybeEmitFileWritten(conn net.Conn, res chatToolExecResult) {
+	if !fileWriteTools[res.name] {
+		return
+	}
+	if strings.Contains(res.out, "[error]") || strings.Contains(strings.ToLower(res.out), "error:") {
+		return
+	}
+	path := extractResolvedPath(res.out)
+	if path == "" {
+		return
+	}
+	ev := map[string]interface{}{
+		"type": "file_written",
+		"name": res.name,
+		"path": path,
+		"id":   res.tc.ID,
+	}
+	// 尽量从 out 提取字节数（"wrote N bytes" / "appended N bytes" / "N -> M bytes"）。
+	if n, ok := extractWrittenBytes(res.out); ok {
+		ev["bytes"] = n
+	}
+	_ = ss.emitStreamLine(conn, ev)
+}
+
+// extractResolvedPath 从工具结果文本提取 resolved= 路径。
+func extractResolvedPath(out string) string {
+	const marker = "resolved="
+	i := strings.Index(out, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := out[i+len(marker):]
+	// 路径到下一个冒号/空格（create_file a.txt resolved=/abs/a.txt: wrote 12 bytes）。
+	for j := 0; j < len(rest); j++ {
+		switch rest[j] {
+		case ':', ' ', '\n':
+			return rest[:j]
+		}
+	}
+	return rest
+}
+
+// extractWrittenBytes 从工具结果提取写入字节数（wrote N / appended N / N -> M）。
+func extractWrittenBytes(out string) (int, bool) {
+	for _, pat := range []string{"wrote ", "appended "} {
+		if i := strings.Index(out, pat); i >= 0 {
+			num := strings.Fields(out[i+len(pat):])
+			if len(num) > 0 {
+				if n, err := strconv.Atoi(num[0]); err == nil {
+					return n, true
+				}
+			}
+		}
+	}
+	// search_replace: "N -> M bytes"
+	arrow := strings.Index(out, " -> ")
+	if arrow >= 0 {
+		num := strings.Fields(out[arrow+4:])
+		if len(num) > 0 {
+			if n, err := strconv.Atoi(num[0]); err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (ss *SocketServer) appendChatToolResult(history *[]llm.Message, res chatToolExecResult) {

@@ -93,3 +93,37 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+func TestExtractResolvedPath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"create_file a.txt resolved=/abs/a.txt: wrote 12 bytes", "/abs/a.txt"},
+		{"append_file x resolved=/p/x.md: appended 5 bytes (was 0)", "/p/x.md"},
+		{"search_replace f resolved=/p/f.go: 1 replacement(s), 10 -> 20 bytes", "/p/f.go"},
+		{"no resolved here", ""},
+		{"resolved=", ""},
+	}
+	for _, c := range cases {
+		if got := extractResolvedPath(c.in); got != c.want {
+			t.Fatalf("extractResolvedPath(%q)=%q want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestExtractWrittenBytes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"create_file a resolved=/a: wrote 12 bytes", 12, true},
+		{"append_file x resolved=/x: appended 5 bytes (was 0)", 5, true},
+		{"search_replace f resolved=/f: 1 replacement(s), 10 -> 20 bytes", 20, true},
+		{"nothing", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := extractWrittenBytes(c.in)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Fatalf("extractWrittenBytes(%q)=%d,%v want %d,%v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
