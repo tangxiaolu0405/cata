@@ -100,7 +100,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 		_ = b.reply(ctx, msg, "会话已清空。")
 		return
 	case strings.HasPrefix(text, "/dir"):
-		reply := gateway.ReplyForWorkdir(b.binding, key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.binding, "qq", key, strings.TrimPrefix(text, "/dir"))
 		_ = b.reply(ctx, msg, reply)
 		ui.DefaultHub.Publish("qq", string(key), SessionIDFor(msg), msg.UserOpenID, "out", reply)
 		return
@@ -109,7 +109,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	unlock := b.locks.Lock(key)
 	defer unlock()
 
-	conn, err := b.sessions.ConnForMessage(b.binding, key)
+	conn, err := b.sessions.ConnForMessage(b.binding, "qq", key)
 	if err != nil {
 		_ = b.reply(ctx, msg, err.Error())
 		return
@@ -166,10 +166,10 @@ func helpText() string {
 命令:
 /help — 本帮助
 /clear — 清空会话
-/dir — 首次先选要绑定的工作空间（agent），之后消息统一转发给它；/dir <序号或路径> 换绑；/dir reset 解绑
+/dir — 本渠道首次先选要绑定的工作空间（agent），之后消息转发给它；/dir <序号或路径> 换绑；/dir reset 解绑本渠道；各渠道独立绑定
 
 说明:
-- 消息按绑定转发到指定工作空间的 agent（QQ/TG 共用同一个绑定；不在线会自动拉起）
+- QQ 渠道的消息按绑定转发到指定工作空间的 agent（本渠道单独绑定；不在线会自动拉起）
 - /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
 - 危险命令请回复 yes / no
 - 官方已逐步下线 WebSocket；连不上则本渠道不可用`)

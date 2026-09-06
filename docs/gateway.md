@@ -76,19 +76,20 @@ agent 的工作空间根路径。未绑定前的默认 worker 布局：
 - 未绑定前：每个渠道会话一个 worker 目录（仅作兜底，不参与转发目标选择）
 - 绑定后：QQ/TG **任何渠道的消息统一转发到同一个 agent**，`cwd` = 该 agent 工作空间根
 
-### 绑定 agent（Telegram / QQ 共用）
+### 按渠道绑定 agent（telegram / qq 各绑一个）
 
 **第一次使用先绑定**：发 `/dir` 列出本机已注册工作区（agent），进入选择。
+各渠道**独立绑定**——telegram 选 A、qq 可选 B，互不影响。
 
 ```
 /dir                    # 查看/选择绑定的 agent（未绑定首次会引导；须先看列表才能 /dir <序号>）
-/dir 1                  # 绑定列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
+/dir 1                  # 绑定本渠道为列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
 /dir ~/stock            # 也可直接绑定该路径所在工作区的 agent
-/dir reset              # 解绑（下次消息重新引导）
+/dir reset              # 解绑本渠道（下次消息重新引导）
 ```
 
-- **转发模型**：gateway 不再维护 per-会话 worker 产出区，而是按绑定把一个渠道的
-  消息**转发给该 agent**；目标 agent 不在线（不在 supervisor）时自动拉起
+- **转发模型**：gateway 按「渠道→agent」绑定把一个渠道的消息**转发给该 agent**；
+  目标 agent 不在线（不在 supervisor）时自动拉起
 - **持久化**：绑定写入 `~/.cata/gateway_channel_agent.json`，**重启自动恢复**（内存只是缓存，
   更换时先 save → 清缓存 → 从配置读取，严格按此顺序）
 - 更换绑定后续会话连接重建，历史按新 agent 转发；`/help` 中同样列出

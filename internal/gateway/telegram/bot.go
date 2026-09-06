@@ -135,7 +135,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, helpText(), nil)
 		return
 	case strings.HasPrefix(text, "/dir"):
-		reply := gateway.ReplyForWorkdir(b.binding, key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.binding, "telegram", key, strings.TrimPrefix(text, "/dir"))
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, reply, nil)
 		ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", reply)
 		return
@@ -143,7 +143,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 
 	unlock := b.locks.Lock(key)
 	defer unlock()
-	conn, err := b.sessions.ConnForMessage(b.binding, key)
+	conn, err := b.sessions.ConnForMessage(b.binding, "telegram", key)
 	if err != nil {
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, err.Error(), nil)
 		return
@@ -351,11 +351,11 @@ func helpText() string {
 /start — 欢迎
 /help — 本帮助
 /clear — 清空 cata 会话历史
-/dir — 首次先选要绑定的工作空间（agent），之后 QQ/TG 消息统一转发给它；/dir <序号或路径> 换绑；/dir reset 解绑
+/dir — 本渠道首次先选要绑定的工作空间（agent），之后消息转发给它；/dir <序号或路径> 换绑；/dir reset 解绑本渠道；各渠道独立绑定
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket
-- 消息按绑定转发到指定工作空间的 agent（QQ/TG 共用同一个绑定；不在线会自动拉起）
+- Telegram 渠道的消息按绑定转发到指定工作空间的 agent（本渠道单独绑定；不在线会自动拉起）
 - /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
 - 危险命令会弹出 Run/Cancel 按钮确认`)
 }

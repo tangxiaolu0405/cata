@@ -127,37 +127,50 @@ func reqWsID(t *testing.T, cwd string) string {
 	return ws.ID
 }
 
-// TestAgentBindingOrder 严格顺序：save → 删内存缓存 → 从配置读取。
-func TestAgentBindingOrder(t *testing.T) {
+// TestAgentBindingPerChannel 严格顺序（save → 删缓存 → 重载）且按渠道独立。
+func TestAgentBindingPerChannel(t *testing.T) {
 	home := workTestHome(t)
 	path := filepath.Join(home, "binding.json")
 	b := NewAgentBinding(path)
-	if got := b.Agent(); got != "" {
+	if got := b.Agent("telegram"); got != "" {
 		t.Fatalf("初始应为空，got %q", got)
 	}
-	b.Set("ws-a")
-	if got := b.Agent(); got != "ws-a" {
-		t.Fatalf("Agent=%q want ws-a", got)
+	b.Set("telegram", "ws-a")
+	if got := b.Agent("telegram"); got != "ws-a" {
+		t.Fatalf("telegram Agent=%q want ws-a", got)
+	}
+	// 其它渠道不受影响。
+	if got := b.Agent("qq"); got != "" {
+		t.Fatalf("qq 不应被 telegram 绑定影响，got %q", got)
 	}
 	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "ws-a") {
-		t.Fatalf("配置文件未保存绑定：%s", string(raw))
+	if !strings.Contains(string(raw), "ws-a") || !strings.Contains(string(raw), "telegram") {
+		t.Fatalf("配置文件未保存渠道绑定：%s", string(raw))
 	}
+	// 重启（新实例）恢复；两渠道并存。
+	b.Set("qq", "ws-b")
 	b2 := NewAgentBinding(path)
-	if got := b2.Agent(); got != "ws-a" {
-		t.Fatalf("重启后应恢复 ws-a，got %q", got)
+	if got := b2.Agent("telegram"); got != "ws-a" {
+		t.Fatalf("重启后 telegram 应恢复 ws-a，got %q", got)
 	}
-	b2.Set("ws-b")
-	if got := b2.Agent(); got != "ws-b" {
-		t.Fatalf("更换后应 ws-b，got %q", got)
+	if got := b2.Agent("qq"); got != "ws-b" {
+		t.Fatalf("重启后 qq 应恢复 ws-b，got %q", got)
 	}
-	b2.Clear()
-	if got := b2.Agent(); got != "" {
-		t.Fatalf("解绑后应为空，got %q", got)
+	// 更换渠道不影响其它；解绑只清该渠道。
+	b2.Set("telegram", "ws-c")
+	if got := b2.Agent("qq"); got != "ws-b" {
+		t.Fatalf("telegram 更换不应影响 qq，got %q", got)
+	}
+	b2.Clear("telegram")
+	if got := b2.Agent("telegram"); got != "" {
+		t.Fatalf("解绑 telegram 后应为空，got %q", got)
+	}
+	if got := b2.Agent("qq"); got != "ws-b" {
+		t.Fatalf("解绑 telegram 不应影响 qq，got %q", got)
 	}
 }
 
-// TestHandleAgentBindCommand 绑定命令：菜单、list-first、序号绑定、路径绑定、reset。
+// TestHandleAgentBindCommand 绑定命令（按渠道）：菜单、list-first、序号绑定、路径绑定、reset。
 func TestHandleAgentBindCommand(t *testing.T) {
 	home, proj1, proj2 := mkTestSetup(t)
 	now := time.Now()
@@ -171,9 +184,9 @@ func TestHandleAgentBindCommand(t *testing.T) {
 	b := NewAgentBinding(path)
 	key := SessionKeyFor("tg", "1")
 
-	// 模拟一个从未看过列表的会话（重置全局确认标记）。
-	ResetAgentListSeen()
-	reply, handled := HandleAgentBindCommand(b, key, "1")
+	// 模拟本渠道从未看过列表（重置确认标记）。
+	ResetAgentListSeen("telegram")
+	reply, handled := HandleAgentBindCommand(b, "telegram", key, "1")
 	if !handled {
 		t.Fatal("未看列表的序号绑定应视为已处理（拒绝并提示）")
 	}
@@ -181,28 +194,28 @@ func TestHandleAgentBindCommand(t *testing.T) {
 		t.Fatalf("未看列表应禁止序号绑定：%q", reply)
 	}
 	// 看列表后允许序号绑定。
-	HandleAgentBindCommand(b, key, "")
-	reply, _ = HandleAgentBindCommand(b, key, "1")
-	if !strings.Contains(reply, "已绑定 agent") || !strings.Contains(reply, ws1) {
+	HandleAgentBindCommand(b, "telegram", key, "")
+	reply, _ = HandleAgentBindCommand(b, "telegram", key, "1")
+	if !strings.Contains(reply, "已绑定 telegram") || !strings.Contains(reply, ws1) {
 		t.Fatalf("序号绑定应成功：%q, ws=%s", reply, ws1)
 	}
-	if got := b.Agent(); got != ws1 {
+	if got := b.Agent("telegram"); got != ws1 {
 		t.Fatalf("绑定后 Agent=%q want %s", got, ws1)
 	}
 	// 路径绑定（不要求看过列表）。
-	b.Clear()
-	reply, _ = HandleAgentBindCommand(b, key, proj2)
-	if !strings.Contains(reply, "已绑定 agent") || !strings.Contains(reply, ws2) {
+	b.Clear("telegram")
+	reply, _ = HandleAgentBindCommand(b, "telegram", key, proj2)
+	if !strings.Contains(reply, "已绑定 telegram") || !strings.Contains(reply, ws2) {
 		t.Fatalf("路径绑定应成功：%q", reply)
 	}
-	if got := b.Agent(); got != ws2 {
+	if got := b.Agent("telegram"); got != ws2 {
 		t.Fatalf("路径绑定后 Agent=%q want %s", got, ws2)
 	}
-	reply, _ = HandleAgentBindCommand(b, key, "reset")
-	if !strings.Contains(reply, "已解绑") {
+	reply, _ = HandleAgentBindCommand(b, "telegram", key, "reset")
+	if !strings.Contains(reply, "已解绑 telegram") {
 		t.Fatalf("reset 应解绑：%q", reply)
 	}
-	if got := b.Agent(); got != "" {
+	if got := b.Agent("telegram"); got != "" {
 		t.Fatalf("reset 后应为空，got %q", got)
 	}
 }
@@ -217,12 +230,12 @@ func TestConnForMessageRoutesAndBringsUp(t *testing.T) {
 	})
 	path := filepath.Join(home, "binding.json")
 	b := NewAgentBinding(path)
-	b.Set(ws1)
+	b.Set("qq", ws1)
 	root := filepath.Join(home, "w")
 	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("qq", "9")
 
-	conn, err := m.ConnForMessage(b, key)
+	conn, err := m.ConnForMessage(b, "qq", key)
 	if err != nil {
 		t.Fatalf("转发连接失败：%v", err)
 	}
@@ -241,8 +254,8 @@ func TestConnForMessageUnbound(t *testing.T) {
 	root := filepath.Join(home, "w")
 	_ = os.MkdirAll(root, 0755)
 	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	_, err := m.ConnForMessage(b, SessionKeyFor("tg", "1"))
-	if err == nil || !strings.Contains(err.Error(), "尚未绑定") {
+	_, err := m.ConnForMessage(b, "telegram", SessionKeyFor("tg", "1"))
+	if err == nil || !strings.Contains(err.Error(), "telegram 渠道尚未绑定 agent") {
 		t.Fatalf("未绑定应报引导错误，got %v", err)
 	}
 }
@@ -260,11 +273,11 @@ func TestAgentBindingRemoteCwd(t *testing.T) {
 	})
 	path := filepath.Join(home, "binding.json")
 	b := NewAgentBinding(path)
-	b.Set(ws)
+	b.Set("telegram", ws)
 	m := NewRemoteSessionManagerWithStore(home, func(_ string, cwd string) *CataConn {
 		return NewCataConn("", cwd)
 	}, nil)
-	conn, err := m.ConnForMessage(b, SessionKeyFor("tg", "5"))
+	conn, err := m.ConnForMessage(b, "telegram", SessionKeyFor("tg", "5"))
 	if err != nil {
 		t.Fatalf("远程转发失败：%v", err)
 	}
