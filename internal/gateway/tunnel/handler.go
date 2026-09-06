@@ -87,15 +87,43 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		ac.info.Protocol = hello.Protocol
 		ac.info.Version = hello.Version
 
-		// hello 层逐机器 token 校验：machine_id + machine_token 必须匹配 machines.json
-		// 里该机器的 hash。单机泄露可单独吊销，替代 v1 全网共享 token。
+		// hello 层鉴权：per-agent token 优先；缺省回退逐机器 token（兼容旧 worker）。
+		// machine 权威的机器首次注册 agent 时按需签发 per-agent token，经 hello_ack 下发。
 		if opts.Machines != nil {
-			if !opts.Machines.ValidateMachine(hello.MachineID, hello.MachineToken) {
+			machineOK := opts.Machines.ValidateMachine(hello.MachineID, hello.MachineToken)
+			agentOK := strings.TrimSpace(hello.AgentToken) != "" &&
+				opts.Machines.ValidateAgent(hello.AgentID, hello.AgentToken)
+			if agentOK {
+				opts.Machines.TouchSeen(hello.MachineID)
+			} else if machineOK {
+				opts.Machines.TouchSeen(hello.MachineID)
+				// 机器合法但该 agent 尚无 per-agent token：签发（新 token 或已存在）。
+				if tok, exists, err := opts.Machines.IssueAgentToken(hello.AgentID, hello.MachineID); err != nil {
+					_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Message: "agent token issue failed"})
+					_ = ws.Close()
+					return
+				} else if !exists {
+					// 仅当确实新签发才下发；已存在说明 worker 丢了 token，停在这里等它带 token 重连
+					// （避免靠 machine token 无限续期）。
+					if ackErr := ws.WriteJSON(tunnel.Frame{
+						Type: tunnel.FrameHelloAck, AgentID: hello.AgentID, AgentToken: tok,
+					}); ackErr != nil {
+						_ = ws.Close()
+						return
+					}
+					_ = ws.Close() // 下发后关闭：worker 带 agent_token 重连建立正式隧道
+					return
+				} else {
+					// 已存在但 worker 未带 AgentToken：要求用 per-agent token 重连。
+					_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Message: "use agent_token to connect"})
+					_ = ws.Close()
+					return
+				}
+			} else {
 				_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Message: "machine token invalid"})
 				_ = ws.Close()
 				return
 			}
-			opts.Machines.TouchSeen(hello.MachineID)
 		}
 
 		// hello 校验通过后清除握手读超时，避免隧道 10s 后必然断线。

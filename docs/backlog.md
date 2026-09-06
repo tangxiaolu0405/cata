@@ -53,9 +53,16 @@
 
 ## E. gateway 模式二/三 与 per-agent token（v2 架构级）
 
-- **状态**: `todo`
-- **问题**: `docs/gateway.md` 模式二/三预留；v2 逐 agent token、按项目路由（web 会话已按项目）。
-- **修法**: 架构级，工作量大，暂不动，留档。
+- **状态**: `per-agent token` 已完成；模式二/三被 remote（模式四）取代，设计归档不再实施
+- **per-agent token（done）**：
+  - 协议：hello 帧加 `agent_token`，新增 `hello_ack` 帧（网关下发 token）
+  - 网关 `MachinesStore`：`machines`（机器）+ `agents`（agent→hash+machine_id）双表；
+    `IssueAgentToken`（首次签发、已存在幂等）、`ValidateAgent`、`RevokeAgent`（单 agent 吊销）
+  - 引导：机器首次注册 agent → 网关签发 token → hello_ack 下发 → worker 落盘 link.json
+    （AgentEntry.AgentToken）→ 带 token 重连建正式隧道；旧 worker 回退 machine token 兼容
+  - 测试：per-agent 签发/校验/吊销/持久化；handler 端到端 bootstrap（
+    TestHandlerAgentTokenBootstrap）；link 落盘幂等
+  - 遗留：网关 UI 按 agent 吊销入口（当前 API 有 RevokeAgent，UI 未接，可用 machines.json 手动删）
 
 ## F. 小型清理
 

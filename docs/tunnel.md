@@ -94,11 +94,14 @@ agent 启动参数：
 
 单帧上限 8 MiB（`MaxFrameBytes`），超过断开。
 
-### 逐机器 token 鉴权
+### 隧道鉴权（per-agent token，machine token 为兜底）
 
-- **hello 帧层**：`machine_id + machine_token`，网关按 machine_id 查表比对 sha256 hash——**每机器独立 token**，
-  单机泄露可单独吊销，不影响其它机器（替代 v1 全网共享 token）。HTTP 握手层已不再需要固定 gateway_token。
-- token 落盘 `~/.cata/machines.json`（网关侧，0600），**只存 hash 不存明文**。
+- **hello 帧层**：**per-agent `agent_token` 优先**（每工作空间独立，吊销粒度到单 agent）；
+  worker 未持有 agent_token 时以 `machine_id + machine_token` 首次注册，网关按机器权威签发
+  per-agent token（`hello_ack` 下发，worker 落盘 link.json 后带 token 重连建正式隧道）。
+  机器/agent token 均按 sha256 hash 存表（`machines.json`，0600），**不落明文**。
+- 兼容：旧 worker（不带 agent_token）回退 machine token 校验；已签发 agent_token 的 agent
+  若无 token 直连会被要求重连（防 machine token 无限续期）。
 
 ### join 流程（机器首次接入）
 
@@ -110,7 +113,8 @@ agent 启动参数：
 3. 机器进入待批准状态，**已在登录的网关 UI 自动弹出待批准提示**（无需复制 code）；
 4. 管理员在 UI 点「批准」→ 网关签发 machine_token（machines.json 存 hash），状态改 approved；
 5. 机器轮询 `/cata/v1/join/status?code=xxx` 领取明文 token，写回 link.json；
-6. 之后 agent 隧道 hello 带 machine_id + machine_token，网关 hello 层校验通过才注册。
+6. 之后 agent 隧道 hello 带 machine_id + machine_token（首次）→ 网关签发 per-agent token 下发；
+   此后各 agent 用自己独立的 agent_token 重连注册。
 
 **join 端点防爆破/防伪造（三层）**：
 - **协议头拦截**：`challenge`/`request`/`status` 最外层校验 `X-Cata-Join: cata-tunnel.v1`，未携带/不符的请求

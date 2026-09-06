@@ -109,3 +109,61 @@ func TestJoinManagerLifecycle(t *testing.T) {
 		t.Fatal("approved token should validate")
 	}
 }
+
+// TestAgentTokenIssueValidateRevoke 验证 per-agent token：首次签发下发明文、重复签发
+// 幂等（已存在不覆盖）、校验、跨 agent 不串、吊销单 agent 不影响同机其它。
+func TestAgentTokenIssueValidateRevoke(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	s := NewMachinesStore(path)
+	if _, err := s.IssueToken("machine-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, exists, err := s.IssueAgentToken("ws-a", "machine-a")
+	if err != nil || exists || tok == "" {
+		t.Fatalf("first issue: tok=%q exists=%v err=%v", tok, exists, err)
+	}
+
+	// 已存在 → 不覆盖、不新发。
+	_, exists2, err := s.IssueAgentToken("ws-a", "machine-a")
+	if err != nil || !exists2 {
+		t.Fatalf("second issue: exists=%v err=%v", exists2, err)
+	}
+
+	if !s.ValidateAgent("ws-a", tok) {
+		t.Fatal("valid agent token should pass")
+	}
+	if s.ValidateAgent("ws-a", "wrong") {
+		t.Fatal("wrong agent token should fail")
+	}
+	// 同机另一个 agent 未签发 → 校验失败。
+	if s.ValidateAgent("ws-b", tok) {
+		t.Fatal("token of ws-a must not validate as ws-b")
+	}
+	// 归属机器记录正确。
+	if m := s.AgentMachine("ws-a"); m != "machine-a" {
+		t.Fatalf("AgentMachine=%q want machine-a", m)
+	}
+
+	// 吊销 ws-a：自己失效，同机 ws-b（若有）不受影响。
+	tokB, _, _ := s.IssueAgentToken("ws-b", "machine-a")
+	if err := s.RevokeAgent("ws-a"); err != nil {
+		t.Fatal(err)
+	}
+	if s.ValidateAgent("ws-a", tok) {
+		t.Fatal("revoked agent token should fail")
+	}
+	if !s.ValidateAgent("ws-b", tokB) {
+		t.Fatal("other agent token should still pass")
+	}
+
+	// 持久化后 reload 仍有效。
+	s2 := NewMachinesStore(path)
+	if !s2.ValidateAgent("ws-b", tokB) {
+		t.Fatal("agent token should survive reload")
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), tokB) {
+		t.Fatal("agent token plaintext must not be persisted")
+	}
+}

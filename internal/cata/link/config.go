@@ -30,6 +30,9 @@ type AgentEntry struct {
 	KeepAlive bool   `json:"keep_alive,omitempty"` // 常驻：不因空闲退出（注册即常驻）
 	Enabled   bool   `json:"enabled,omitempty"`
 	LinkedAt  string `json:"linked_at,omitempty"`
+	// AgentToken per-agent 凭证（隧道 hello 层）：首次注册由网关按 machine 权威签发、
+	// hello_ack 下发后落盘。空 = 尚未获得（回退 machine_token 连接）。
+	AgentToken string `json:"agent_token,omitempty"`
 }
 
 // Config link.json：机器级网关注册配置（CATA_HOME/link.json）。
@@ -103,6 +106,32 @@ func (c Config) GatewayConfigured() bool {
 func (c Config) HasAgent(agentID string) bool {
 	_, ok := c.Agents[agentID]
 	return ok
+}
+
+// AgentTokenFor 返回某 agent 的 per-agent token（未注册或未签发的空串）。
+func (c Config) AgentTokenFor(agentID string) string {
+	if e, ok := c.Agents[agentID]; ok {
+		return strings.TrimSpace(e.AgentToken)
+	}
+	return ""
+}
+
+// SetAgentTokenFor 持久化某 agent 的 per-agent token（幂等：同值不重复写盘）。
+func SetAgentTokenFor(agentID, token string) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.Agents == nil {
+		cfg.Agents = map[string]AgentEntry{}
+	}
+	e := cfg.Agents[agentID]
+	if strings.TrimSpace(e.AgentToken) == strings.TrimSpace(token) {
+		return nil
+	}
+	e.AgentToken = strings.TrimSpace(token)
+	cfg.Agents[agentID] = e
+	return SaveConfig(cfg)
 }
 
 // ShouldKeepAlive 某工作空间是否应常驻（注册且 keep_alive）。

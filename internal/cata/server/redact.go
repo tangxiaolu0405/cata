@@ -7,7 +7,7 @@ import (
 )
 
 // serverRedactor 进程级敏感值脱敏器：登记运行时已知 secret
-// （环境变量疑似 secret + config.APIKey + link.json machine_token/gateway_token），
+// （环境变量疑似 secret + config.APIKey + link.json machine/gateway/agent token），
 // 工具结果进 history（→ LLM）与 llm.log 前统一掩盖。
 var serverRedactor = secrets.New(8)
 
@@ -22,10 +22,13 @@ func initServerRedactor() {
 	if cfg := config.Config; cfg != nil {
 		red.Add(cfg.LLM.APIKey)
 	}
-	// 3. link.json 的逐机器 token（若本机已 join 网关）。
+	// 3. link.json 的 machine/gateway token + 各 agent 的 per-agent token。
 	if lc, err := link.LoadConfig(); err == nil {
 		red.Add(lc.MachineToken)
 		red.Add(lc.GatewayToken)
+		for _, e := range lc.Agents {
+			red.Add(e.AgentToken)
+		}
 	}
 	serverRedactor = red
 }

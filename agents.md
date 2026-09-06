@@ -596,7 +596,8 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 
 ## 敏感值脱敏
 
-`internal/cata/secrets` Redactor 集中登记运行时已知敏感值（环境变量疑似 secret、config 的 api_key、link.json 的 machine_token/gateway_token），替换为 `***REDACTED***`（长度 ≥8 才替换）。两处接线：
+`internal/cata/secrets` Redactor 集中登记运行时已知敏感值（环境变量疑似 secret、config 的 api_key、
+link.json 的 machine_token / gateway_token / 各 agent 的 agent_token），替换为 `***REDACTED***`（长度 ≥8 才替换）。两处接线：
 - **llm 侧**：`llm.log` 写盘前 `redactLogBytes` 掩盖密钥明文
 - **server 侧**：工具结果进 history（→LLM 上下文）前 `serverRedactor.Redact`
 

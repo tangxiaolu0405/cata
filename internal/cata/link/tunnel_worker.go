@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -19,27 +20,36 @@ import (
 	"cata/internal/cata/tunnel"
 )
 
+// errAgentTokenReady 哨兵：hello_ack 已收（token 落盘）或网关要求带 agent_token 重连——
+// 触发外层立即用新 cfg 重连，而非按退避等待。
+var errAgentTokenReady = errors.New("agent_token ready, reconnect")
+
 // RunTunnelWorker agent 进程持有到网关的 WSS 隧道（cata agent --link）。
 // 断线自动重连，退避 1s → 30s。ctx 取消（agent 退出）时返回 nil。
 func RunTunnelWorker(ctx context.Context, agentID string) error {
-	cfg, err := LoadConfig()
-	if err != nil {
-		return err
-	}
-	if !cfg.GatewayConfigured() {
-		return fmt.Errorf("link.json: gateway_url/token not configured")
-	}
-	if !cfg.HasAgent(agentID) {
-		return fmt.Errorf("link.json: agent %q not registered", agentID)
-	}
-
 	backoff := time.Second
 	for {
-		err := runOneTunnel(ctx, agentID, cfg)
+		// 每次重载 cfg：首次注册的 agent_token 经 hello_ack 落盘后，重连即携带。
+		cfg, err := LoadConfig()
+		if err != nil {
+			return err
+		}
+		if !cfg.GatewayConfigured() {
+			return fmt.Errorf("link.json: gateway_url/token not configured")
+		}
+		if !cfg.HasAgent(agentID) {
+			return fmt.Errorf("link.json: agent %q not registered", agentID)
+		}
+		err = runOneTunnel(ctx, agentID, cfg)
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err != nil {
+			if errors.Is(err, errAgentTokenReady) {
+				backoff = time.Second // token 就绪/刷新：立即重连，不按失败退避
+				log.Printf("cata agent %s: tunnel: %v", agentID, err)
+				continue
+			}
 			log.Printf("cata agent %s: tunnel: %v (reconnect in %s)", agentID, err, backoff)
 		}
 		select {
@@ -111,6 +121,7 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 		RootPath:     entry.RootPath,
 		MachineID:    cfg.MachineID,
 		MachineToken: cfg.MachineToken,
+		AgentToken:   cfg.AgentTokenFor(agentID), // per-agent token；空 = 首次注册回退 machine
 		Protocol:     tunnel.ProtocolName,
 		Version:      tunnel.Version,
 	}
@@ -146,6 +157,22 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 		if err := json.Unmarshal(msg, &f); err != nil {
 			log.Printf("cata agent %s: tunnel: bad frame: %v", agentID, err)
 			continue
+		}
+		// 首次注册：网关经 hello_ack 下发 per-agent token。落盘后立即重连，
+		// 用带 AgentToken 的 hello 建立正式隧道（一次性握手通道不承载业务流）。
+		if f.Type == tunnel.FrameHelloAck {
+			if tok := strings.TrimSpace(f.AgentToken); tok != "" {
+				if err := SetAgentTokenFor(agentID, tok); err != nil {
+					log.Printf("cata agent %s: persist agent_token: %v", agentID, err)
+				} else {
+					log.Printf("cata agent %s: got per-agent token, reconnecting with agent_token", agentID)
+				}
+			}
+			return errAgentTokenReady
+		}
+		// 网关要求用 per-agent token（机器合法但 token 缺失/已吊销）：同样重连。
+		if f.Type == tunnel.FrameError && strings.Contains(f.Message, "agent_token") {
+			return errAgentTokenReady
 		}
 		ws.handleFrame(agentID, f)
 	}

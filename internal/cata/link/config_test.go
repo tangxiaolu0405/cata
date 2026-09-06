@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
 )
 
@@ -198,5 +199,34 @@ func TestIsHomeRootPath(t *testing.T) {
 	// 子目录不算。
 	if isHomeRootPath(filepath.Join(home, "projects", "foo")) {
 		t.Fatal("subdir should not be home-root")
+	}
+}
+
+// TestAgentTokenPersist 验证 per-agent token 落盘/读取/幂等。
+func TestAgentTokenPersist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CATA_HOME", home)
+	if err := brain.EnsureCataLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(Config{MachineID: "m1", MachineToken: "mt",
+		Agents: map[string]AgentEntry{"ws-a": {AgentID: "ws-a", RootPath: "p", KeepAlive: true}}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := (Config{}).AgentTokenFor("ws-a"); got != "" {
+		t.Fatalf("unregistered agent token=%q want empty", got)
+	}
+	if err := SetAgentTokenFor("ws-a", "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := LoadConfig()
+	if got := cfg.AgentTokenFor("ws-a"); got != "tok-1" {
+		t.Fatalf("agent token=%q want tok-1", got)
+	}
+	// 幂等：同值不报错。
+	if err := SetAgentTokenFor("ws-a", "tok-1"); err != nil {
+		t.Fatal(err)
 	}
 }
