@@ -62,7 +62,9 @@
     （AgentEntry.AgentToken）→ 带 token 重连建正式隧道；旧 worker 回退 machine token 兼容
   - 测试：per-agent 签发/校验/吊销/持久化；handler 端到端 bootstrap（
     TestHandlerAgentTokenBootstrap）；link 落盘幂等
-  - 遗留：网关 UI 按 agent 吊销入口（当前 API 有 RevokeAgent，UI 未接，可用 machines.json 手动删）
+  - **UI 吊销（done）**：/api/machines 改为按机器分组的结构化 agents 列表；新增
+    /api/agents + POST /api/agents/:id/revoke（RevokeAgent + DisconnectAgent 断连）；
+    index.html「批准机器接入」对话框内新增「已在线 agent」区，逐 agent 显示 token 状态与吊销按钮
 
 ## F. 小型清理
 

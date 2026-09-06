@@ -157,6 +157,14 @@ func (s *MachinesStore) IssueAgentToken(agentID, machineID string) (token string
 	return tok, false, nil
 }
 
+// HasAgentToken 该 agent 是否已有 per-agent token 记录（UI 展示用）。
+func (s *MachinesStore) HasAgentToken(agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.agents[strings.TrimSpace(agentID)]
+	return ok
+}
+
 // AgentMachine 返回某 per-agent token 归属的机器 id（审计/吊销框架用）；无则空串。
 func (s *MachinesStore) AgentMachine(agentID string) string {
 	s.mu.Lock()

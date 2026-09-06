@@ -52,3 +52,55 @@ func TestHandleJoinApproveRejectsNoJoin(t *testing.T) {
 		t.Fatalf("status=%d want 400", rec.Code)
 	}
 }
+
+// TestHandleAgentRevoke 验证 /api/agents/:id/revoke：吊销 per-agent token、
+// 连接被断开、无效方法/空 store 拒绝。
+func TestHandleAgentRevoke(t *testing.T) {
+	machinePath := filepath.Join(t.TempDir(), "machines.json")
+	store := tunnel.NewMachinesStore(machinePath)
+	if _, err := store.IssueToken("machine-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.IssueAgentToken("ws-a", "machine-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 在线注册表注入该 agent（同包测试可访问）。
+	reg := tunnel.NewRegistry()
+	if err := reg.RegisterAgent("ws-a", "machine-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{store: store, reg: reg}
+
+	// 吊销成功。
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/ws-a/revoke", nil)
+	rec := httptest.NewRecorder()
+	s.handleAgentAction(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.HasAgentToken("ws-a") {
+		t.Fatal("agent token should be revoked")
+	}
+	if reg.AgentAlive("ws-a") {
+		t.Fatal("revoked agent should be disconnected")
+	}
+
+	// 再次吊销（已不存在）→ 400。
+	req2 := httptest.NewRequest(http.MethodPost, "/api/agents/ws-a/revoke", nil)
+	rec2 := httptest.NewRecorder()
+	s.handleAgentAction(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("re-revoke status=%d want 400", rec2.Code)
+	}
+
+	// 无 store → 400。
+	s2 := &Server{reg: tunnel.NewRegistry()}
+	req3 := httptest.NewRequest(http.MethodPost, "/api/agents/ws-a/revoke", nil)
+	rec3 := httptest.NewRecorder()
+	s2.handleAgentAction(rec3, req3)
+	if rec3.Code != http.StatusBadRequest {
+		t.Fatalf("no-store status=%d want 400", rec3.Code)
+	}
+}

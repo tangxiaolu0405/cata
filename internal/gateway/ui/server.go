@@ -28,10 +28,11 @@ type Server struct {
 	web     *WebChat
 	hub     *Hub
 	httpSrv *http.Server
-	reg     *tunnel.Registry    // 非 nil = remote 模式：项目列表/路由来自在线 agent
-	join    *tunnel.JoinManager // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
-	bans    *ipBan              // 连续登录失败封 IP（仅 ui_password 启用时生效）
-	session *sessionStore       // 登录会话（仅 ui_password 启用时生效）
+	reg     *tunnel.Registry      // 非 nil = remote 模式：项目列表/路由来自在线 agent
+	join    *tunnel.JoinManager   // 非 nil = remote 模式：UI 批准机器接入（进程内，免跨域/免 token）
+	store   *tunnel.MachinesStore // 非 nil = remote 模式：per-agent token 吊销（UI）
+	bans    *ipBan                // 连续登录失败封 IP（仅 ui_password 启用时生效）
+	session *sessionStore         // 登录会话（仅 ui_password 启用时生效）
 }
 
 // NewServer 创建 UI 服务器（本地模式）。
@@ -59,11 +60,12 @@ func NewServerWithRegistry(cfg gateway.Config, hub *Hub, reg *tunnel.Registry) *
 	return s
 }
 
-// NewServerWithRegistryAndJoin 同 NewServerWithRegistry，并绑定 join 管理器（remote 模式
-// UI 批准机器接入用）。本地模式 join 为 nil。
-func NewServerWithRegistryAndJoin(cfg gateway.Config, hub *Hub, reg *tunnel.Registry, join *tunnel.JoinManager) *Server {
+// NewServerWithRegistryAndJoin 同 NewServerWithRegistry，并绑定 join 管理器与机器 token 表
+// （remote 模式 UI 批准机器接入 + per-agent token 吊销用）。本地模式 join/store 为 nil。
+func NewServerWithRegistryAndJoin(cfg gateway.Config, hub *Hub, reg *tunnel.Registry, join *tunnel.JoinManager, store *tunnel.MachinesStore) *Server {
 	s := NewServerWithRegistry(cfg, hub, reg)
 	s.join = join
+	s.store = store
 	return s
 }
 
@@ -82,6 +84,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/projects/", s.handleProjectAction)
 	mux.HandleFunc("/api/machines", s.handleMachines)
 	mux.HandleFunc("/api/machines/", s.handleMachineAction)
+	mux.HandleFunc("/api/agents", s.handleAgents)
+	mux.HandleFunc("/api/agents/", s.handleAgentAction)
 	mux.HandleFunc("/api/join/pending", s.handleJoinPending)
 	mux.HandleFunc("/api/join/approve", s.handleJoinApprove)
 	mux.HandleFunc("/api/channels", s.handleChannels)
@@ -582,18 +586,110 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = enc.Encode(v)
 }
 
-// handleMachines GET /api/machines → 在线机器列表（remote 模式；本地模式返回空）。
-// 机器 = 分组维度：register 控制帧按 machine_id 路由到该机器任一在线 agent。
+// handleMachines GET /api/machines → 按机器分组的结构化 agent 列表（remote 模式）。
+// 每机器含在线 agents（agent_id/name/root_path），供 UI 展示与 per-agent 吊销。
 func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	if s.reg == nil {
-		writeJSON(w, []string{})
+	if s.reg == nil || s.store == nil {
+		writeJSON(w, []any{})
 		return
 	}
-	writeJSON(w, s.reg.Machines())
+	type agentRow struct {
+		AgentID       string `json:"agent_id"`
+		Name          string `json:"name"`
+		RootPath      string `json:"root_path,omitempty"`
+		HasAgentToken bool   `json:"has_agent_token"`
+	}
+	type machineRow struct {
+		MachineID string     `json:"machine_id"`
+		Agents    []agentRow `json:"agents"`
+	}
+	machines := s.reg.Machines()
+	out := make([]machineRow, 0, len(machines))
+	for _, m := range machines {
+		row := machineRow{MachineID: m, Agents: []agentRow{}}
+		for _, a := range s.agentsForMachine(m) {
+			row.Agents = append(row.Agents, agentRow{
+				AgentID:       a.AgentID,
+				Name:          a.Name,
+				RootPath:      a.RootPath,
+				HasAgentToken: s.store.HasAgentToken(a.AgentID),
+			})
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, out)
+}
+
+// agentsForMachine 返回某机器在线 agents（按 registry 分组）。
+func (s *Server) agentsForMachine(machineID string) []tunnel.AgentInfo {
+	var out []tunnel.AgentInfo
+	if s.reg == nil {
+		return out
+	}
+	for _, a := range s.reg.OnlineAgents() {
+		if a.MachineID == machineID {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// handleAgents GET /api/agents → 平铺的在线 agent 列表（remote 模式）。
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.reg == nil || s.store == nil {
+		writeJSON(w, []any{})
+		return
+	}
+	out := make([]map[string]any, 0)
+	for _, a := range s.reg.OnlineAgents() {
+		out = append(out, map[string]any{
+			"agent_id":        a.AgentID,
+			"name":            a.Name,
+			"root_path":       a.RootPath,
+			"machine_id":      a.MachineID,
+			"has_agent_token": s.store.HasAgentToken(a.AgentID),
+		})
+	}
+	writeJSON(w, out)
+}
+
+// handleAgentAction POST /api/agents/:id/revoke → 吊销某 agent 的 per-agent token
+// 并断开其在线连接（该工作空间立即失效，同机其它 agent 不受影响）。
+func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	agentID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	if action != "revoke" || r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.store == nil || s.reg == nil {
+		http.Error(w, "remote mode only", 400)
+		return
+	}
+	if err := s.store.RevokeAgent(agentID); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	// 吊销后断开其在线连接，强制按新状态重连（自然会被拒，仅当重新 join 才恢复）。
+	s.reg.DisconnectAgent(agentID)
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // handleMachineAction POST /api/machines/:id/register → 向该机器下发注册工作空间控制帧。

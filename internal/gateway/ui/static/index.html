@@ -333,6 +333,10 @@
       <div id="joinPendingList" class="join-list" style="max-height:260px;overflow:auto;margin:10px 0;">
         <div class="muted" style="padding:8px 2px;">暂无待批准请求</div>
       </div>
+      <div style="margin:12px 0 4px;font-weight:600;font-size:13px;">已在线 agent（per-agent token 吊销）</div>
+      <div id="agentList" class="join-list" style="max-height:180px;overflow:auto;border-top:1px solid var(--line);padding-top:6px;">
+        <div class="muted" style="padding:6px 2px;">（无在线 agent）</div>
+      </div>
       <div class="row">
         <button type="button" class="ghost" id="btnJoinRefresh">刷新</button>
         <button type="button" class="ghost" id="btnJoinCancel">关闭</button>
@@ -1126,7 +1130,7 @@
 
     // ---- 机器接入（join approve）+ 远程注册工作空间（remote 模式）----
 
-    // 拉取在线机器列表（remote 模式；本地模式返回空）。
+    // 拉取在线机器列表（remote 模式；本地模式返回空）。返回结构化 [{machine_id, agents}]。
     async function loadMachines() {
       try {
         const list = await api("/api/machines");
@@ -1141,14 +1145,57 @@
         }
         for (const m of list) {
           const o = document.createElement("option");
-          o.value = m;
-          o.textContent = m;
+          o.value = m.machine_id;
+          o.textContent = m.machine_id;
           sel.appendChild(o);
         }
         return list;
       } catch (_) {
         return [];
       }
+    }
+
+    // 拉取在线 agent 列表并渲染吊销入口（remote 模式）。
+    async function loadAgents() {
+      try {
+        const list = await api("/api/agents");
+        const box = $("agentList");
+        if (!box) return;
+        if (!list || !list.length) {
+          box.innerHTML = '<div class="muted" style="padding:6px 2px;">（无在线 agent）</div>';
+          return;
+        }
+        box.innerHTML = list.map((a) => {
+          const tok = a.has_agent_token ? "✓" : "—";
+          return (
+            '<div class="agent-item" style="display:flex;align-items:center;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);">' +
+            '<div style="flex:1;min-width:0;">' +
+            '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+              esc(a.name || a.agent_id) +
+              ' <span class="muted" style="font-size:11px;">' + esc(a.agent_id) + '</span>' +
+            '</div>' +
+            '<div class="muted" style="font-size:12px;">机器 ' + esc(a.machine_id || "?") + ' · agent_token ' + tok + '</div>' +
+            "</div>" +
+            (a.has_agent_token
+              ? '<button type="button" data-revoke="' + esc(a.agent_id) + '">吊销</button>'
+              : "") +
+            "</div>"
+          );
+        }).join("");
+        box.querySelectorAll("button[data-revoke]").forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm("吊销 agent " + b.dataset.revoke + " 的 token？其隧道将立即断开，需重新接入才能恢复。")) return;
+            try {
+              await api("/api/agents/" + encodeURIComponent(b.dataset.revoke) + "/revoke", {
+                method: "POST",
+              });
+              toast("已吊销 agent " + b.dataset.revoke);
+              loadAgents();
+              loadMachines();
+            } catch (e) { toast("吊销失败：" + (e.message || e)); }
+          };
+        });
+      } catch (_) { /* 本地模式无端点，静默 */ }
     }
 
     // 批准机器接入：POST 到同源 UI 端口（进程内调 JoinManager，免跨域/免 token）。
@@ -1221,8 +1268,9 @@
     $("btnJoin").onclick = () => {
       $("joinDlg").classList.add("show");
       loadJoinPending();
+      loadAgents();
     };
-    $("btnJoinRefresh").onclick = loadJoinPending;
+    $("btnJoinRefresh").onclick = () => { loadJoinPending(); loadAgents(); };
     $("btnJoinCancel").onclick = () => $("joinDlg").classList.remove("show");
 
     $("btnAddWs").onclick = async () => {

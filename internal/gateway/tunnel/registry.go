@@ -74,6 +74,26 @@ func (r *Registry) UnregisterConn(a *agentConn) {
 	}
 }
 
+// DisconnectAgent 主动断开某 agent 的在线连接并从注册表移除（吊销 token 后由 UI 调用；
+// 与 UnregisterConn 相同身份语义，但这里是服务端主动踢）。
+func (r *Registry) DisconnectAgent(agentID string) {
+	r.mu.Lock()
+	a, ok := r.agents[agentID]
+	if ok {
+		delete(r.agents, agentID)
+	}
+	r.mu.Unlock()
+	if ok && a != nil {
+		a.closeFromGateway()
+	}
+}
+
+// RegisterAgent 直接注册一个 agent 记录（无真实 WSS；测试注入或调试用）。
+// 与 handler 正常注册路径共用 registerConn，顶替语义一致。
+func (r *Registry) RegisterAgent(agentID, machineID string) error {
+	return r.registerConn(&agentConn{info: AgentInfo{AgentID: agentID, MachineID: machineID}})
+}
+
 // OnlineAgents 返回当前在线 agent 列表（稳定排序）。
 func (r *Registry) OnlineAgents() []AgentInfo {
 	r.mu.Lock()
