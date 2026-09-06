@@ -347,7 +347,7 @@ func helpText() string {
 /start — 欢迎
 /help — 本帮助
 /clear — 清空 cata 会话历史
-/dir <path> — 切换产出区到已使用的项目目录（/dir 单独发显示当前目录）
+/dir — 列出本机已注册工作区，/dir <序号> 一键切换（也可 /dir <路径>；agent 不在线会自动拉起）
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket

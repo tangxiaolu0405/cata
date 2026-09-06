@@ -2,14 +2,17 @@ package gateway
 
 import (
 	"bufio"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/cata/socketclient"
 )
 
 // stubAgentSocket 预置目标目录工作区的哑 per-ws socket：
@@ -47,6 +50,9 @@ func stubAgentSocket(t *testing.T, cwd string) {
 			}(c)
 		}
 	}()
+	if err := socketclient.Ping(sock); err != nil {
+		t.Fatalf("stub socket %s not pingable: %v", sock, err)
+	}
 }
 
 // TestHandleWorkdirCommand 覆盖 /dir 命令：显示当前、~ 展开、不存在、切换、重复切换。
@@ -148,5 +154,105 @@ func TestHandleWorkdirRemote(t *testing.T) {
 	}
 	if cur := m.CurrentCwd(key); cur != proj {
 		t.Fatalf("远程模式 cwd=%q want %q", cur, proj)
+	}
+}
+
+// writeRegistry 预置注册表（短 CATA_HOME 下）：让 /dir 候选列表可测。
+func writeRegistry(t *testing.T, entries []map[string]any) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv(config.EnvCataHome), "registry")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"workspaces": entries})
+	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHandleWorkdirByIndex 无需记住路径：/dir 列候选，/dir <序号> 切换。
+func TestHandleWorkdirByIndex(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "cata-wtest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	_ = os.MkdirAll(root, 0755)
+	old := filepath.Join(root, "old")
+	stock := filepath.Join(root, "stock")
+	_ = os.MkdirAll(old, 0755)
+	_ = os.MkdirAll(stock, 0755)
+	stubAgentSocket(t, old)
+	stubAgentSocket(t, stock)
+	// 注册表：stock 最近使用（排第一），old 较旧。
+	now := time.Now()
+	wsStock, err := brain.ResolveWorkspaceNoGlobal(stock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsOld, err := brain.ResolveWorkspaceNoGlobal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRegistry(t, []map[string]any{
+		{"id": wsStock.ID, "root_path": stock, "kind": "git", "name": "stock",
+			"created_at":   now.Add(-2 * time.Hour).Format(time.RFC3339),
+			"last_seen_at": now.Add(-time.Minute).Format(time.RFC3339)},
+		{"id": wsOld.ID, "root_path": old, "kind": "git", "name": "old",
+			"created_at":   now.Add(-24 * time.Hour).Format(time.RFC3339),
+			"last_seen_at": now.Add(-10 * time.Hour).Format(time.RFC3339)},
+	})
+
+	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	key := SessionKeyFor("test", "7")
+
+	// /dir 无参 → 菜单列出候选（stock 在前）。
+	reply, _ := HandleWorkdirCommand(m, key, "")
+	if !strings.Contains(reply, "1. stock") || !strings.Contains(reply, "/dir <序号>") {
+		t.Fatalf("/dir 菜单应列出带序号的候选：\n%s", reply)
+	}
+	if !strings.Contains(reply, "2. old") {
+		t.Fatalf("菜单应含第二个候选：\n%s", reply)
+	}
+
+	// /dir 1 → 切到列表第一项（stock）。
+	reply, _ = HandleWorkdirCommand(m, key, "1")
+	if !strings.Contains(reply, stock) || !strings.Contains(reply, "产出区已切换") {
+		t.Fatalf("/dir 1 应切到 stock：\n%s", reply)
+	}
+	if cur := m.CurrentCwd(key); cur != stock {
+		t.Fatalf("cwd=%q want %q", cur, stock)
+	}
+	// /dir 1 再次 → 已在。
+	reply, _ = HandleWorkdirCommand(m, key, "1")
+	if !strings.Contains(reply, "已在产出区") {
+		t.Fatalf("重复序号切换应提示已在：\n%s", reply)
+	}
+}
+
+// TestHandleWorkdirIndexOutOfRange 序号越界 → 明确提示。
+func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
+	home, _ := os.MkdirTemp("/tmp", "cata-wtest-")
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	_ = os.MkdirAll(root, 0755)
+	proj := filepath.Join(root, "proj")
+	_ = os.MkdirAll(proj, 0755)
+	now := time.Now()
+	writeRegistry(t, []map[string]any{
+		{"id": "w-proj", "root_path": proj, "kind": "git", "name": "proj",
+			"created_at": now.Format(time.RFC3339), "last_seen_at": now.Format(time.RFC3339)},
+	})
+	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	key := SessionKeyFor("test", "8")
+	reply, _ := HandleWorkdirCommand(m, key, "99")
+	if !strings.Contains(reply, "序号无效") {
+		t.Fatalf("越界序号应提示：%q", reply)
+	}
+	if cur := m.CurrentCwd(key); cur == proj {
+		t.Fatal("越界序号不应切换")
 	}
 }

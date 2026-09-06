@@ -1,24 +1,26 @@
 package gateway
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/link"
 )
 
-// HandleWorkdirCommand 处理渠道会话（telegram / qq / web）的产出区切换命令 /dir：
-//   - arg 为空 → 返回当前会话产出区（cwd），不切换
-//   - 否则解析为绝对路径（~ 展开）、校验为**存在的目录**，把会话连接切换到该 cwd
+// HandleWorkdirCommand 处理渠道会话（telegram / qq / web）的产出区/消费者切换命令 /dir：
+//   - arg 为空 → 列出当前产出区 + 本机已注册工作区候选（/dir <序号> 一键切换）
+//   - arg 为序号（1..N）→ 按候选列表切换（无需记住路径）
+//   - arg 为路径 → 直接切换（~ 展开，必须是存在的目录）
 //
-// 切换后后续 chat 请求以新 cwd 发出：server 端按 cwd 解析产出区并绑定脑子格
-// （与 `cata chat --dir <path>` 等价），从而在 IM 渠道里沿用本地 TUI 用过的项目目录。
-//
-// 目标目录的 agent「不在线」时：本地模式会自动解析其工作区并拉起 per-ws agent
-// （link.EnsureAgent），切换完成即可直接对话；解析失败（非项目目录）回退默认
-// worker socket。remote 模式保持拨默认云端 agent。
+// 切换后后续 chat 请求以新 cwd 发出、会话连接拨到该工作区的 per-ws agent
+// （即 QQ/TG 消息的「消费者」变成具体工作目录的 cata）。
+// 目标 agent「不在线」时本地模式自动拉起（link.EnsureAgent）。
 // 返回 (回复文本, 是否已处理)。任何失败保留原 cwd 不变。
 func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) (string, bool) {
 	cur := sessions.CurrentCwd(key)
@@ -32,7 +34,15 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	}
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		return "当前产出区: " + cur + "\n\n切换: /dir <绝对路径>（支持 ~/ 前缀）", true
+		return workdirMenu(cur), true
+	}
+	// 序号选择：候选列表按最近使用排序，用户无需记住完整路径。
+	if n, err := strconv.Atoi(arg); err == nil && n >= 1 {
+		cands := workspaceCandidates()
+		if n > len(cands) || len(cands) == 0 {
+			return fmt.Sprintf("序号无效: %d（先发 /dir 查看可用工作区）", n), true
+		}
+		arg = cands[n-1].RootPath
 	}
 	abs := arg
 	var err error
@@ -68,7 +78,7 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	if !sessions.IsRemote() {
 		if ws, werr := brain.ResolveWorkspaceNoGlobal(abs); werr == nil && ws != nil && strings.TrimSpace(ws.ID) != "" {
 			if aerr := link.EnsureAgent(ws.ID); aerr == nil {
-				// 会话连接拨该工作区的 per-ws agent socket：切换即在线。
+				// 会话连接拨该工作区的 per-ws agent socket：消息消费者 = 该工作区 cata。
 				if _, err := sessions.GetWithCwdDialer(key, abs, DialLocalAgent(ws.ID)); err == nil {
 					assured = true
 				}
@@ -88,4 +98,78 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	}
 	reply += "\n/clear 可清空本会话历史。"
 	return reply, true
+}
+
+// maxWorkdirCandidates /dir 列表最多列出的已注册工作区数。
+const maxWorkdirCandidates = 10
+
+// workspaceCandidates 本机已注册工作区（按最近使用倒序，最多 maxWorkdirCandidates）。
+func workspaceCandidates() []brain.RegistryEntry {
+	entries, err := brain.ListRegistryEntries()
+	if err != nil {
+		return nil
+	}
+	var out []brain.RegistryEntry
+	for _, e := range entries {
+		if strings.TrimSpace(e.RootPath) == "" {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return lastSeenTime(out[i].LastSeenAt).After(lastSeenTime(out[j].LastSeenAt))
+	})
+	if len(out) > maxWorkdirCandidates {
+		out = out[:maxWorkdirCandidates]
+	}
+	return out
+}
+
+func lastSeenTime(rfc string) time.Time {
+	ts, err := time.Parse(time.RFC3339, rfc)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
+// workdirMenu /dir 无参输出：当前 + 候选列表（支持 /dir <序号>）。
+func workdirMenu(cur string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "当前产出区: %s\n\n", cur)
+	cands := workspaceCandidates()
+	if len(cands) == 0 {
+		b.WriteString("暂无已注册工作区 — 用 /dir <绝对路径> 手动切换（支持 ~/）。")
+		return b.String()
+	}
+	b.WriteString("已注册工作区（发 /dir <序号> 切换，如 /dir 1）:\n")
+	for i, e := range cands {
+		label := strings.TrimSpace(e.Name)
+		if label == "" {
+			label = e.ID
+		}
+		fmt.Fprintf(&b, "%d. %s — %s（%s）\n", i+1, label, e.RootPath, relSeen(e.LastSeenAt))
+	}
+	return b.String()
+}
+
+// relSeen LastSeenAt 相对时间（x 分钟 / x 小时 / 日期）。
+func relSeen(rfc string) string {
+	ts := lastSeenTime(rfc)
+	if ts.IsZero() {
+		return "未知"
+	}
+	d := time.Since(ts)
+	switch {
+	case d < 0:
+		return "刚刚"
+	case d < 1*time.Minute:
+		return "刚刚"
+	case d < 1*time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+	}
 }
