@@ -395,6 +395,20 @@
             <label class="field"><span>models（JSON 对象，可空）</span><textarea class="json" id="app_llm_models" spellcheck="false"></textarea></label>
           </div>
           <div class="sec">
+            <h4>多 LLM 提供商（自动探测 + 一键切换）</h4>
+            <div class="grid2">
+              <label class="field"><span>供应商</span><select id="app_provider_sel"><option value="">(加载中…)</option></select></label>
+              <label class="field"><span>模型</span><select id="app_provider_model_sel"><option value="">(未探测/先选供应商)</option></select></label>
+            </div>
+            <div class="btns" style="display:flex;gap:0.5rem;margin-top:0.5rem">
+              <button type="button" id="btnProviderProbe">探测该供应商</button>
+              <button type="button" id="btnProviderActivate">应用（选供应商 + 模型）</button>
+            </div>
+            <p class="help" id="providerHint" style="margin:0.4rem 0 0;font-size:0.78rem;color:var(--muted)">
+              先选供应商 → 探测自动列出模型 → 选模型 → 应用即切换（写入 config.json，重启保持）。
+            </p>
+          </div>
+          <div class="sec">
             <h4>Server / Evolution</h4>
             <div class="grid2">
               <label class="field"><span>server.socket_path</span><input id="app_server_socket" type="text" /></label>
@@ -1077,6 +1091,116 @@
       return { config: base, extras };
     }
 
+    let providersData = { active: "", providers: [] };
+    let selectedProvider = "";
+
+    async function loadProviders() {
+      try {
+        providersData = await api("/api/settings/app/providers");
+      } catch (e) {
+        providersData = { active: "", providers: [] };
+      }
+      const sel = $("app_provider_sel");
+      const prev = selectedProvider;
+      sel.innerHTML = "";
+      if (!providersData.providers.length) {
+        sel.innerHTML = '<option value="">(暂无供应商)</option>';
+        return;
+      }
+      for (const p of providersData.providers) {
+        const mark = p.active ? "● " : "";
+        const probe =
+          p.probed_at
+            ? (p.probed_error ? "failed" : p.models.length + " models")
+            : "unprobed";
+        const opt = document.createElement("option");
+        opt.value = p.name;
+        opt.textContent = mark + p.name + " — " + (p.model || "-") + " [" + probe + "]";
+        sel.appendChild(opt);
+      }
+      if (providersData.active && !prev) {
+        sel.value = providersData.active;
+      } else if (prev) {
+        sel.value = [...sel.options].some((o) => o.value === prev) ? prev : sel.value;
+      }
+      selectedProvider = sel.value || "";
+      fillProviderModels();
+    }
+
+    function fillProviderModels() {
+      const sel = $("app_provider_model_sel");
+      const p = providersData.providers.find((x) => x.name === selectedProvider);
+      sel.innerHTML = "";
+      if (!p) {
+        sel.innerHTML = '<option value="">(未探测/先选供应商)</option>';
+        return;
+      }
+      if (!p.models || !p.models.length) {
+        sel.innerHTML = '<option value="">(未探测 — 点「探测该供应商」)</option>';
+        return;
+      }
+      for (const m of p.models) {
+        const mods = (p.capabilities && p.capabilities[m] && p.capabilities[m].modalities || []).join(",");
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m + (mods ? "  [" + mods + "]" : "");
+        sel.appendChild(opt);
+      }
+      if (p.model) sel.value = p.model;
+    }
+
+    function bindProviderPanel() {
+      $("app_provider_sel").addEventListener("change", (e) => {
+        selectedProvider = e.target.value || "";
+        fillProviderModels();
+        $("providerHint").textContent = "";
+      });
+      $("btnProviderProbe").addEventListener("click", async () => {
+        if (!selectedProvider) { toast("先选择供应商"); return; }
+        $("btnProviderProbe").disabled = true;
+        $("btnProviderProbe").textContent = "探测中…";
+        try {
+          const res = await api("/api/settings/app/providers/probe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: selectedProvider }),
+          });
+          providersData = res.providers || providersData;
+          const p = providersData.providers.find((x) => x.name === selectedProvider);
+          if (p && p.probed_error) toast("探测失败（保留既有配置）：" + p.probed_error);
+          else toast("探测完成：" + (p ? p.models.length + " 个模型" : ""));
+          await loadProviders();
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          $("btnProviderProbe").disabled = false;
+          $("btnProviderProbe").textContent = "探测该供应商";
+        }
+      });
+      $("btnProviderActivate").addEventListener("click", async () => {
+        if (!selectedProvider) { toast("先选择供应商"); return; }
+        const model = $("app_provider_model_sel").value || "";
+        $("btnProviderActivate").disabled = true;
+        $("btnProviderActivate").textContent = "应用…";
+        try {
+          const res = await api("/api/settings/app/providers/activate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: selectedProvider, model }),
+          });
+          if (!res.ok) throw new Error(res.message || "激活失败");
+          if (res.config) fillAppForm({ path: res.path, config: res.config, extras: res.extras || {} });
+          await loadProviders();
+          toast(res.message || "已切换供应商");
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          $("btnProviderActivate").disabled = false;
+          $("btnProviderActivate").textContent = "应用（选供应商 + 模型）";
+        }
+      });
+    }
+
     async function loadSettings() {
       const [app, gw] = await Promise.all([
         api("/api/settings/app"),
@@ -1112,9 +1236,11 @@
       }
     }
 
+    bindProviderPanel();
     $("btnSettings").onclick = async () => {
       try {
         await loadSettings();
+        await loadProviders();
         setSettingsTab("app");
         $("settingsDlg").classList.add("show");
       } catch (e) {
@@ -1122,7 +1248,15 @@
       }
     };
     $("btnSettingsClose").onclick = () => $("settingsDlg").classList.remove("show");
-    $("btnSettingsReload").onclick = () => loadSettings().then(() => toast("已重新加载")).catch((e) => alert(e.message || e));
+    $("btnSettingsReload").onclick = async () => {
+      try {
+        await loadSettings();
+        await loadProviders();
+        toast("已重新加载");
+      } catch (e) {
+        alert(e.message || e);
+      }
+    };
     $("btnSettingsSave").onclick = saveSettings;
     document.querySelectorAll("#settingsDlg .tab").forEach((b) => {
       b.onclick = () => setSettingsTab(b.dataset.tab);

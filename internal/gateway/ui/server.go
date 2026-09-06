@@ -93,6 +93,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/events", s.handleEventsSSE)
 	mux.HandleFunc("/api/settings/app", s.handleSettingsApp)
 	mux.HandleFunc("/api/settings/gateway", s.handleSettingsGateway)
+	mux.HandleFunc("/api/settings/app/providers", s.handleAppProviders)
+	mux.HandleFunc("/api/settings/app/providers/probe", s.handleAppProviderProbe)
+	mux.HandleFunc("/api/settings/app/providers/activate", s.handleAppProviderActivate)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
