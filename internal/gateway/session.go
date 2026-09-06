@@ -86,8 +86,19 @@ func defaultAgentTarget(cfg Config, reg *tunnel.Registry) (agentID, root string)
 	return agents[0].AgentID, agents[0].RootPath
 }
 
-// Get 获取或创建会话连接（按会话键分配独立 worker 目录）。
+// Get 获取或创建会话连接：
+//   - 已有会话（含 /dir 切换过产出区的连接）→ 直接复用，保留其 cwd
+//   - 未见过该会话 → 按默认 worker 目录建立
+//
+// 断线由 socketclient 读写时自动重拨（dialFunc 重拨时重新 EnsureAgent）。
+// 注意：不要在这里回退 worker 目录——那会把 /dir 切换的连接覆盖成原路径。
 func (m *SessionManager) Get(key SessionKey) (*CataConn, error) {
+	m.mu.Lock()
+	c, ok := m.sessions[key]
+	m.mu.Unlock()
+	if ok {
+		return c, nil
+	}
 	cwd, err := WorkerCwdForSession(m.workerRoot, key)
 	if err != nil {
 		return nil, err

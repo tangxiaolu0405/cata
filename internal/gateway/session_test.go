@@ -3,8 +3,13 @@ package gateway
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"cata/internal/cata/config"
 )
 
 // TestSessionManagerDialerRouting 验证 per-ws 路由的核心抽象：GetWithCwdDialer
@@ -75,3 +80,44 @@ type dummyAddr struct{}
 
 func (dummyAddr) Network() string { return "dummy" }
 func (dummyAddr) String() string  { return "dummy" }
+
+// TestGetReusesSwitchedCwd 回归：/dir 切换后，逐条消息调用的 Get(key)
+// 必须复用切换后的连接（产出区=新路径），而不是回退到默认 worker 目录
+// （否则"切完再发消息还是原路径"）。
+func TestGetReusesSwitchedCwd(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "cata-gwtest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	proj := filepath.Join(root, "proj")
+	if err := os.MkdirAll(proj, 0755); err != nil {
+		t.Fatal(err)
+	}
+	stubAgentSocket(t, proj)
+	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	key := SessionKeyFor("test", "5")
+
+	c1, err := m.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply, _ := HandleWorkdirCommand(m, key, proj); !strings.Contains(reply, "产出区已切换") {
+		t.Fatalf("切换失败：%q", reply)
+	}
+	// 消息处理路径：Get(key) 必须拿到切换后的连接（cwd=proj）。
+	c2, err := m.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Cwd() != proj {
+		t.Fatalf("Get 复用了错误连接 cwd=%q want %q（切换被打回原路径）", c2.Cwd(), proj)
+	}
+	_ = c1
+}

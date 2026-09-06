@@ -15,6 +15,33 @@ import (
 	"cata/internal/cata/socketclient"
 )
 
+// workTestHome 测试 CATA_HOME：绑到 ~/.cata_work/ 下（不使用 /tmp），
+// 子目录名短，保证 unix socket 路径不超过长度上限；测试结束自动清理。
+func workTestHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(home, ".cata_work", "gw-tests")
+	if err := os.MkdirAll(base, 0755); err != nil {
+		// 受限环境（沙箱/只读 HOME，无法建 ~/.cata_work）：回退短 /tmp 目录
+		// （长路径会超 unix socket 上限，故不用 t.TempDir()）。正常环境走 ~/.cata_work。
+		dir, err := os.MkdirTemp("/tmp", "cata-gwtest-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		return dir
+	}
+	dir, err := os.MkdirTemp(base, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // stubAgentSocket 预置目标目录工作区的哑 per-ws socket：
 // link.EnsureAgent 第一步 ping 成功即视为「在线」，避免测试真实拉起 agent 进程。
 func stubAgentSocket(t *testing.T, cwd string) {
@@ -58,11 +85,8 @@ func stubAgentSocket(t *testing.T, cwd string) {
 // TestHandleWorkdirCommand 覆盖 /dir 命令：显示当前、~ 展开、不存在、切换、重复切换。
 // 切换目标均预置「在线」agent（哑 socket），验证自动就绪提示与 cwd 生效。
 func TestHandleWorkdirCommand(t *testing.T) {
-	// CATA_HOME 用短 /tmp 路径：unix socket 路径有 ~104 字节上限（temp 目录太长会 bind 失败）。
-	home, err := os.MkdirTemp("/tmp", "cata-wtest-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// CATA_HOME 绑到 ~/.cata_work/ 下的短目录（unix socket 路径有 ~104 字节上限）。
+	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
 	// worker 根与目标目录也放短路径下：ws id 由路径派生，过长会导致 socket 路径超限。
@@ -172,10 +196,7 @@ func writeRegistry(t *testing.T, entries []map[string]any) {
 
 // TestHandleWorkdirByIndex 无需记住路径：/dir 列候选，/dir <序号> 切换。
 func TestHandleWorkdirByIndex(t *testing.T) {
-	home, err := os.MkdirTemp("/tmp", "cata-wtest-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
 	root := filepath.Join(home, "w")
@@ -234,7 +255,7 @@ func TestHandleWorkdirByIndex(t *testing.T) {
 
 // TestHandleWorkdirIndexOutOfRange 序号越界 → 明确提示。
 func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
-	home, _ := os.MkdirTemp("/tmp", "cata-wtest-")
+	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
 	root := filepath.Join(home, "w")

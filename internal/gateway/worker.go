@@ -10,11 +10,11 @@ import (
 	"cata/internal/cata/brain"
 )
 
-const defaultWorkerRootName = ".cata_worker"
+const defaultWorkerRootName = ".cata_work"
 
 var safePathSegment = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-// WorkerRoot 返回 gateway 产出区根目录（默认 ~/.cata_worker）。
+// WorkerRoot 返回 gateway 产出区根目录（默认 ~/.cata_work）。
 func WorkerRoot(cfgRoot string) string {
 	if r := strings.TrimSpace(cfgRoot); r != "" {
 		return r

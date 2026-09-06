@@ -24,7 +24,7 @@
 
 | 区域 | 能力 |
 |------|------|
-| **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_worker` 渠道沙箱）；会话 `web:<id>`，`<id>` = ws_id = agent_id |
+| **Projects** | 列出 `~/.cata/brain/workspaces/<id>/`（跳过 `.cata_work` 渠道沙箱）；会话 `web:<id>`，`<id>` = ws_id = agent_id |
 | **Channels** | Telegram/QQ 近期消息只读；**不能**从页面发消息、确认命令或 reset 渠道会话 |
 | **设置** | 编辑 `~/.cata/config.json` 与 `~/.cata/gateway.json`；保存时**保留**未知顶层键（如 `llm_previous_qwen` / `llm_xxx`） |
 
@@ -66,10 +66,10 @@ gateway 发给 cata 的 `cwd` 固定布局：
 {CATA_WORKER_ROOT}/<channel>/<chat_id>/
 ```
 
-默认 `CATA_WORKER_ROOT=~/.cata_worker`，例如：
+默认 `CATA_WORKER_ROOT=~/.cata_work`，例如：
 
 ```
-~/.cata_worker/telegram/12345/
+~/.cata_work/telegram/12345/
 ```
 
 - 每个渠道会话一个目录（文件工具、`run_command` 沙箱）
@@ -130,7 +130,7 @@ cata-gateway init --force            # 覆盖已有文件
 - 凭证：`qq_app_id` + `qq_app_secret`（或 `QQ_APP_ID` / `QQ_APP_SECRET`）
 - 传输：官方 WebSocket 长连接（与 Telegram 一样无需公网回调）
 - 场景：单聊 C2C + 群 @（intent `GROUP_AND_C2C_EVENT`）
-- 产出区：`~/.cata_worker/qq/c2c_<openid>/`、`~/.cata_worker/qq/group_<openid>/`
+- 产出区：`~/.cata_work/qq/c2c_<openid>/`、`~/.cata_work/qq/group_<openid>/`
 - 说明：官方已声明 WS 逐步下线；若连接失败则本渠道不可用（Telegram 不受影响）
 - 调试：`cata-gateway qq` 仅启 QQ
 
@@ -200,7 +200,7 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 
 ```
 Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
-                                         cwd = ~/.cata_worker/...
+                                         cwd = ~/.cata_work/...
 ```
 
 待实现（模式一完成后）：
