@@ -27,6 +27,9 @@ type SessionManager struct {
 	remote bool
 	// cwdStore /dir 切换的持久化（重启恢复）；nil = 不持久化（测试用）。
 	cwdStore *SessionCwdStore
+	// dirListSeen 该会话是否已看过 /dir 工作区列表：未看列表不允许序号切换
+	// （序号按最近使用排序，重启后可能变化，须先确认列表）。
+	dirListSeen map[SessionKey]bool
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
@@ -44,6 +47,7 @@ func NewSessionManagerWithStore(socketPath, workerRoot string, store *SessionCwd
 		workerRoot:  workerRoot,
 		connFactory: NewCataConn,
 		cwdStore:    store,
+		dirListSeen: make(map[SessionKey]bool),
 		sessions:    make(map[SessionKey]*CataConn),
 	}
 }
@@ -60,6 +64,7 @@ func NewRemoteSessionManagerWithStore(workerRoot string, connFactory ConnFactory
 		connFactory: connFactory,
 		remote:      true,
 		cwdStore:    store,
+		dirListSeen: make(map[SessionKey]bool),
 		sessions:    make(map[SessionKey]*CataConn),
 	}
 }
@@ -140,6 +145,20 @@ func (m *SessionManager) SetCwdOverride(key SessionKey, cwd string) {
 	if m.cwdStore != nil {
 		m.cwdStore.Set(key, cwd)
 	}
+}
+
+// MarkDirListSeen 记录该会话已查看 /dir 工作区列表（之后才允许序号切换）。
+func (m *SessionManager) MarkDirListSeen(key SessionKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dirListSeen[key] = true
+}
+
+// DirListSeen 该会话是否已查看 /dir 工作区列表。
+func (m *SessionManager) DirListSeen(key SessionKey) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dirListSeen[key]
 }
 
 // CurrentCwd 返回该会话当前连接的产出区（无会话时返回 ""）。

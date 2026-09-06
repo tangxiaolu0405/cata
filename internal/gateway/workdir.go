@@ -36,6 +36,8 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	}
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
+		// 查看列表即「确认过序号依据」：之后才允许 /dir <序号>。
+		sessions.MarkDirListSeen(key)
 		return workdirMenu(cur), true
 	}
 	if strings.EqualFold(arg, "reset") {
@@ -51,7 +53,11 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 		return "已恢复默认产出区: " + cwd, true
 	}
 	// 序号选择：候选列表按最近使用排序，用户无需记住完整路径。
+	// 安全限制：未先发 /dir 查看列表不允许序号切换（序号会随使用变化，须先确认）。
 	if n, err := strconv.Atoi(arg); err == nil && n >= 1 {
+		if !sessions.DirListSeen(key) {
+			return "请先发 /dir 查看工作区列表（序号按最近使用排序，确认后再用 /dir <序号> 切换）", true
+		}
 		cands := workspaceCandidates()
 		if n > len(cands) || len(cands) == 0 {
 			return fmt.Sprintf("序号无效: %d（先发 /dir 查看可用工作区）", n), true
@@ -166,6 +172,7 @@ func workdirMenu(cur string) string {
 		}
 		fmt.Fprintf(&b, "%d. %s — %s（%s）\n", i+1, label, e.RootPath, relSeen(e.LastSeenAt))
 	}
+	b.WriteString("\n/路径 可直接切换；/dir reset 恢复默认产出区。")
 	return b.String()
 }
 

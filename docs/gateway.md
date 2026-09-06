@@ -81,7 +81,7 @@ gateway 发给 cata 的 `cwd` 固定布局：
 会话内直接发（与 `cata chat --dir <path>` 等价）：
 
 ```
-/dir                    # 列出本机已注册工作区（最近使用排序），发 /dir <序号> 一键切换
+/dir                    # 列出本机已注册工作区（最近使用排序）；**必须先发 /dir 看列表才能 /dir <序号>**
 /dir ~/stock            # 也可直接 /dir <路径>（~ 展开；必须是存在的目录）
 /dir reset              # 恢复默认 worker 产出区
 ```

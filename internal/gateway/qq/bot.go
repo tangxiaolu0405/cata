@@ -159,7 +159,7 @@ func helpText() string {
 命令:
 /help — 本帮助
 /clear — 清空会话
-/dir — 列出本机已注册工作区，/dir <序号> 切换（也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
+/dir — 列出工作区后用 /dir <序号> 切换（须先看列表；也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
 
 说明:
 - 默认产出区: ~/.cata_worker/qq/c2c_<openid>/ 或 group_<openid>/

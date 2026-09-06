@@ -269,12 +269,64 @@ func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
 	})
 	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("test", "8")
+	// 先看列表（确认过序号依据）。
+	HandleWorkdirCommand(m, key, "")
 	reply, _ := HandleWorkdirCommand(m, key, "99")
 	if !strings.Contains(reply, "序号无效") {
 		t.Fatalf("越界序号应提示：%q", reply)
 	}
 	if cur := m.CurrentCwd(key); cur == proj {
 		t.Fatal("越界序号不应切换")
+	}
+}
+
+// TestHandleWorkdirIndexRequiresListFirst 安全限制：未先发 /dir 查看列表，
+// 不允许 /dir <序号>（序号按最近使用排序，须先确认列表）。
+func TestHandleWorkdirIndexRequiresListFirst(t *testing.T) {
+	home, _ := os.MkdirTemp("/tmp", "cata-gwtest-")
+	defer os.RemoveAll(home)
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	_ = os.MkdirAll(root, 0755)
+	proj := filepath.Join(root, "proj")
+	_ = os.MkdirAll(proj, 0755)
+	stubAgentSocket(t, proj)
+	now := time.Now()
+	ws, err := brain.ResolveWorkspaceNoGlobal(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRegistry(t, []map[string]any{
+		{"id": ws.ID, "root_path": proj, "kind": "git", "name": "proj",
+			"created_at": now.Format(time.RFC3339), "last_seen_at": now.Format(time.RFC3339)},
+	})
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	key := SessionKeyFor("test", "6")
+
+	// 未看列表：/dir 1 必须被拒绝。
+	reply, _ := HandleWorkdirCommand(m, key, "1")
+	if !strings.Contains(reply, "请先发 /dir") {
+		t.Fatalf("未看列表应禁止序号切换：%q", reply)
+	}
+	if cur := m.CurrentCwd(key); cur == proj {
+		t.Fatal("未看列表不应切换")
+	}
+	// 路径切换不受限。
+	reply, _ = HandleWorkdirCommand(m, key, proj)
+	if !strings.Contains(reply, "产出区已切换") {
+		t.Fatalf("路径切换不应受限：%q", reply)
+	}
+	// 看过列表后：序号可切换。
+	if reply, _ = HandleWorkdirCommand(m, key, ""); !strings.Contains(reply, "已注册工作区") {
+		t.Fatalf("应能查看列表：%q", reply)
+	}
+	reply, _ = HandleWorkdirCommand(m, key, "1")
+	if strings.Contains(reply, "请先发 /dir") {
+		t.Fatalf("看列表后序号不应再被拒绝：%q", reply)
+	}
+	if cur := m.CurrentCwd(key); cur != proj {
+		t.Fatalf("序号切换后 cwd=%q want %q", cur, proj)
 	}
 }
 
