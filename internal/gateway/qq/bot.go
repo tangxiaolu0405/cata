@@ -18,6 +18,7 @@ type Bot struct {
 	cfg      gateway.Config
 	api      *Client
 	sessions *gateway.SessionManager
+	binding  *gateway.AgentBinding
 	locks    *gateway.ProcessLock
 
 	mu           sync.Mutex
@@ -26,16 +27,22 @@ type Bot struct {
 	progressOnce map[string]bool // eventMsgID
 }
 
-// NewBot 创建 QQ bot（本地模式：拨本机 socket）。
+// NewBot 创建 QQ bot（本地模式：拨本机 socket，按绑定 agent 转发）。
 func NewBot(cfg gateway.Config) *Bot {
-	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
+	return NewBotWithBinding(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot), gateway.DefaultAgentBinding())
 }
 
 // NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入）。
 func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
+	return NewBotWithBinding(cfg, sessions, gateway.DefaultAgentBinding())
+}
+
+// NewBotWithBinding 使用显式会话管理器 + 绑定存储创建 bot。
+func NewBotWithBinding(cfg gateway.Config, sessions *gateway.SessionManager, binding *gateway.AgentBinding) *Bot {
 	return &Bot{
 		cfg:          cfg,
 		sessions:     sessions,
+		binding:      binding,
 		locks:        gateway.NewProcessLock(),
 		pendingExec:  make(map[string]chan bool),
 		pendingPick:  make(map[string]chan []string),
@@ -93,7 +100,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 		_ = b.reply(ctx, msg, "会话已清空。")
 		return
 	case strings.HasPrefix(text, "/dir"):
-		reply, _ := gateway.HandleWorkdirCommand(b.sessions, key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.binding, key, strings.TrimPrefix(text, "/dir"))
 		_ = b.reply(ctx, msg, reply)
 		ui.DefaultHub.Publish("qq", string(key), SessionIDFor(msg), msg.UserOpenID, "out", reply)
 		return
@@ -102,9 +109,9 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	unlock := b.locks.Lock(key)
 	defer unlock()
 
-	conn, err := b.sessions.Get(key)
+	conn, err := b.sessions.ConnForMessage(b.binding, key)
 	if err != nil {
-		_ = b.reply(ctx, msg, "工作区错误: "+err.Error())
+		_ = b.reply(ctx, msg, err.Error())
 		return
 	}
 	handler := &qqStreamHandler{bot: b, ctx: ctx, msg: msg}
@@ -159,11 +166,11 @@ func helpText() string {
 命令:
 /help — 本帮助
 /clear — 清空会话
-/dir — 列出工作区后用 /dir <序号> 切换（须先看列表；也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
+/dir — 首次先选要绑定的工作空间（agent），之后消息统一转发给它；/dir <序号或路径> 换绑；/dir reset 解绑
 
 说明:
-- 默认产出区: ~/.cata_worker/qq/c2c_<openid>/ 或 group_<openid>/
-- /dir ~/project 可切到任意存在目录（与 cata chat --dir 等价）
+- 消息按绑定转发到指定工作空间的 agent（QQ/TG 共用同一个绑定；不在线会自动拉起）
+- /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
 - 危险命令请回复 yes / no
 - 官方已逐步下线 WebSocket；连不上则本渠道不可用`)
 }

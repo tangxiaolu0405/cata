@@ -60,7 +60,8 @@ API：
 
 ## 产出区（worker 目录）
 
-gateway 发给 cata 的 `cwd` 固定布局：
+gateway 与 cata 之间按**绑定 agent（工作空间）**转发消息；会话的 `cwd` 即绑定
+agent 的工作空间根路径。未绑定前的默认 worker 布局：
 
 ```
 {CATA_WORKER_ROOT}/<channel>/<chat_id>/
@@ -72,26 +73,25 @@ gateway 发给 cata 的 `cwd` 固定布局：
 ~/.cata_worker/telegram/12345/
 ```
 
-- 每个渠道会话一个目录（文件工具、`run_command` 沙箱）
-- 脑子解析、`~/.cata/config.json`、evolve 规则与终端 chat **无差别**
+- 未绑定前：每个渠道会话一个 worker 目录（仅作兜底，不参与转发目标选择）
+- 绑定后：QQ/TG **任何渠道的消息统一转发到同一个 agent**，`cwd` = 该 agent 工作空间根
 
-### 会话内切换工作目录（Telegram / QQ）
+### 绑定 agent（Telegram / QQ 共用）
 
-渠道会话默认产出区是上面的 worker 目录；如需在**已使用过的项目目录**里工作，
-会话内直接发（与 `cata chat --dir <path>` 等价）：
+**第一次使用先绑定**：发 `/dir` 列出本机已注册工作区（agent），进入选择。
 
 ```
-/dir                    # 列出本机已注册工作区（最近使用排序）；**必须先发 /dir 看列表才能 /dir <序号>**
-/dir ~/stock            # 也可直接 /dir <路径>（~ 展开；必须是存在的目录）
-/dir reset              # 恢复默认 worker 产出区
+/dir                    # 查看/选择绑定的 agent（未绑定首次会引导；须先看列表才能 /dir <序号>）
+/dir 1                  # 绑定列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
+/dir ~/stock            # 也可直接绑定该路径所在工作区的 agent
+/dir reset              # 解绑（下次消息重新引导）
 ```
 
-- 切换即刻生效且**持久化**（`~/.cata/gateway_session_cwd.json`）：gateway 重启自动恢复，直到再次 `/dir` 或 `/dir reset`
-- 后续对话的工具、命令、文件操作与脑子格解析都以新目录为准
-- 目标目录对应工作区的 agent **不在线时自动拉起**（本地模式按工作区解析并 `EnsureAgent`，
-  切换完成即可直接对话；回复中会提示「已自动就绪」）；remote 模式保持拨默认云端 agent
-- 失败（目录不存在等）会明确报错，原产出区保持不变
-- `/help` 中同样列出
+- **转发模型**：gateway 不再维护 per-会话 worker 产出区，而是按绑定把一个渠道的
+  消息**转发给该 agent**；目标 agent 不在线（不在 supervisor）时自动拉起
+- **持久化**：绑定写入 `~/.cata/gateway_channel_agent.json`，**重启自动恢复**（内存只是缓存，
+  更换时先 save → 清缓存 → 从配置读取，严格按此顺序）
+- 更换绑定后续会话连接重建，历史按新 agent 转发；`/help` 中同样列出
 
 ## 发行档位（edition）
 

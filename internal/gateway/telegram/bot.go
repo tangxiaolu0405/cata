@@ -17,6 +17,7 @@ type Bot struct {
 	cfg      gateway.Config
 	tg       *Client
 	sessions *gateway.SessionManager
+	binding  *gateway.AgentBinding
 	locks    *gateway.ProcessLock
 
 	mu          sync.Mutex
@@ -24,18 +25,24 @@ type Bot struct {
 	pendingPick map[string]chan []string
 }
 
-// NewBot 创建 bot（本地模式：拨本机 socket）。
+// NewBot 创建 bot（本地模式：拨本机 socket，按绑定 agent 转发）。
 func NewBot(cfg gateway.Config) *Bot {
-	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
+	return NewBotWithBinding(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot), gateway.DefaultAgentBinding())
 }
 
 // NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入
 // 经隧道拨远端 agent 的 SessionManager）。
 func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
+	return NewBotWithBinding(cfg, sessions, gateway.DefaultAgentBinding())
+}
+
+// NewBotWithBinding 使用显式会话管理器 + 绑定存储创建 bot。
+func NewBotWithBinding(cfg gateway.Config, sessions *gateway.SessionManager, binding *gateway.AgentBinding) *Bot {
 	return &Bot{
 		cfg:         cfg,
 		tg:          NewClient(cfg.TelegramBotToken),
 		sessions:    sessions,
+		binding:     binding,
 		locks:       gateway.NewProcessLock(),
 		pendingExec: make(map[string]chan bool),
 		pendingPick: make(map[string]chan []string),
@@ -128,7 +135,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, helpText(), nil)
 		return
 	case strings.HasPrefix(text, "/dir"):
-		reply, _ := gateway.HandleWorkdirCommand(b.sessions, key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.binding, key, strings.TrimPrefix(text, "/dir"))
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, reply, nil)
 		ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", reply)
 		return
@@ -136,12 +143,9 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 
 	unlock := b.locks.Lock(key)
 	defer unlock()
-
-	_ = b.tg.SendChatAction(ctx, msg.Chat.ID, "typing")
-	conn, err := b.sessions.Get(key)
+	conn, err := b.sessions.ConnForMessage(b.binding, key)
 	if err != nil {
-		log.Printf("telegram: worker cwd error chat_id=%d: %v", msg.Chat.ID, err)
-		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, "工作区错误: "+err.Error(), nil)
+		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, err.Error(), nil)
 		return
 	}
 	handler := &tgStreamHandler{bot: b, ctx: ctx, chatID: msg.Chat.ID}
@@ -347,12 +351,12 @@ func helpText() string {
 /start — 欢迎
 /help — 本帮助
 /clear — 清空 cata 会话历史
-/dir — 列出工作区后用 /dir <序号> 切换（须先看列表；也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
+/dir — 首次先选要绑定的工作空间（agent），之后 QQ/TG 消息统一转发给它；/dir <序号或路径> 换绑；/dir reset 解绑
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket
-- 每个 Telegram chat 默认产出区: ~/.cata_worker/telegram/<chat_id>/
-- /dir ~/project 可切到任意存在目录（与 cata chat --dir 等价）
+- 消息按绑定转发到指定工作空间的 agent（QQ/TG 共用同一个绑定；不在线会自动拉起）
+- /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
 - 危险命令会弹出 Run/Cancel 按钮确认`)
 }
 

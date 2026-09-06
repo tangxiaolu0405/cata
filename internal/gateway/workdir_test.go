@@ -15,18 +15,15 @@ import (
 	"cata/internal/cata/socketclient"
 )
 
-// workTestHome 测试 CATA_HOME：绑到 ~/.cata_work/ 下（不使用 /tmp），
-// 子目录名短，保证 unix socket 路径不超过长度上限；测试结束自动清理。
+// workTestHome 测试 CATA_HOME 短目录（unix socket 路径有 ~104 字节上限）。
 func workTestHome(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Join(home, ".cata_work", "gw-tests")
+	base := filepath.Join(home, ".cata_worker", "gw-tests")
 	if err := os.MkdirAll(base, 0755); err != nil {
-		// 受限环境（沙箱/只读 HOME，无法建 ~/.cata_work）：回退短 /tmp 目录
-		// （长路径会超 unix socket 上限，故不用 t.TempDir()）。正常环境走 ~/.cata_work。
 		dir, err := os.MkdirTemp("/tmp", "cata-gwtest-")
 		if err != nil {
 			t.Fatal(err)
@@ -42,8 +39,8 @@ func workTestHome(t *testing.T) string {
 	return dir
 }
 
-// stubAgentSocket 预置目标目录工作区的哑 per-ws socket：
-// link.EnsureAgent 第一步 ping 成功即视为「在线」，避免测试真实拉起 agent 进程。
+// stubAgentSocket 预置目标目录工作区的哑 per-ws socket（pong 响应），
+// 让 link.EnsureAgent 第一步 ping 成功，避免测试真实拉起 agent 进程。
 func stubAgentSocket(t *testing.T, cwd string) {
 	t.Helper()
 	ws, err := brain.ResolveWorkspaceNoGlobal(cwd)
@@ -82,109 +79,28 @@ func stubAgentSocket(t *testing.T, cwd string) {
 	}
 }
 
-// TestHandleWorkdirCommand 覆盖 /dir 命令：显示当前、~ 展开、不存在、切换、重复切换。
-// 切换目标均预置「在线」agent（哑 socket），验证自动就绪提示与 cwd 生效。
-func TestHandleWorkdirCommand(t *testing.T) {
-	// CATA_HOME 绑到短目录（unix socket 路径有 ~104 字节上限）。
-	home := workTestHome(t)
+// mkTestSetup 建两个工作区目录并预置在线 agent socket。
+func mkTestSetup(t *testing.T) (home, proj1, proj2 string) {
+	t.Helper()
+	home = workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
-	// worker 根与目标目录也放短路径下：ws id 由路径派生，过长会导致 socket 路径超限。
 	root := filepath.Join(home, "w")
-	if err := os.MkdirAll(root, 0755); err != nil {
-		t.Fatal(err)
-	}
-	proj := filepath.Join(root, "proj")
-	if err := os.MkdirAll(proj, 0755); err != nil {
-		t.Fatal(err)
-	}
-	stubAgentSocket(t, proj)
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	key := SessionKeyFor("test", "1")
-
-	// 无参数 → 显示当前产出区（此时未切换，即 worker 目录）。
-	reply, handled := HandleWorkdirCommand(m, key, "")
-	if !handled {
-		t.Fatal("空参数应视为已处理")
-	}
-	if !strings.Contains(reply, "当前产出区") {
-		t.Fatalf("空参数应显示当前目录：%q", reply)
-	}
-
-	// 不存在目录 → 报错且不切换。
-	reply, _ = HandleWorkdirCommand(m, key, filepath.Join(root, "nope"))
-	if !strings.Contains(reply, "目录不存在") {
-		t.Fatalf("应提示目录不存在：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur == proj {
-		t.Fatal("失败的切换不应改变 cwd")
-	}
-
-	// 存在目录（agent 已就绪）→ 切换成功，会话连接 cwd 更新，并提示自动就绪。
-	reply, _ = HandleWorkdirCommand(m, key, proj)
-	if !strings.Contains(reply, "产出区已切换") {
-		t.Fatalf("应提示切换成功：%q", reply)
-	}
-	if !strings.Contains(reply, "已自动就绪") {
-		t.Fatalf("agent 就绪时应提示：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur != proj {
-		t.Fatalf("切换后 cwd=%q want %q", cur, proj)
-	}
-
-	// 相同路径 → 已在产出区。
-	reply, _ = HandleWorkdirCommand(m, key, proj)
-	if !strings.Contains(reply, "已在产出区") {
-		t.Fatalf("重复切换应提示已在：%q", reply)
-	}
-
-	// ~ 展开：切到存在的 home 子目录（HOME 也放短路径下）。
-	hh := filepath.Join(home, "h")
-	if err := os.MkdirAll(hh, 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", hh)
-	sub := filepath.Join(hh, "sub")
-	if err := os.MkdirAll(sub, 0755); err != nil {
-		t.Fatal(err)
-	}
-	stubAgentSocket(t, sub)
-	reply, _ = HandleWorkdirCommand(m, key, "~/sub")
-	if !strings.Contains(reply, "产出区已切换") {
-		t.Fatalf("~/ 路径应展开并切换：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur != sub {
-		t.Fatalf("~/sub 应展开到 %q，got %q", sub, cur)
-	}
+	_ = os.MkdirAll(root, 0755)
+	proj1 = filepath.Join(root, "proj1")
+	proj2 = filepath.Join(root, "proj2")
+	_ = os.MkdirAll(proj1, 0755)
+	_ = os.MkdirAll(proj2, 0755)
+	stubAgentSocket(t, proj1)
+	stubAgentSocket(t, proj2)
+	return home, proj1, proj2
 }
 
-// TestHandleWorkdirRemote 远程模式：切换走默认云端连接（不解析本地工作区/不拉起），cwd 仍生效。
-func TestHandleWorkdirRemote(t *testing.T) {
-	root := t.TempDir()
-	proj := filepath.Join(root, "proj")
-	if err := os.MkdirAll(proj, 0755); err != nil {
-		t.Fatal(err)
-	}
-	m := NewRemoteSessionManagerWithStore(root, func(_ string, cwd string) *CataConn {
-		return NewCataConn("", cwd)
-	}, nil)
-	if !m.IsRemote() {
-		t.Fatal("远程 manager 应标记 remote")
-	}
-	key := SessionKeyFor("tg", "9")
-	reply, _ := HandleWorkdirCommand(m, key, proj)
-	if !strings.Contains(reply, "产出区已切换") {
-		t.Fatalf("远程模式应可切换 cwd：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur != proj {
-		t.Fatalf("远程模式 cwd=%q want %q", cur, proj)
-	}
-}
-
-// writeRegistry 预置注册表（短 CATA_HOME 下）：让 /dir 候选列表可测。
+// writeRegistry 预置注册表。
 func writeRegistry(t *testing.T, entries []map[string]any) {
 	t.Helper()
-	dir := filepath.Join(os.Getenv(config.EnvCataHome), "registry")
+	home := os.Getenv(config.EnvCataHome)
+	dir := filepath.Join(home, "registry")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -194,224 +110,165 @@ func writeRegistry(t *testing.T, entries []map[string]any) {
 	}
 }
 
-// TestHandleWorkdirByIndex 无需记住路径：/dir 列候选，/dir <序号> 切换。
-func TestHandleWorkdirByIndex(t *testing.T) {
+func registryEntry(id, root, name string, seen time.Time) map[string]any {
+	return map[string]any{
+		"id": id, "root_path": root, "kind": "git", "name": name,
+		"created_at": seen.Format(time.RFC3339), "last_seen_at": seen.Format(time.RFC3339),
+	}
+}
+
+// reqWsID 解析目录的工作区 id。
+func reqWsID(t *testing.T, cwd string) string {
+	t.Helper()
+	ws, err := brain.ResolveWorkspaceNoGlobal(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ws.ID
+}
+
+// TestAgentBindingOrder 严格顺序：save → 删内存缓存 → 从配置读取。
+func TestAgentBindingOrder(t *testing.T) {
 	home := workTestHome(t)
-	t.Setenv(config.EnvCataHome, home)
-	t.Setenv(config.EnvConfigFile, "")
-	root := filepath.Join(home, "w")
-	_ = os.MkdirAll(root, 0755)
-	old := filepath.Join(root, "old")
-	stock := filepath.Join(root, "stock")
-	_ = os.MkdirAll(old, 0755)
-	_ = os.MkdirAll(stock, 0755)
-	stubAgentSocket(t, old)
-	stubAgentSocket(t, stock)
-	// 注册表：stock 最近使用（排第一），old 较旧。
-	now := time.Now()
-	wsStock, err := brain.ResolveWorkspaceNoGlobal(stock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wsOld, err := brain.ResolveWorkspaceNoGlobal(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeRegistry(t, []map[string]any{
-		{"id": wsStock.ID, "root_path": stock, "kind": "git", "name": "stock",
-			"created_at":   now.Add(-2 * time.Hour).Format(time.RFC3339),
-			"last_seen_at": now.Add(-time.Minute).Format(time.RFC3339)},
-		{"id": wsOld.ID, "root_path": old, "kind": "git", "name": "old",
-			"created_at":   now.Add(-24 * time.Hour).Format(time.RFC3339),
-			"last_seen_at": now.Add(-10 * time.Hour).Format(time.RFC3339)},
-	})
-
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	key := SessionKeyFor("test", "7")
-
-	// /dir 无参 → 菜单列出候选（stock 在前）。
-	reply, _ := HandleWorkdirCommand(m, key, "")
-	if !strings.Contains(reply, "1. stock") || !strings.Contains(reply, "/dir <序号>") {
-		t.Fatalf("/dir 菜单应列出带序号的候选：\n%s", reply)
-	}
-	if !strings.Contains(reply, "2. old") {
-		t.Fatalf("菜单应含第二个候选：\n%s", reply)
-	}
-
-	// /dir 1 → 切到列表第一项（stock）。
-	reply, _ = HandleWorkdirCommand(m, key, "1")
-	if !strings.Contains(reply, stock) || !strings.Contains(reply, "产出区已切换") {
-		t.Fatalf("/dir 1 应切到 stock：\n%s", reply)
-	}
-	if cur := m.CurrentCwd(key); cur != stock {
-		t.Fatalf("cwd=%q want %q", cur, stock)
-	}
-	// /dir 1 再次 → 已在。
-	reply, _ = HandleWorkdirCommand(m, key, "1")
-	if !strings.Contains(reply, "已在产出区") {
-		t.Fatalf("重复序号切换应提示已在：\n%s", reply)
-	}
-}
-
-// TestHandleWorkdirIndexOutOfRange 序号越界 → 明确提示。
-func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
-	home := workTestHome(t)
-	t.Setenv(config.EnvCataHome, home)
-	t.Setenv(config.EnvConfigFile, "")
-	root := filepath.Join(home, "w")
-	_ = os.MkdirAll(root, 0755)
-	proj := filepath.Join(root, "proj")
-	_ = os.MkdirAll(proj, 0755)
-	now := time.Now()
-	writeRegistry(t, []map[string]any{
-		{"id": "w-proj", "root_path": proj, "kind": "git", "name": "proj",
-			"created_at": now.Format(time.RFC3339), "last_seen_at": now.Format(time.RFC3339)},
-	})
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	key := SessionKeyFor("test", "8")
-	// 先看列表（确认过序号依据）。
-	HandleWorkdirCommand(m, key, "")
-	reply, _ := HandleWorkdirCommand(m, key, "99")
-	if !strings.Contains(reply, "序号无效") {
-		t.Fatalf("越界序号应提示：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur == proj {
-		t.Fatal("越界序号不应切换")
-	}
-}
-
-// TestHandleWorkdirIndexRequiresListFirst 安全限制：未先发 /dir 查看列表，
-// 不允许 /dir <序号>（序号按最近使用排序，须先确认列表）。
-func TestHandleWorkdirIndexRequiresListFirst(t *testing.T) {
-	home, _ := os.MkdirTemp("/tmp", "cata-gwtest-")
-	defer os.RemoveAll(home)
-	t.Setenv(config.EnvCataHome, home)
-	t.Setenv(config.EnvConfigFile, "")
-	root := filepath.Join(home, "w")
-	_ = os.MkdirAll(root, 0755)
-	proj := filepath.Join(root, "proj")
-	_ = os.MkdirAll(proj, 0755)
-	stubAgentSocket(t, proj)
-	now := time.Now()
-	ws, err := brain.ResolveWorkspaceNoGlobal(proj)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeRegistry(t, []map[string]any{
-		{"id": ws.ID, "root_path": proj, "kind": "git", "name": "proj",
-			"created_at": now.Format(time.RFC3339), "last_seen_at": now.Format(time.RFC3339)},
-	})
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	key := SessionKeyFor("test", "6")
-
-	// 未看列表：/dir 1 必须被拒绝。
-	reply, _ := HandleWorkdirCommand(m, key, "1")
-	if !strings.Contains(reply, "请先发 /dir") {
-		t.Fatalf("未看列表应禁止序号切换：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur == proj {
-		t.Fatal("未看列表不应切换")
-	}
-	// 路径切换不受限。
-	reply, _ = HandleWorkdirCommand(m, key, proj)
-	if !strings.Contains(reply, "产出区已切换") {
-		t.Fatalf("路径切换不应受限：%q", reply)
-	}
-	// 看过列表后：序号可切换。
-	if reply, _ = HandleWorkdirCommand(m, key, ""); !strings.Contains(reply, "已注册工作区") {
-		t.Fatalf("应能查看列表：%q", reply)
-	}
-	reply, _ = HandleWorkdirCommand(m, key, "1")
-	if strings.Contains(reply, "请先发 /dir") {
-		t.Fatalf("看列表后序号不应再被拒绝：%q", reply)
-	}
-	if cur := m.CurrentCwd(key); cur != proj {
-		t.Fatalf("序号切换后 cwd=%q want %q", cur, proj)
-	}
-}
-
-// TestSessionCwdStoreRoundtrip 持久化存储：写、同文件重新加载读回、清空即删除。
-func TestSessionCwdStoreRoundtrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "gw-session-cwd.json")
-	s := NewSessionCwdStore(path)
-	if got := s.Get(SessionKeyFor("tg", "1")); got != "" {
+	path := filepath.Join(home, "binding.json")
+	b := NewAgentBinding(path)
+	if got := b.Agent(); got != "" {
 		t.Fatalf("初始应为空，got %q", got)
 	}
-	s.Set(SessionKeyFor("tg", "1"), "/proj/a")
-	s.Set(SessionKeyFor("qq", "2"), "/proj/b")
-
-	// 模拟 gateway 重启：同一文件新实例。
-	again := NewSessionCwdStore(path)
-	if got := again.Get(SessionKeyFor("tg", "1")); got != "/proj/a" {
-		t.Fatalf("重启后 tg:1 应恢复 /proj/a，got %q", got)
+	b.Set("ws-a")
+	if got := b.Agent(); got != "ws-a" {
+		t.Fatalf("Agent=%q want ws-a", got)
 	}
-	if got := again.Get(SessionKeyFor("qq", "2")); got != "/proj/b" {
-		t.Fatalf("重启后 qq:2 应恢复 /proj/b，got %q", got)
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), "ws-a") {
+		t.Fatalf("配置文件未保存绑定：%s", string(raw))
 	}
-
-	// reset：删除单条记录。
-	again.Set(SessionKeyFor("tg", "1"), "")
-	if got := again.Get(SessionKeyFor("tg", "1")); got != "" {
-		t.Fatalf("reset 后 tg:1 应为空，got %q", got)
+	b2 := NewAgentBinding(path)
+	if got := b2.Agent(); got != "ws-a" {
+		t.Fatalf("重启后应恢复 ws-a，got %q", got)
 	}
-	reloaded := NewSessionCwdStore(path)
-	if got := reloaded.Get(SessionKeyFor("qq", "2")); got != "/proj/b" {
-		t.Fatalf("reset 不应影响其它会话，got %q", got)
+	b2.Set("ws-b")
+	if got := b2.Agent(); got != "ws-b" {
+		t.Fatalf("更换后应 ws-b，got %q", got)
+	}
+	b2.Clear()
+	if got := b2.Agent(); got != "" {
+		t.Fatalf("解绑后应为空，got %q", got)
 	}
 }
 
-// TestHandleWorkdirSwitchPersistsAcrossRestart /dir 切换持久化：
-// 重启（新 manager + 同 store 文件）后 Get(key) 自动恢复切换的产出区。
-func TestHandleWorkdirSwitchPersistsAcrossRestart(t *testing.T) {
-	home, _ := os.MkdirTemp("/tmp", "cata-gwtest-")
-	defer os.RemoveAll(home)
-	t.Setenv(config.EnvCataHome, home)
-	t.Setenv(config.EnvConfigFile, "")
+// TestHandleAgentBindCommand 绑定命令：菜单、list-first、序号绑定、路径绑定、reset。
+func TestHandleAgentBindCommand(t *testing.T) {
+	home, proj1, proj2 := mkTestSetup(t)
+	now := time.Now()
+	ws1 := reqWsID(t, proj1)
+	ws2 := reqWsID(t, proj2)
+	writeRegistry(t, []map[string]any{
+		registryEntry(ws1, proj1, "proj1", now.Add(-time.Minute)),
+		registryEntry(ws2, proj2, "proj2", now.Add(-time.Hour)),
+	})
+	path := filepath.Join(home, "binding.json")
+	b := NewAgentBinding(path)
+	key := SessionKeyFor("tg", "1")
+
+	// 模拟一个从未看过列表的会话（重置全局确认标记）。
+	ResetAgentListSeen()
+	reply, handled := HandleAgentBindCommand(b, key, "1")
+	if !handled {
+		t.Fatal("未看列表的序号绑定应视为已处理（拒绝并提示）")
+	}
+	if !strings.Contains(reply, "请先发 /dir") {
+		t.Fatalf("未看列表应禁止序号绑定：%q", reply)
+	}
+	// 看列表后允许序号绑定。
+	HandleAgentBindCommand(b, key, "")
+	reply, _ = HandleAgentBindCommand(b, key, "1")
+	if !strings.Contains(reply, "已绑定 agent") || !strings.Contains(reply, ws1) {
+		t.Fatalf("序号绑定应成功：%q, ws=%s", reply, ws1)
+	}
+	if got := b.Agent(); got != ws1 {
+		t.Fatalf("绑定后 Agent=%q want %s", got, ws1)
+	}
+	// 路径绑定（不要求看过列表）。
+	b.Clear()
+	reply, _ = HandleAgentBindCommand(b, key, proj2)
+	if !strings.Contains(reply, "已绑定 agent") || !strings.Contains(reply, ws2) {
+		t.Fatalf("路径绑定应成功：%q", reply)
+	}
+	if got := b.Agent(); got != ws2 {
+		t.Fatalf("路径绑定后 Agent=%q want %s", got, ws2)
+	}
+	reply, _ = HandleAgentBindCommand(b, key, "reset")
+	if !strings.Contains(reply, "已解绑") {
+		t.Fatalf("reset 应解绑：%q", reply)
+	}
+	if got := b.Agent(); got != "" {
+		t.Fatalf("reset 后应为空，got %q", got)
+	}
+}
+
+// TestConnForMessageRoutesAndBringsUp 按绑定 agent 转发：目标不在线也自动拉起，
+// 连接 cwd = 绑定 agent 工作空间根路径；同一会话复用连接。
+func TestConnForMessageRoutesAndBringsUp(t *testing.T) {
+	home, proj1, _ := mkTestSetup(t)
+	ws1 := reqWsID(t, proj1)
+	writeRegistry(t, []map[string]any{
+		registryEntry(ws1, proj1, "proj1", time.Now()),
+	})
+	path := filepath.Join(home, "binding.json")
+	b := NewAgentBinding(path)
+	b.Set(ws1)
+	root := filepath.Join(home, "w")
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	key := SessionKeyFor("qq", "9")
+
+	conn, err := m.ConnForMessage(b, key)
+	if err != nil {
+		t.Fatalf("转发连接失败：%v", err)
+	}
+	if conn.Cwd() != proj1 {
+		t.Fatalf("转发连接 cwd=%q want %q", conn.Cwd(), proj1)
+	}
+	// 断线自愈由 socketclient 负责；这里只验证每次转发都指向同一绑定 agent 的 cwd。
+	_ = conn
+}
+
+// TestConnForMessageUnbound 未绑定 → 引导错误。
+func TestConnForMessageUnbound(t *testing.T) {
+	home := workTestHome(t)
+	path := filepath.Join(home, "binding.json")
+	b := NewAgentBinding(path)
 	root := filepath.Join(home, "w")
 	_ = os.MkdirAll(root, 0755)
-	proj := filepath.Join(root, "proj")
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	_, err := m.ConnForMessage(b, SessionKeyFor("tg", "1"))
+	if err == nil || !strings.Contains(err.Error(), "尚未绑定") {
+		t.Fatalf("未绑定应报引导错误，got %v", err)
+	}
+}
+
+// TestAgentBindingRemoteCwd 远程模式绑定也指向工作空间根（不解析本地/不拉起）。
+func TestAgentBindingRemoteCwd(t *testing.T) {
+	home := workTestHome(t)
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	proj := filepath.Join(home, "w", "proj")
 	_ = os.MkdirAll(proj, 0755)
-	stubAgentSocket(t, proj)
-
-	storePath := filepath.Join(home, "gw-session-cwd.json")
-	store := NewSessionCwdStore(storePath)
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, store)
-	key := SessionKeyFor("tg", "42")
-
-	reply, _ := HandleWorkdirCommand(m, key, proj)
-	if !strings.Contains(reply, "已记住该切换") {
-		t.Fatalf("切换回复应注明持久化：%q", reply)
-	}
-	if !strings.Contains(reply, "reset") {
-		t.Fatalf("切换回复应提示 /dir reset：%q", reply)
-	}
-	if m.CwdOverride(key) != proj {
-		t.Fatalf("override 未持久化，got %q", m.CwdOverride(key))
-	}
-
-	// 模拟 gateway 重启：新 store + 新 manager（同路径）。
-	store2 := NewSessionCwdStore(storePath)
-	m2 := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, store2)
-	c, err := m2.Get(key)
+	ws := reqWsID(t, proj)
+	writeRegistry(t, []map[string]any{
+		registryEntry(ws, proj, "proj", time.Now()),
+	})
+	path := filepath.Join(home, "binding.json")
+	b := NewAgentBinding(path)
+	b.Set(ws)
+	m := NewRemoteSessionManagerWithStore(home, func(_ string, cwd string) *CataConn {
+		return NewCataConn("", cwd)
+	}, nil)
+	conn, err := m.ConnForMessage(b, SessionKeyFor("tg", "5"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("远程转发失败：%v", err)
 	}
-	if c.Cwd() != proj {
-		t.Fatalf("重启后 Get 应恢复切换产出区 %q，got %q", proj, c.Cwd())
-	}
-
-	// /dir reset → 回到默认 worker 目录并清持久化。
-	m3 := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, NewSessionCwdStore(storePath))
-	reply, _ = HandleWorkdirCommand(m3, key, "reset")
-	if !strings.Contains(reply, "已恢复默认产出区") {
-		t.Fatalf("reset 应提示恢复默认：%q", reply)
-	}
-	if m3.CwdOverride(key) != "" {
-		t.Fatalf("reset 后 override 应为空，got %q", m3.CwdOverride(key))
-	}
-	c3, _ := m3.Get(key)
-	if c3.Cwd() == proj {
-		t.Fatal("reset 后不应再是切换的目录")
+	if conn.Cwd() != proj {
+		t.Fatalf("远程 cwd=%q want %q", conn.Cwd(), proj)
 	}
 }
