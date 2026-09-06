@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-// TestMigrateLegacyProvidersRegistersDefault 验证：
-//  1. llm_* extras 迁移为 providers；
-//  2. llm 主条目登记为 default provider；
-//  3. active 补位为 default（当前激活态）；
-//  4. 迁移后 llm_* extras 不再写盘（一次迁移）。
+// 1. llm_* extras 迁移为 providers；
+// 2. llm 主条目登记为 default provider；
+// 3. active 补位为 default（当前激活态）；
+// 4. api_url 归一化：完整 /chat/completions 尾缀落盘剥到 base（/v1 截止）；
+// 5. 迁移后 llm_* extras 不再写盘（一次迁移）。
 func TestMigrateLegacyProvidersRegistersDefault(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(EnvCataHome, dir)
@@ -54,8 +54,14 @@ func TestMigrateLegacyProvidersRegistersDefault(t *testing.T) {
 	if providers.Active != "default" {
 		t.Fatalf("active=%q want default", providers.Active)
 	}
-	if got := providers.Providers["default"].APIURL; got != "https://opencode.ai/zen/go/v1/chat/completions" {
-		t.Fatalf("default api_url=%q", got)
+	if got := providers.Providers["default"].APIURL; got != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("default api_url=%q want normalized base (…/zen/go/v1)", got)
+	}
+	if got := providers.Providers["deepseek"].APIURL; got != "https://api.deepseek.com" {
+		t.Fatalf("deepseek api_url=%q want https://api.deepseek.com", got)
+	}
+	if got := providers.Providers["ljllm"].APIURL; got != "http://8.134.252.166:8000/v1" {
+		t.Fatalf("ljllm api_url=%q want http://8.134.252.166:8000/v1", got)
 	}
 
 	// 二次加载不再重复迁移（providers 数量不变，active 不变）。
@@ -137,5 +143,92 @@ func TestProviderProbeExpired(t *testing.T) {
 	old := time.Now().Add(-48 * time.Hour).Format(time.RFC3339)
 	if !ProviderProbeExpired(old, 24*time.Hour) {
 		t.Fatal("stale probe should be expired")
+	}
+}
+
+// TestNormalizeProviderURL 归一化表：带 /chat 尾缀 → 剥到 base（/v1 截止）。
+func TestNormalizeProviderURL(t *testing.T) {
+	cases := map[string]string{
+		"https://api.deepseek.com/chat/completions":       "https://api.deepseek.com",
+		"https://opencode.ai/zen/go/v1/chat/completions":  "https://opencode.ai/zen/go/v1",
+		"http://8.134.252.166:8000/v1/chat/completions":   "http://8.134.252.166:8000/v1",
+		"https://opencode.ai/zen/go/v1/chat/completions/": "https://opencode.ai/zen/go/v1",
+		"https://api.deepseek.com":                        "https://api.deepseek.com",
+		"https://opencode.ai/zen/go/v1":                   "https://opencode.ai/zen/go/v1",
+		"":                                                "",
+		"  http://127.0.0.1:8080/v1/chat/completions  ":   "http://127.0.0.1:8080/v1",
+	}
+	for in, want := range cases {
+		if got := NormalizeProviderURL(in); got != want {
+			t.Fatalf("NormalizeProviderURL(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// TestLoadLLMProvidersNormalizesAndPersists 已有 llm_providers 结构但带 /chat 尾缀：
+// 加载后内存与磁盘都归一化为 base，且二次加载不再变化（幂等）。
+func TestLoadLLMProvidersNormalizesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvCataHome, dir)
+	t.Setenv(EnvConfigFile, "")
+	path := filepath.Join(dir, DefaultAppConfigName)
+	initial := `{
+  "llm": {
+    "provider": "mock",
+    "api_url": "https://api.deepseek.com/chat/completions",
+    "model": "m1",
+    "enabled": true
+  },
+  "llm_providers": {
+    "active": "default",
+    "providers": {
+      "default": {
+        "name": "default",
+        "api_url": "https://api.deepseek.com/v1/chat/completions",
+        "model": "m1",
+        "enabled": true
+      },
+      "lj": {
+        "name": "lj",
+        "api_url": "http://8.134.252.166:8000/v1/chat/completions",
+        "enabled": true
+      },
+      "plain": {
+        "name": "plain",
+        "api_url": "https://plain.example.com/v1",
+        "enabled": true
+      }
+    }
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+	providers, err := LoadLLMProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := providers.Providers["default"].APIURL; got != "https://api.deepseek.com/v1" {
+		t.Fatalf("default api_url=%q", got)
+	}
+	if got := providers.Providers["lj"].APIURL; got != "http://8.134.252.166:8000/v1" {
+		t.Fatalf("lj api_url=%q", got)
+	}
+	if got := providers.Providers["plain"].APIURL; got != "https://plain.example.com/v1" {
+		t.Fatalf("plain api_url=%q (已归一化不应被改)", got)
+	}
+	// 磁盘也归一化。
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "chat/completions") {
+		t.Fatalf("磁盘仍含 chat/completions 尾缀:\n%s", string(raw))
+	}
+	// 幂等：二次加载 same。
+	again, err := LoadLLMProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameLLMProviders(again, providers) {
+		t.Fatalf("second load changed providers")
 	}
 }

@@ -55,6 +55,40 @@ type LLMProviders struct {
 	Providers map[string]LLMProvider `json:"providers"`
 }
 
+// NormalizeProviderURL 把完整 chat 端点归一化为 base（剥到 /v1 截止）：
+//
+//	…/v1/chat/completions → …/v1
+//	…/chat/completions    → …
+//
+// 已归一化的 URL 原样返回。探测 / 激活 / 落盘统一以 base 为准，
+// 避免「带 /chat 尾缀的配置导致取不到 /models」类问题。
+func NormalizeProviderURL(apiURL string) string {
+	s := strings.TrimSpace(apiURL)
+	s = strings.TrimRight(s, "/")
+	const suf = "/chat/completions"
+	if strings.HasSuffix(s, suf) {
+		// 只剥 /chat/completions：…/v1/chat/completions → …/v1（保留 /v1）。
+		return strings.TrimRight(strings.TrimSuffix(s, suf), "/")
+	}
+	return s
+}
+
+// normalizeProviderURLs 归一化所有 provider 的 api_url；返回是否发生改变。
+func normalizeProviderURLs(p *LLMProviders) bool {
+	if p == nil {
+		return false
+	}
+	changed := false
+	for name, prov := range p.Providers {
+		if norm := NormalizeProviderURL(prov.APIURL); norm != prov.APIURL {
+			prov.APIURL = norm
+			p.Providers[name] = prov
+			changed = true
+		}
+	}
+	return changed
+}
+
 // LoadLLMProviders 读取 llm_providers 顶层键（来自磁盘文档，含未知键解析）。
 // 同时迁移旧的 llm_<name> / llm_previous_qwen 备份条目为 provider（一次性）。
 func LoadLLMProviders() (*LLMProviders, error) {
@@ -64,15 +98,16 @@ func LoadLLMProviders() (*LLMProviders, error) {
 	}
 	// 优先读已知结构（AppConfig.LLMProviders）。
 	if cfg.LLMProviders != nil {
+		orig := *cfg.LLMProviders // 浅拷贝：比较迁移/归一化是否产生实质变化
 		// 迁移兜底：旧 llm_* extras 补充 + default（当前 llm 主条目）登记。
 		if p := migrateLegacyProviders(extras, cfg.LLMProviders, cfg.LLM); p != nil {
-			// 结构有实质变化（新增 provider / active 补位）才立即持久化。
-			if !sameLLMProviders(p, cfg.LLMProviders) {
-				cfg.LLMProviders = p
-				if err := persistLLMProviders(p); err != nil {
-					return nil, err
-				}
-				return p, nil
+			cfg.LLMProviders = p
+		}
+		// 统一归一化 api_url（含 /chat/completions 尾缀 → 剥到 base / /v1 截止）。
+		norm := normalizeProviderURLs(cfg.LLMProviders)
+		if norm || !sameLLMProviders(cfg.LLMProviders, &orig) {
+			if err := persistLLMProviders(cfg.LLMProviders); err != nil {
+				return nil, err
 			}
 		}
 		return cfg.LLMProviders, nil
@@ -82,6 +117,7 @@ func LoadLLMProviders() (*LLMProviders, error) {
 	if p == nil {
 		p = &LLMProviders{Providers: map[string]LLMProvider{}}
 	}
+	normalizeProviderURLs(p)
 	if err := persistLLMProviders(p); err != nil {
 		return nil, err
 	}
@@ -203,12 +239,14 @@ func SaveLLMProviders(p *LLMProviders) error {
 	return SaveAppConfigDocument(&cfg, extras)
 }
 
-// persistLLMProviders 迁移落盘：写回 llm_providers 已知键，并清除已并入的旧 llm_* extras。
+// persistLLMProviders 迁移/归一化落盘：写回 llm_providers 已知键，清除已并入的旧 llm_* extras，
+// 并把 llm 主条目 api_url 一并剥到 base（/v1 截止；运行时自动补全完整路径，见 api_url_resolved）。
 func persistLLMProviders(p *LLMProviders) error {
 	cfg, extras, _, err := LoadAppConfigDocument()
 	if err != nil {
 		return err
 	}
+	cfg.LLM.APIURL = NormalizeProviderURL(cfg.LLM.APIURL)
 	for k := range extras {
 		if strings.HasPrefix(k, "llm_") {
 			delete(extras, k) // 已并入 llm_providers，从文档移除（一次性迁移）

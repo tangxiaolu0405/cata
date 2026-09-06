@@ -129,15 +129,9 @@ func fetchModels(ctx context.Context, base, apiKey string) ([]string, error) {
 }
 
 // stripChatCompletionsPath 把完整 /chat/completions 端点归一化为 base
-// （保留协议/主机/路径前缀，去掉末尾 chat/completions）。
+// （与 config.NormalizeProviderURL 一致，落盘与探测同一口径）。
 func stripChatCompletionsPath(apiURL string) string {
-	s := strings.TrimRight(apiURL, "/")
-	for _, suffix := range []string{"/chat/completions", "/v1/chat/completions"} {
-		if strings.HasSuffix(s, suffix) {
-			return strings.TrimSuffix(s, suffix)
-		}
-	}
-	return s
+	return config.NormalizeProviderURL(apiURL)
 }
 
 // joinURL base + 子路径（base 可能已含 /v1）。
