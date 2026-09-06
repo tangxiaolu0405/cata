@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"cata/internal/cata/config"
 	"cata/internal/llm"
 )
@@ -226,5 +228,105 @@ func TestProviderProbeDoneFailureKeepsMenu(t *testing.T) {
 	}
 	if !strings.Contains(mm3.log, "failed") {
 		t.Fatalf("应提示探测失败：\n%s", mm3.log)
+	}
+}
+
+// TestModelCmdDirectMenu /model 直接在当前激活 provider 下出模型菜单（不经过供应商列表）。
+func TestModelCmdDirectMenu(t *testing.T) {
+	now := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	writeTestConfig(t, fmt.Sprintf(`{
+  "llm": {
+    "provider": "mock",
+    "api_url": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "vision-model",
+    "enabled": true
+  },
+  "llm_providers": {
+    "active": "default",
+    "providers": {
+      "default": {
+        "name": "default",
+        "api_url": "http://127.0.0.1:1/v1/chat/completions",
+        "model": "vision-model",
+        "enabled": true,
+        "probe": {
+          "models": ["text-model", "vision-model"],
+          "capabilities": {
+            "text-model": {"modalities": ["text"]},
+            "vision-model": {"modalities": ["text", "image"]}
+          },
+          "probed_at": "%s"
+        }
+      }
+    }
+  }
+}
+`, now))
+	m := newTestModel()
+	nm, cmd := m.handleModelCmd("")
+	if cmd != nil {
+		t.Fatalf("/model 已探测不应触发探测 cmd")
+	}
+	mm, ok := nm.(*model)
+	if !ok || mm.overlay == nil || mm.overlay.mode != overlayModel {
+		t.Fatalf("/model 应直接出 overlayModel 菜单，got overlay=%v", mm.overlay)
+	}
+	if len(mm.overlay.list.Items()) != 2 {
+		t.Fatalf("模型菜单项=%d 期望 2", len(mm.overlay.list.Items()))
+	}
+	// Esc → 直接关闭（不回供应商列表）。
+	nm2, _ := mm.updateOverlayKey(tea.KeyMsg{Type: tea.KeyEsc})
+	mm2, _ := nm2.(*model)
+	if mm2.overlay != nil {
+		t.Fatalf("/model 菜单 Esc 应直接关闭")
+	}
+}
+
+// TestModelCmdAutoProbesActive /model 时激活 provider 缺探测 → 后台自动补探（overlayModel + probing）。
+func TestModelCmdAutoProbesActive(t *testing.T) {
+	writeTestConfig(t, `{
+  "llm": {
+    "provider": "mock",
+    "api_url": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "m1",
+    "enabled": true
+  },
+  "llm_providers": {
+    "active": "default",
+    "providers": {
+      "default": {
+        "name": "default",
+        "api_url": "http://127.0.0.1:1/v1/chat/completions",
+        "model": "m1",
+        "enabled": true
+      }
+    }
+  }
+}
+`)
+	m := newTestModel()
+	nm, cmd := m.handleModelCmd("")
+	if cmd == nil {
+		t.Fatal("激活 provider 缺探测应触发后台探测 cmd")
+	}
+	mm, ok := nm.(*model)
+	if !ok || mm.overlay == nil || mm.overlay.mode != overlayModel || !mm.overlay.probing {
+		t.Fatalf("/model 缺探测应停留 overlayModel+probing")
+	}
+	// 探测成功 → 模型菜单（仍为 overlayModel，不回供应商列表）。
+	nm2, _ := mm.handleProviderProbeDone(providerProbeDoneMsg{
+		name: "default",
+		ok:   true,
+		rep: llm.ProbeReport{
+			Models: []string{"m1", "m2"},
+			Capabilities: map[string]config.ModelCapCfg{
+				"m1": {Modalities: []string{"text"}},
+				"m2": {Modalities: []string{"text", "image"}},
+			},
+		},
+	})
+	mm2, _ := nm2.(*model)
+	if mm2.overlay == nil || mm2.overlay.mode != overlayModel {
+		t.Fatalf("探测完成后应停留 /model 模型菜单（不回供应商列表）")
 	}
 }

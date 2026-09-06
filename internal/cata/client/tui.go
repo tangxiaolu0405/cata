@@ -52,6 +52,8 @@ const (
 	// overlayProvider: /provider 列表菜单；overlayProviderModel: 选中 provider 后的模型菜单。
 	overlayProvider
 	overlayProviderModel
+	// overlayModel: /model 直接在当前激活 provider 下选模型（Esc 直接关闭，不回供应商列表）。
+	overlayModel
 )
 
 type overlayState struct {
@@ -605,6 +607,11 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// 模型菜单 Esc → 返回 provider 列表（探测中则先关闭，结果将打印到主区）。
 			return m.openProviderPicker()
 		}
+		if m.overlay.mode == overlayModel {
+			// /model 模型菜单 Esc → 直接关闭。
+			m.overlay = nil
+			return m, nil
+		}
 		if m.streaming && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice) {
 			m.dismissOverlayWithCancel()
 			return m, waitStream(m.sess)
@@ -645,7 +652,7 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openSubagentView(it.id)
 		case overlayProvider:
 			return m.enterProviderPick()
-		case overlayProviderModel:
+		case overlayProviderModel, overlayModel:
 			return m.enterProviderModelPick()
 		}
 	}
@@ -794,7 +801,7 @@ func (m *model) View() string {
 	if m.overlay != nil {
 		overlay := m.renderSubagentOverlay()
 		if overlay == "" && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice || m.overlay.mode == overlaySubagentPick ||
-			m.overlay.mode == overlayProvider || m.overlay.mode == overlayProviderModel) {
+			m.overlay.mode == overlayProvider || m.overlay.mode == overlayProviderModel || m.overlay.mode == overlayModel) {
 			overlay = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("205")).

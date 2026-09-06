@@ -126,12 +126,67 @@ func (m *model) enterProviderPick() (tea.Model, tea.Cmd) {
 		m.appendLog(styleDim.Render(fmt.Sprintf("auto-probing %s (%s)…\n", name, prov.APIURL)), true)
 		return m, probeProviderCmd(name)
 	}
-	return m.openProviderModelMenu(name, prov.Probe.Models, prov.Probe.Capabilities, prov.Model)
+	return m.openProviderModelMenu(name, prov.Probe.Models, prov.Probe.Capabilities, prov.Model, true)
+}
+
+// handleModelCmd TUI /model 命令：在当前激活 provider 下选项式切换模型。
+//
+//	/model             列出当前激活 provider 的探测模型，选中即切换（缺探测自动后台补探）
+//	/model <name>      文本快捷直接切换（兼容）
+func (m *model) handleModelCmd(args string) (tea.Model, tea.Cmd) {
+	if model := strings.TrimSpace(args); model != "" && !strings.HasPrefix(model, "-") {
+		// 文本快捷：参照当前激活 provider 直接切（先确定名字）。
+		name := m.activeProviderName()
+		if name == "" {
+			m.appendLog(styleErr.Render("! no active provider — use /provider first\n"), true)
+			return m, nil
+		}
+		m.providerSwitchNow(name, model)
+		return m, nil
+	}
+	name := m.activeProviderName()
+	if name == "" {
+		m.appendLog(styleErr.Render("! no active provider — use /provider first\n"), true)
+		return m, nil
+	}
+	providers, err := config.LoadLLMProviders()
+	if err != nil {
+		m.appendLog(styleErr.Render("! "+err.Error()+"\n"), true)
+		return m, nil
+	}
+	prov, ok := providers.Providers[name]
+	if !ok {
+		m.appendLog(styleErr.Render(fmt.Sprintf("! provider %q not found\n", name)), true)
+		return m, nil
+	}
+	if config.ProviderProbeExpired(prov.Probe.ProbedAt, 0) || prov.Probe.ProbedError != "" {
+		// 激活态 provider 缺探测 → 后台自动补探，完成后出模型菜单。
+		m.overlay = &overlayState{mode: overlayModel, providerName: name, probing: true}
+		m.appendLog(styleDim.Render(fmt.Sprintf("auto-probing %s (%s)…\n", name, prov.APIURL)), true)
+		return m, probeProviderCmd(name)
+	}
+	return m.openProviderModelMenu(name, prov.Probe.Models, prov.Probe.Capabilities, prov.Model, false)
+}
+
+// activeProviderName 当前激活 provider 名（llm_providers.active；未设时用 default）。
+func (m *model) activeProviderName() string {
+	providers, err := config.LoadLLMProviders()
+	if err != nil {
+		return ""
+	}
+	if providers.Active != "" {
+		return providers.Active
+	}
+	if _, ok := providers.Providers["default"]; ok {
+		return "default"
+	}
+	return ""
 }
 
 // openProviderModelMenu 进入模型选择菜单（探测结果；● = provider 当前主模型）。
 // 模型清单/能力由调用方直接传入：探测刚完成时写盘可能有竞态，内存结果更准。
-func (m *model) openProviderModelMenu(name string, models []string, caps map[string]config.ModelCapCfg, current string) (tea.Model, tea.Cmd) {
+// fromPicker=true → 来自 /provider 流程，Esc 返回供应商列表；false → 来自 /model，Esc 直接关闭。
+func (m *model) openProviderModelMenu(name string, models []string, caps map[string]config.ModelCapCfg, current string, fromPicker bool) (tea.Model, tea.Cmd) {
 	if len(models) == 0 {
 		// 无探测结果：直接按 provider 默认模型切换（server 端会再自动补探）。
 		m.providerSwitchNow(name, current)
@@ -156,9 +211,17 @@ func (m *model) openProviderModelMenu(name string, models []string, caps map[str
 	}
 	l := list.New(items, list.NewDefaultDelegate(), 64, min(12, len(items)+2))
 	l.SetShowTitle(true)
-	l.Title = fmt.Sprintf("provider %s — pick model (● current · Enter switch · Esc back)", name)
+	if fromPicker {
+		l.Title = fmt.Sprintf("provider %s — pick model (● current · Enter switch · Esc back)", name)
+	} else {
+		l.Title = fmt.Sprintf("%s — pick model (● current · Enter switch · Esc cancel)", name)
+	}
 	l.SetFilteringEnabled(false)
-	m.overlay = &overlayState{mode: overlayProviderModel, list: l, providerName: name}
+	mode := overlayProviderModel
+	if !fromPicker {
+		mode = overlayModel
+	}
+	m.overlay = &overlayState{mode: mode, list: l, providerName: name}
 	return m, nil
 }
 
@@ -232,7 +295,7 @@ func probeProviderCmd(name string) tea.Cmd {
 //   - 菜单路径（overlay 还开着且对应此 provider）→ 出模型菜单
 //   - 文本路径 / 菜单已被 Esc 关闭 → 结果打主区
 func (m *model) handleProviderProbeDone(msg providerProbeDoneMsg) (tea.Model, tea.Cmd) {
-	if m.overlay != nil && m.overlay.mode == overlayProvider && m.overlay.providerName == msg.name {
+	if m.overlay != nil && (m.overlay.mode == overlayProvider || m.overlay.mode == overlayModel) && m.overlay.providerName == msg.name {
 		if !msg.ok {
 			m.appendLog(styleErr.Render(fmt.Sprintf("! probe %s failed; existing config kept\n", msg.name)), true)
 			m.overlay = nil
@@ -245,7 +308,7 @@ func (m *model) handleProviderProbeDone(msg providerProbeDoneMsg) (tea.Model, te
 				current = prov.Model
 			}
 		}
-		return m.openProviderModelMenu(msg.name, msg.rep.Models, msg.rep.Capabilities, current)
+		return m.openProviderModelMenu(msg.name, msg.rep.Models, msg.rep.Capabilities, current, m.overlay.mode == overlayProvider)
 	}
 	if !msg.ok {
 		m.appendLog(styleErr.Render(fmt.Sprintf("! probe %s failed; existing config kept\n", msg.name)), true)

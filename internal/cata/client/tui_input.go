@@ -154,6 +154,10 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(trimmed, "/provider") {
 		return m.handleProviderCmd(strings.TrimSpace(strings.TrimPrefix(trimmed, "/provider")))
 	}
+	// /model [name]：当前激活 provider 下选项式切换模型（/model <name> 为文本快捷）。
+	if strings.HasPrefix(trimmed, "/model") {
+		return m.handleModelCmd(strings.TrimSpace(strings.TrimPrefix(trimmed, "/model")))
+	}
 	if name, ok := matchSlash(trimmed); ok && !strings.Contains(trimmed, "\n") {
 		switch name {
 		case "exit", "quit", "q":
@@ -183,7 +187,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.setChatContent(true)
 			return m, nil
 		case "help":
-			m.appendLog("/provider /attach /clear /cls /exit /status /retry /config\n", true)
+			m.appendLog("/model /provider /attach /clear /cls /exit /status /retry /config\n", true)
 			return m, nil
 		case "status":
 			m.refreshRuntime()

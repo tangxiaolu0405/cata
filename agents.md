@@ -335,7 +335,7 @@ socket_chat history (user/assistant/tool only)
 
 **注意**：`reasoning_content` 只进 LLM history（tool 轮次 API 要求回传），默认**不发** `thinking` 事件；`--show-thinking` 时才实时下发。
 
-斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach` `/provider`（`/provider` 打开**选项式菜单**：选 provider → 自动探测 → 选模型；`/provider probe <name>`、`/provider switch <name> [model]` 文本快捷保留，见「LLM（多提供商）」）。
+斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach` `/provider` `/model`（`/provider` 打开**选项式菜单**：选 provider → 自动探测 → 选模型；`/model` 直接在当前激活 provider 下**选项式切模型**（`/model <name>` 文本快捷）；`/provider probe <name>`、`/provider switch <name> [model]` 文本快捷保留，见「LLM（多提供商）」）。
 
 **预留**（server 未发或未接）：无（`file_written` 与 `diff` 均已落地：写入工具成功时发
 `file_written{name,path,bytes,id,diff}`——unified diff 在 verbose 模式展示全文、auto 记入侧栏详情）。
