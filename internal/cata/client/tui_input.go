@@ -152,8 +152,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	}
 	// /provider [list|probe <name>|switch <name> [model]] 带子命令参数，同样提前拦截。
 	if strings.HasPrefix(trimmed, "/provider") {
-		m.handleProviderCmd(strings.TrimSpace(strings.TrimPrefix(trimmed, "/provider")))
-		return m, nil
+		return m.handleProviderCmd(strings.TrimSpace(strings.TrimPrefix(trimmed, "/provider")))
 	}
 	if name, ok := matchSlash(trimmed); ok && !strings.Contains(trimmed, "\n") {
 		switch name {

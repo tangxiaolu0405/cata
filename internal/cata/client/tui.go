@@ -49,6 +49,9 @@ const (
 	overlaySubagentPick
 	overlaySubagentView
 	overlayStatusView
+	// overlayProvider: /provider 列表菜单；overlayProviderModel: 选中 provider 后的模型菜单。
+	overlayProvider
+	overlayProviderModel
 )
 
 type overlayState struct {
@@ -60,6 +63,10 @@ type overlayState struct {
 	subagentID string
 	subagentVP viewport.Model
 	statusVP   viewport.Model
+	// providerName 当前 provider 菜单关联的注册名（探测返回 / 模型菜单用）。
+	providerName string
+	// probing 该 provider 正在后台自动探测（Enter 后等待 probeProviderCmd 结果）。
+	probing bool
 }
 
 type paneStats struct {
@@ -335,6 +342,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamTickMsg:
 		return m.handleStream(msg.ev)
 
+	case providerProbeDoneMsg:
+		return m.handleProviderProbeDone(msg)
+
 	case tea.MouseMsg:
 		if nm, cmd, handled := m.handleSidebarClick(msg); handled {
 			return nm, cmd
@@ -591,6 +601,10 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.overlay.mode == overlayProviderModel {
+			// 模型菜单 Esc → 返回 provider 列表（探测中则先关闭，结果将打印到主区）。
+			return m.openProviderPicker()
+		}
 		if m.streaming && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice) {
 			m.dismissOverlayWithCancel()
 			return m, waitStream(m.sess)
@@ -629,6 +643,10 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, waitStream(m.sess)
 		case overlaySubagentPick:
 			return m.openSubagentView(it.id)
+		case overlayProvider:
+			return m.enterProviderPick()
+		case overlayProviderModel:
+			return m.enterProviderModelPick()
 		}
 	}
 	if m.overlay.mode == overlaySubagentView || m.overlay.mode == overlayStatusView {
@@ -775,7 +793,8 @@ func (m *model) View() string {
 	foot := m.footerView()
 	if m.overlay != nil {
 		overlay := m.renderSubagentOverlay()
-		if overlay == "" && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice || m.overlay.mode == overlaySubagentPick) {
+		if overlay == "" && (m.overlay.mode == overlayConfirm || m.overlay.mode == overlayChoice || m.overlay.mode == overlaySubagentPick ||
+			m.overlay.mode == overlayProvider || m.overlay.mode == overlayProviderModel) {
 			overlay = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("205")).
