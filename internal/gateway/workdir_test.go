@@ -85,7 +85,7 @@ func stubAgentSocket(t *testing.T, cwd string) {
 // TestHandleWorkdirCommand 覆盖 /dir 命令：显示当前、~ 展开、不存在、切换、重复切换。
 // 切换目标均预置「在线」agent（哑 socket），验证自动就绪提示与 cwd 生效。
 func TestHandleWorkdirCommand(t *testing.T) {
-	// CATA_HOME 绑到 ~/.cata_work/ 下的短目录（unix socket 路径有 ~104 字节上限）。
+	// CATA_HOME 绑到短目录（unix socket 路径有 ~104 字节上限）。
 	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
@@ -99,7 +99,7 @@ func TestHandleWorkdirCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubAgentSocket(t, proj)
-	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("test", "1")
 
 	// 无参数 → 显示当前产出区（此时未切换，即 worker 目录）。
@@ -165,9 +165,9 @@ func TestHandleWorkdirRemote(t *testing.T) {
 	if err := os.MkdirAll(proj, 0755); err != nil {
 		t.Fatal(err)
 	}
-	m := NewRemoteSessionManager(root, func(_ string, cwd string) *CataConn {
+	m := NewRemoteSessionManagerWithStore(root, func(_ string, cwd string) *CataConn {
 		return NewCataConn("", cwd)
-	})
+	}, nil)
 	if !m.IsRemote() {
 		t.Fatal("远程 manager 应标记 remote")
 	}
@@ -226,7 +226,7 @@ func TestHandleWorkdirByIndex(t *testing.T) {
 			"last_seen_at": now.Add(-10 * time.Hour).Format(time.RFC3339)},
 	})
 
-	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("test", "7")
 
 	// /dir 无参 → 菜单列出候选（stock 在前）。
@@ -267,7 +267,7 @@ func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
 		{"id": "w-proj", "root_path": proj, "kind": "git", "name": "proj",
 			"created_at": now.Format(time.RFC3339), "last_seen_at": now.Format(time.RFC3339)},
 	})
-	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("test", "8")
 	reply, _ := HandleWorkdirCommand(m, key, "99")
 	if !strings.Contains(reply, "序号无效") {
@@ -275,5 +275,91 @@ func TestHandleWorkdirIndexOutOfRange(t *testing.T) {
 	}
 	if cur := m.CurrentCwd(key); cur == proj {
 		t.Fatal("越界序号不应切换")
+	}
+}
+
+// TestSessionCwdStoreRoundtrip 持久化存储：写、同文件重新加载读回、清空即删除。
+func TestSessionCwdStoreRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gw-session-cwd.json")
+	s := NewSessionCwdStore(path)
+	if got := s.Get(SessionKeyFor("tg", "1")); got != "" {
+		t.Fatalf("初始应为空，got %q", got)
+	}
+	s.Set(SessionKeyFor("tg", "1"), "/proj/a")
+	s.Set(SessionKeyFor("qq", "2"), "/proj/b")
+
+	// 模拟 gateway 重启：同一文件新实例。
+	again := NewSessionCwdStore(path)
+	if got := again.Get(SessionKeyFor("tg", "1")); got != "/proj/a" {
+		t.Fatalf("重启后 tg:1 应恢复 /proj/a，got %q", got)
+	}
+	if got := again.Get(SessionKeyFor("qq", "2")); got != "/proj/b" {
+		t.Fatalf("重启后 qq:2 应恢复 /proj/b，got %q", got)
+	}
+
+	// reset：删除单条记录。
+	again.Set(SessionKeyFor("tg", "1"), "")
+	if got := again.Get(SessionKeyFor("tg", "1")); got != "" {
+		t.Fatalf("reset 后 tg:1 应为空，got %q", got)
+	}
+	reloaded := NewSessionCwdStore(path)
+	if got := reloaded.Get(SessionKeyFor("qq", "2")); got != "/proj/b" {
+		t.Fatalf("reset 不应影响其它会话，got %q", got)
+	}
+}
+
+// TestHandleWorkdirSwitchPersistsAcrossRestart /dir 切换持久化：
+// 重启（新 manager + 同 store 文件）后 Get(key) 自动恢复切换的产出区。
+func TestHandleWorkdirSwitchPersistsAcrossRestart(t *testing.T) {
+	home, _ := os.MkdirTemp("/tmp", "cata-gwtest-")
+	defer os.RemoveAll(home)
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	_ = os.MkdirAll(root, 0755)
+	proj := filepath.Join(root, "proj")
+	_ = os.MkdirAll(proj, 0755)
+	stubAgentSocket(t, proj)
+
+	storePath := filepath.Join(home, "gw-session-cwd.json")
+	store := NewSessionCwdStore(storePath)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, store)
+	key := SessionKeyFor("tg", "42")
+
+	reply, _ := HandleWorkdirCommand(m, key, proj)
+	if !strings.Contains(reply, "已记住该切换") {
+		t.Fatalf("切换回复应注明持久化：%q", reply)
+	}
+	if !strings.Contains(reply, "reset") {
+		t.Fatalf("切换回复应提示 /dir reset：%q", reply)
+	}
+	if m.CwdOverride(key) != proj {
+		t.Fatalf("override 未持久化，got %q", m.CwdOverride(key))
+	}
+
+	// 模拟 gateway 重启：新 store + 新 manager（同路径）。
+	store2 := NewSessionCwdStore(storePath)
+	m2 := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, store2)
+	c, err := m2.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cwd() != proj {
+		t.Fatalf("重启后 Get 应恢复切换产出区 %q，got %q", proj, c.Cwd())
+	}
+
+	// /dir reset → 回到默认 worker 目录并清持久化。
+	m3 := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, NewSessionCwdStore(storePath))
+	reply, _ = HandleWorkdirCommand(m3, key, "reset")
+	if !strings.Contains(reply, "已恢复默认产出区") {
+		t.Fatalf("reset 应提示恢复默认：%q", reply)
+	}
+	if m3.CwdOverride(key) != "" {
+		t.Fatalf("reset 后 override 应为空，got %q", m3.CwdOverride(key))
+	}
+	c3, _ := m3.Get(key)
+	if c3.Cwd() == proj {
+		t.Fatal("reset 后不应再是切换的目录")
 	}
 }

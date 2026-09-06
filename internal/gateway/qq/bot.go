@@ -159,10 +159,10 @@ func helpText() string {
 命令:
 /help — 本帮助
 /clear — 清空会话
-/dir — 列出本机已注册工作区，/dir <序号> 一键切换（也可 /dir <路径>；agent 不在线会自动拉起）
+/dir — 列出本机已注册工作区，/dir <序号> 切换（也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
 
 说明:
-- 默认产出区: ~/.cata_work/qq/c2c_<openid>/ 或 group_<openid>/
+- 默认产出区: ~/.cata_worker/qq/c2c_<openid>/ 或 group_<openid>/
 - /dir ~/project 可切到任意存在目录（与 cata chat --dir 等价）
 - 危险命令请回复 yes / no
 - 官方已逐步下线 WebSocket；连不上则本渠道不可用`)

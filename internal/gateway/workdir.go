@@ -17,7 +17,9 @@ import (
 //   - arg 为空 → 列出当前产出区 + 本机已注册工作区候选（/dir <序号> 一键切换）
 //   - arg 为序号（1..N）→ 按候选列表切换（无需记住路径）
 //   - arg 为路径 → 直接切换（~ 展开，必须是存在的目录）
+//   - arg 为 reset → 恢复默认 worker 产出区
 //
+// 切换结果**持久化**（SessionCwdStore）：gateway 重启自动恢复，直到再次切换或 reset。
 // 切换后后续 chat 请求以新 cwd 发出、会话连接拨到该工作区的 per-ws agent
 // （即 QQ/TG 消息的「消费者」变成具体工作目录的 cata）。
 // 目标 agent「不在线」时本地模式自动拉起（link.EnsureAgent）。
@@ -25,7 +27,7 @@ import (
 func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) (string, bool) {
 	cur := sessions.CurrentCwd(key)
 	if cur == "" {
-		// 尚无会话：按默认 worker 目录建立会话（Get 回退到 worker cwd）。
+		// 尚无会话：建立会话（Get 优先持久化切换，否则默认 worker cwd）。
 		conn, err := sessions.Get(key)
 		if err != nil {
 			return "工作区错误: " + err.Error(), true
@@ -35,6 +37,18 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		return workdirMenu(cur), true
+	}
+	if strings.EqualFold(arg, "reset") {
+		// 清持久化 + 会话切回默认 worker 产出区。
+		cwd, err := WorkerCwdForSession(sessions.workerRoot, key)
+		if err != nil {
+			return "恢复默认失败: " + err.Error(), true
+		}
+		sessions.SetCwdOverride(key, "")
+		if _, err := sessions.GetWithCwd(key, cwd); err != nil {
+			return "恢复默认失败: " + err.Error(), true
+		}
+		return "已恢复默认产出区: " + cwd, true
 	}
 	// 序号选择：候选列表按最近使用排序，用户无需记住完整路径。
 	if n, err := strconv.Atoi(arg); err == nil && n >= 1 {
@@ -91,12 +105,14 @@ func HandleWorkdirCommand(sessions *SessionManager, key SessionKey, arg string) 
 			return "切换失败: " + err.Error(), true
 		}
 	}
+	// 持久化：重启后自动恢复该会话的产出区（直到再次切换或 /dir reset）。
+	sessions.SetCwdOverride(key, abs)
 	reply := "产出区已切换:\n" + cur + "\n→\n" + abs +
 		"\n\n接下来的对话在此目录工作（按 git / workspace.yaml 绑定脑子格）。"
 	if assured {
 		reply += "\n工作区 agent 已自动就绪（在线）。"
 	}
-	reply += "\n/clear 可清空本会话历史。"
+	reply += "\n（已记住该切换，重启后仍生效；/dir reset 可恢复默认产出区）"
 	return reply, true
 }
 

@@ -25,6 +25,8 @@ type SessionManager struct {
 	connFactory ConnFactory
 	// remote 远程模式（隧道拨远端 agent）：本地 per-ws 拉起/解析不适用。
 	remote bool
+	// cwdStore /dir 切换的持久化（重启恢复）；nil = 不持久化（测试用）。
+	cwdStore *SessionCwdStore
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
@@ -32,20 +34,32 @@ type SessionManager struct {
 
 // NewSessionManager 创建会话管理器（本地模式：拨本机 Unix socket）。
 func NewSessionManager(socketPath, workerRoot string) *SessionManager {
+	return NewSessionManagerWithStore(socketPath, workerRoot, DefaultSessionCwdStore())
+}
+
+// NewSessionManagerWithStore 指定持久化存储创建会话管理器（空 store = 不持久化）。
+func NewSessionManagerWithStore(socketPath, workerRoot string, store *SessionCwdStore) *SessionManager {
 	return &SessionManager{
 		socketPath:  socketPath,
 		workerRoot:  workerRoot,
 		connFactory: NewCataConn,
+		cwdStore:    store,
 		sessions:    make(map[SessionKey]*CataConn),
 	}
 }
 
 // NewRemoteSessionManager 创建会话管理器（remote 模式：经 connFactory 拨远端 agent）。
 func NewRemoteSessionManager(workerRoot string, connFactory ConnFactory) *SessionManager {
+	return NewRemoteSessionManagerWithStore(workerRoot, connFactory, DefaultSessionCwdStore())
+}
+
+// NewRemoteSessionManagerWithStore 指定持久化存储的 remote 会话管理器。
+func NewRemoteSessionManagerWithStore(workerRoot string, connFactory ConnFactory, store *SessionCwdStore) *SessionManager {
 	return &SessionManager{
 		workerRoot:  workerRoot,
 		connFactory: connFactory,
 		remote:      true,
+		cwdStore:    store,
 		sessions:    make(map[SessionKey]*CataConn),
 	}
 }
@@ -88,7 +102,7 @@ func defaultAgentTarget(cfg Config, reg *tunnel.Registry) (agentID, root string)
 
 // Get 获取或创建会话连接：
 //   - 已有会话（含 /dir 切换过产出区的连接）→ 直接复用，保留其 cwd
-//   - 未见过该会话 → 按默认 worker 目录建立
+//   - 未见过该会话 → 优先持久化的 /dir 切换（重启恢复），否则默认 worker 目录
 //
 // 断线由 socketclient 读写时自动重拨（dialFunc 重拨时重新 EnsureAgent）。
 // 注意：不要在这里回退 worker 目录——那会把 /dir 切换的连接覆盖成原路径。
@@ -99,11 +113,33 @@ func (m *SessionManager) Get(key SessionKey) (*CataConn, error) {
 	if ok {
 		return c, nil
 	}
-	cwd, err := WorkerCwdForSession(m.workerRoot, key)
-	if err != nil {
-		return nil, err
+	cwd := ""
+	if m.cwdStore != nil {
+		cwd = m.cwdStore.Get(key)
+	}
+	if cwd == "" {
+		var err error
+		cwd, err = WorkerCwdForSession(m.workerRoot, key)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return m.GetWithCwd(key, cwd)
+}
+
+// CwdOverride 该会话持久化的产出区（空 = 未切换）。
+func (m *SessionManager) CwdOverride(key SessionKey) string {
+	if m.cwdStore == nil {
+		return ""
+	}
+	return m.cwdStore.Get(key)
+}
+
+// SetCwdOverride 持久化该会话的产出区切换（空 = 恢复默认）。
+func (m *SessionManager) SetCwdOverride(key SessionKey, cwd string) {
+	if m.cwdStore != nil {
+		m.cwdStore.Set(key, cwd)
+	}
 }
 
 // CurrentCwd 返回该会话当前连接的产出区（无会话时返回 ""）。

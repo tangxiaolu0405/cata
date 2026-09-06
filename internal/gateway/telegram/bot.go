@@ -347,11 +347,11 @@ func helpText() string {
 /start — 欢迎
 /help — 本帮助
 /clear — 清空 cata 会话历史
-/dir — 列出本机已注册工作区，/dir <序号> 一键切换（也可 /dir <路径>；agent 不在线会自动拉起）
+/dir — 列出本机已注册工作区，/dir <序号> 切换（也可 /dir <路径>；切换会记住，重启仍生效；/dir reset 恢复默认）
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket
-- 每个 Telegram chat 默认产出区: ~/.cata_work/telegram/<chat_id>/
+- 每个 Telegram chat 默认产出区: ~/.cata_worker/telegram/<chat_id>/
 - /dir ~/project 可切到任意存在目录（与 cata chat --dir 等价）
 - 危险命令会弹出 Run/Cancel 按钮确认`)
 }

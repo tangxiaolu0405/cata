@@ -27,7 +27,7 @@ func TestSessionManagerDialerRouting(t *testing.T) {
 	}
 
 	// 无 connFactory 的 manager：dialer 必须被使用（否则 GetWithCwdDialer 会走 nil factory 报错）。
-	m := NewRemoteSessionManager("/tmp/w", nil)
+	m := NewRemoteSessionManagerWithStore("/tmp/w", nil, nil)
 
 	c1, err := m.GetWithCwdDialer("web:ws-a", "/proj/a", dialerFor("ws-a"))
 	if err != nil {
@@ -101,7 +101,7 @@ func TestGetReusesSwitchedCwd(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubAgentSocket(t, proj)
-	m := NewSessionManager(filepath.Join(root, "cata.sock"), root)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("test", "5")
 
 	c1, err := m.Get(key)
