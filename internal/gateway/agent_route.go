@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"fmt"
+	"log"
 
+	"cata/internal/cata/config"
 	"cata/internal/cata/link"
 )
 
@@ -22,10 +24,10 @@ func ReplyForWorkdir(binding *AgentBinding, channel string, key SessionKey, arg 
 //   - 该渠道未绑定 → 错误（引导用户先 /dir 选择）
 //   - 绑定但 agent 不在注册表 → 错误（引导重新绑定）
 //   - 本地模式 → DialLocalAgent 一键拉起绑定 agent 并拨其 per-ws socket
+//     （消息由该工作空间的 agent 接收处理，cwd = 其工作空间根路径）
 //   - remote 模式 → 回退默认代理连接
 //
-// 会话按 (渠道会话键) 复用一条连接（history per-连接），但 cwd 始终是绑定
-// agent 的工作空间根路径；更换绑定后连接重建、以新 agent 转发。
+// 会话按 (渠道会话键) 复用一条连接（history per-连接）；更换绑定后连接重建。
 func (sessions *SessionManager) ConnForMessage(binding *AgentBinding, channel string, key SessionKey) (*CataConn, error) {
 	agentID, root, ok := AgentBindingTarget(binding, channel)
 	if !ok {
@@ -35,12 +37,18 @@ func (sessions *SessionManager) ConnForMessage(binding *AgentBinding, channel st
 		return nil, fmt.Errorf("%s 渠道绑定 agent %q 不在工作区注册表 —— 请 /dir 重新选择", channel, binding.Agent(channel))
 	}
 	if sessions.IsRemote() {
-		// remote 模式：拨默认云端代理连接（绑定在部署侧由远端 agent 决定）。
+		log.Printf("channel %q sessions: remote -> default agent cwd=%s", channel, root)
 		return sessions.GetWithCwd(key, root)
 	}
-	// 本地模式：确保绑定 agent 在线（不在 supervisor 则拉起），把会话拨到它。
+	// 本地模式：确保绑定 agent 在线（不在 supervisor 则拉起），把会话拨到它的 per-ws socket。
 	if err := link.EnsureAgent(agentID); err != nil {
 		return nil, fmt.Errorf("拉起 agent %s 失败: %v", agentID, err)
 	}
-	return sessions.GetWithCwdDialer(key, root, DialLocalAgent(agentID))
+	conn, err := sessions.GetWithCwdDialer(key, root, DialLocalAgent(agentID))
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("channel %q sessions: forward -> agent=%s socket=%s cwd=%s",
+		channel, agentID, config.ResolvedAgentSocketPath(agentID), root)
+	return conn, nil
 }
