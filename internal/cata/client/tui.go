@@ -69,6 +69,9 @@ type overlayState struct {
 	providerName string
 	// probing 该 provider 正在后台自动探测（Enter 后等待 probeProviderCmd 结果）。
 	probing bool
+	// listReady 本 overlay 是否持有可用 list。探测中的占位 overlay 无 list，
+	// 按浏览键/Enter 时跳过 list.Update（零值 list 在 bubbles 会 panic）。
+	listReady bool
 }
 
 type paneStats struct {
@@ -551,7 +554,7 @@ func (m *model) startConfirmOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 	l := list.New(items, list.NewDefaultDelegate(), 40, 8)
 	l.SetShowTitle(false)
 	l.SetFilteringEnabled(false)
-	m.overlay = &overlayState{mode: overlayConfirm, list: l, confirmID: id}
+	m.overlay = &overlayState{mode: overlayConfirm, list: l, confirmID: id, listReady: true}
 	m.stats.state = "confirm run"
 	m.appendLog(styledLogLine(styleTool, "\n▸ "+title), true)
 	return m, nil
@@ -589,7 +592,7 @@ func (m *model) startChoiceOverlay(ev map[string]any) (tea.Model, tea.Cmd) {
 	l.SetShowTitle(true)
 	l.Title = prompt
 	l.SetFilteringEnabled(false)
-	m.overlay = &overlayState{mode: overlayChoice, list: l, choiceID: id, multi: multi}
+	m.overlay = &overlayState{mode: overlayChoice, list: l, choiceID: id, multi: multi, listReady: true}
 	return m, nil
 }
 
@@ -664,6 +667,11 @@ func (m *model) updateOverlayKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		*vp, cmd = vp.Update(key)
 		return m, cmd
+	}
+	// 探测进行中的占位 overlay 无 list：吞掉浏览/编辑键，避免零值 list.Update panic
+	// （bubbles 空 list 上按 ↑↓ 会访问 items 越界）。Esc/ctrl+c 已在上方分支正常退出。
+	if !m.overlay.listReady {
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.overlay.list, cmd = m.overlay.list.Update(key)

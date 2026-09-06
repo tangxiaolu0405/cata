@@ -330,3 +330,125 @@ func TestModelCmdAutoProbesActive(t *testing.T) {
 		t.Fatalf("探测完成后应停留 /model 模型菜单（不回供应商列表）")
 	}
 }
+
+// TestProbingOverlaySwallowsKeys 回归：探测中的占位 overlay 无 list，按浏览键不得 panic
+// （bubbles 空/零值 list 的 updateOverlayKey→list.Update 会越界崩溃），Esc 仍可退出。
+func TestProbingOverlaySwallowsKeys(t *testing.T) {
+	writeTestConfig(t, `{
+  "llm": {
+    "provider": "mock",
+    "api_url": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "m1",
+    "enabled": true
+  },
+  "llm_providers": {
+    "active": "default",
+    "providers": {
+      "default": {
+        "name": "default",
+        "api_url": "http://127.0.0.1:1/v1/chat/completions",
+        "model": "m1",
+        "enabled": true
+      }
+    }
+  }
+}
+`)
+	m := newTestModel()
+	nm, _ := m.handleModelCmd("")
+	mm, _ := nm.(*model)
+	if mm.overlay == nil || mm.overlay.listReady {
+		t.Fatalf("探测中 overlay 应存在且无 list")
+	}
+	// 浏览键 / 方向 / Enter 都不能让零值 list 崩溃。
+	for _, k := range []tea.KeyType{tea.KeyDown, tea.KeyUp, tea.KeyPgDown, tea.KeyEnter, tea.KeyRunes} {
+		nm2, _ := mm.updateOverlayKey(tea.KeyMsg{Type: k})
+		mm2, _ := nm2.(*model)
+		if mm2.overlay == nil || mm2.overlay.mode != overlayModel {
+			t.Fatalf("键 %v 不应关闭探测中 overlay", k)
+		}
+	}
+	// Esc 正常退出。
+	nm3, _ := mm.updateOverlayKey(tea.KeyMsg{Type: tea.KeyEsc})
+	mm3, _ := nm3.(*model)
+	if mm3.overlay != nil {
+		t.Fatalf("Esc 应关闭探测中 overlay")
+	}
+}
+
+// TestEmptyProbeModelsAutoProbes 回归：已探测但 models 为空（脏配置/网关空清单）
+// 不得创建空菜单（会被 list handleBrowsing 打崩），应自动补探。
+func TestEmptyProbeModelsAutoProbes(t *testing.T) {
+	now := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	writeTestConfig(t, fmt.Sprintf(`{
+  "llm": {
+    "provider": "mock",
+    "api_url": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "m1",
+    "enabled": true
+  },
+  "llm_providers": {
+    "active": "default",
+    "providers": {
+      "default": {
+        "name": "default",
+        "api_url": "http://127.0.0.1:1/v1/chat/completions",
+        "model": "m1",
+        "enabled": true,
+        "probe": {"models": [], "probed_at": "%s"}
+      }
+    }
+  }
+}
+`, now))
+	m := newTestModel()
+	nm, cmd := m.handleModelCmd("")
+	if cmd == nil {
+		t.Fatal("空模型清单应触发自动补探")
+	}
+	mm, _ := nm.(*model)
+	if mm.overlay == nil || mm.overlay.mode != overlayModel || !mm.overlay.probing {
+		t.Fatalf("空模型场景应进入 probing overlay，got %+v", mm.overlay)
+	}
+	// 探测中按浏览键不 panic。
+	nm2, _ := mm.updateOverlayKey(tea.KeyMsg{Type: tea.KeyDown})
+	mm2, _ := nm2.(*model)
+	if mm2.overlay == nil {
+		t.Fatalf("探测中 overlay 不应被浏览键关闭")
+	}
+}
+
+// TestProbeDoneNoModelsTerminates 回归：探测"成功"但网关返回空模型列表 → 终止流程报错，
+// 不进入空菜单、不无限重探、不覆盖既有配置。
+func TestProbeDoneNoModelsTerminates(t *testing.T) {
+	writeTestConfig(t, `{
+  "llm": {
+    "provider": "mock",
+    "api_url": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "m1",
+    "enabled": true
+  },
+  "llm_px": {"provider": "px", "api_url": "http://127.0.0.1:2/v1/chat/completions"}
+}
+`)
+	m := newTestModel()
+	nm, _ := m.handleProviderCmd("")
+	mm, _ := nm.(*model)
+	mm.overlay.list.Select(1)
+	nm2, cmd := mm.enterProviderPick()
+	mm2, _ := nm2.(*model)
+	if cmd == nil {
+		t.Fatal("期望探测 cmd")
+	}
+	nm3, cmd2 := mm2.handleProviderProbeDone(providerProbeDoneMsg{name: "px", ok: true, rep: llm.ProbeReport{}})
+	if cmd2 != nil {
+		t.Fatalf("无模型结果不应继续触发重探")
+	}
+	mm3, _ := nm3.(*model)
+	if mm3.overlay != nil {
+		t.Fatalf("无模型结果应关闭流程")
+	}
+	if !strings.Contains(mm3.log, "无可用模型") {
+		t.Fatalf("应提示无可用模型：\n%s", mm3.log)
+	}
+}

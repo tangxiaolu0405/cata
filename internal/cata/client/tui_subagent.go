@@ -295,7 +295,7 @@ func (m *model) openSubagentPicker() (tea.Model, tea.Cmd) {
 	l.SetShowTitle(true)
 	l.Title = "子 Agent（运行中）"
 	l.SetFilteringEnabled(false)
-	m.overlay = &overlayState{mode: overlaySubagentPick, list: l}
+	m.overlay = &overlayState{mode: overlaySubagentPick, list: l, listReady: true}
 	return m, nil
 }
 

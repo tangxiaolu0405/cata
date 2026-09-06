@@ -97,7 +97,7 @@ func (m *model) openProviderPicker() (tea.Model, tea.Cmd) {
 	l.SetShowTitle(true)
 	l.Title = "LLM providers (↑↓ select · Enter auto-probe & switch · Esc cancel)"
 	l.SetFilteringEnabled(false)
-	m.overlay = &overlayState{mode: overlayProvider, list: l}
+	m.overlay = &overlayState{mode: overlayProvider, list: l, listReady: true}
 	return m, nil
 }
 
@@ -188,10 +188,11 @@ func (m *model) activeProviderName() string {
 // fromPicker=true → 来自 /provider 流程，Esc 返回供应商列表；false → 来自 /model，Esc 直接关闭。
 func (m *model) openProviderModelMenu(name string, models []string, caps map[string]config.ModelCapCfg, current string, fromPicker bool) (tea.Model, tea.Cmd) {
 	if len(models) == 0 {
-		// 无探测结果：直接按 provider 默认模型切换（server 端会再自动补探）。
-		m.providerSwitchNow(name, current)
-		m.overlay = nil
-		return m, nil
+		// 已探测但无模型（脏配置/网关空清单）：不创建空菜单（bubbles 空 list 会 panic），
+		// 提示并自动补探；探测失败保持既有配置。探测中 overlay 无 list，Esc 可退出。
+		m.appendLog(styleDim.Render(fmt.Sprintf("%s 暂无探测模型 — 自动探测…\n", name)), true)
+		m.overlay = &overlayState{mode: overlayModel, providerName: name, probing: true}
+		return m, probeProviderCmd(name)
 	}
 	var items []list.Item
 	for _, mm := range models {
@@ -221,7 +222,7 @@ func (m *model) openProviderModelMenu(name string, models []string, caps map[str
 	if !fromPicker {
 		mode = overlayModel
 	}
-	m.overlay = &overlayState{mode: mode, list: l, providerName: name}
+	m.overlay = &overlayState{mode: mode, list: l, providerName: name, listReady: true}
 	return m, nil
 }
 
@@ -298,6 +299,12 @@ func (m *model) handleProviderProbeDone(msg providerProbeDoneMsg) (tea.Model, te
 	if m.overlay != nil && (m.overlay.mode == overlayProvider || m.overlay.mode == overlayModel) && m.overlay.providerName == msg.name {
 		if !msg.ok {
 			m.appendLog(styleErr.Render(fmt.Sprintf("! probe %s failed; existing config kept\n", msg.name)), true)
+			m.overlay = nil
+			return m, nil
+		}
+		if len(msg.rep.Models) == 0 {
+			// 网关返回空模型清单：保留既有配置，终止流程（不再自动重探，避免死循环）。
+			m.appendLog(styleErr.Render(fmt.Sprintf("! %s 探测无可用模型；existing config kept\n", msg.name)), true)
 			m.overlay = nil
 			return m, nil
 		}
