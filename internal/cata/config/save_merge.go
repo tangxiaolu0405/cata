@@ -25,7 +25,7 @@ func IsRedactedSecret(s string) bool {
 // AppConfigKnownTopKeys 是 AppConfig 会占用的顶层 JSON 键（保存时覆盖这些键，其余保留）。
 func AppConfigKnownTopKeys() []string {
 	return []string{
-		"brain", "llm", "server", "evolution", "exec",
+		"brain", "llm", "llm_providers", "server", "evolution", "exec",
 		"workspace_files", "subagent", "chat", "mcp", "schedules",
 	}
 }

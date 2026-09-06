@@ -150,6 +150,11 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(trimmed, "/attach") {
 		return m.handleAttachCmd(trimmed), nil
 	}
+	// /provider [list|probe <name>|switch <name> [model]] 带子命令参数，同样提前拦截。
+	if strings.HasPrefix(trimmed, "/provider") {
+		m.handleProviderCmd(strings.TrimSpace(strings.TrimPrefix(trimmed, "/provider")))
+		return m, nil
+	}
 	if name, ok := matchSlash(trimmed); ok && !strings.Contains(trimmed, "\n") {
 		switch name {
 		case "exit", "quit", "q":
@@ -179,7 +184,7 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.setChatContent(true)
 			return m, nil
 		case "help":
-			m.appendLog("/clear /cls /exit /status /retry /config\n", true)
+			m.appendLog("/provider /attach /clear /cls /exit /status /retry /config\n", true)
 			return m, nil
 		case "status":
 			m.refreshRuntime()

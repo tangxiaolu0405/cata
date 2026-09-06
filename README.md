@@ -134,6 +134,20 @@ cata chat ──Unix Socket──▶ cata agent (per-ws, ~/.cata/sockets/<ws_id>
 
 只配置 `llm.model` 时，所有 role（chat / evolution / worker）共用同一模型。`models` 可按 role 覆盖。
 
+### 多 LLM 提供商（自动探测）
+
+`config.json` 顶层 `llm_providers` 保存已注册提供商（连接定义 + 自动探测结果）。**能力是探测出来的，不是手写的**：
+
+```
+cata config provider list                      # 列出与探测状态（* = 当前激活）
+cata config provider probe <name>              # 自动探测：models 清单 + 逐模型能力（text/image）
+cata config provider switch <name> [model]     # 切换激活（缺探测自动补探；可指定模型）
+```
+
+- 启动时（`cata agent` / `cata server`），对缺探测/过期（24h）/上次失败的 provider **后台自动探测**并热应用能力表（不含手写则自动补 `chat_vision` 候选）；探测成功才覆盖，**失败保留既有配置**，只记 `probed_error`。
+- 旧 `llm_deepseek` / `llm_ljllm` / `llm_previous_qwen` 等顶层键会在首次读取时**一次性迁移**进 `llm_providers`（`default` = 当前 `llm` 主条目为激活态）。
+- TUI 内也可用 `/provider`（list / probe / switch，切换即热生效）。
+
 ## 目录
 
 ```

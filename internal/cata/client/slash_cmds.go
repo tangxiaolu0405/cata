@@ -9,6 +9,7 @@ type cmdDef struct {
 }
 
 var slashCommands = []cmdDef{
+	{Name: "provider", Desc: "LLM providers: /provider [list] | probe <name> | switch <name> [model]"},
 	{Name: "config", Desc: "show config path"},
 	{Name: "exit", Aliases: []string{"quit", "q"}, Desc: "exit cata"},
 	{Name: "clear", Aliases: []string{"reset"}, Desc: "reset chat session"},

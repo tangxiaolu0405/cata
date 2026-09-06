@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"cata/internal/cata/brain"
@@ -18,6 +21,7 @@ import (
 	"cata/internal/cata/server"
 	"cata/internal/cata/update"
 	"cata/internal/cata/version"
+	"cata/internal/llm"
 )
 
 func main() {
@@ -262,6 +266,10 @@ func runAgent(args []string) {
 	}
 	defer removeAgentPID(ws.ID)
 
+	// 启动自动探测：缺探测/过期的 provider 后台探测并热应用（不阻塞连接）。
+	// 探测失败保留既有配置；多进程由文件锁互斥。
+	go llm.AutoProbeStartup(true)
+
 	if withTunnel {
 		// 隧道是长连接（断线自动重连）：放后台 goroutine，主流程走 srv.Wait()。
 		// 进程退出（Stop/信号）时随进程结束；断线重连不影响 chat socket 服务。
@@ -320,6 +328,9 @@ func runServer(args []string) {
 	}
 	server.SetupProcessLogging(managed)
 
+	// 启动自动探测（agent 路径同样触发；server 进程下也跑一次）。
+	go llm.AutoProbeStartup(true)
+
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
 		os.Exit(1)
@@ -351,6 +362,8 @@ func handleConfigCommand(args []string) {
 			os.Exit(1)
 		}
 		handleConfigGet(args[1])
+	case "provider":
+		handleConfigProvider(args[1:])
 	case "keys":
 		handleConfigKeys()
 	case "edit":
@@ -360,6 +373,188 @@ func handleConfigCommand(args []string) {
 		printConfigUsage()
 		os.Exit(1)
 	}
+}
+
+// handleConfigProvider 多 LLM 提供商子命令：
+//
+//	cata config provider list               列出已注册 provider 与探测状态
+//	cata config provider probe <name>       自动探测该 provider（成功写回，失败保留旧配置）
+//	cata config provider switch <name> [model]  切换激活 provider（缺探测自动补探；可指定 model）
+func handleConfigProvider(args []string) {
+	if len(args) < 1 {
+		printProviderUsage()
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "list":
+		printProviderList()
+	case "probe":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: provider probe requires <name> (see list)")
+			os.Exit(1)
+		}
+		runProviderProbe(args[1])
+	case "switch":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: provider switch requires <name> (see list)")
+			os.Exit(1)
+		}
+		model := ""
+		if len(args) >= 3 {
+			model = args[2]
+		}
+		runProviderSwitch(args[1], model)
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unknown provider subcommand: %s\n", args[0])
+		printProviderUsage()
+		os.Exit(1)
+	}
+}
+
+func printProviderUsage() {
+	fmt.Println("LLM Provider Management")
+	fmt.Println()
+	fmt.Println("Usage: cata config provider <subcommand> [args]")
+	fmt.Println()
+	fmt.Println("Subcommands:")
+	fmt.Println("  list                     List registered providers and probe status")
+	fmt.Println("  probe <name>             Auto-probe a provider (success writes back; failure keeps config)")
+	fmt.Println("  switch <name> [model]    Activate a provider (auto-probes if missing), optionally pick model")
+	fmt.Println()
+	fmt.Println("Probing is automatic: capabilities are discovered, not hand-written.")
+}
+
+func printProviderList() {
+	providers, err := config.LoadLLMProviders()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading providers: %v\n", err)
+		os.Exit(1)
+	}
+	var names []string
+	for n := range providers.Providers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tACTIVE\tAPI_URL\tMODEL\tPROBE")
+	for _, n := range names {
+		prov := providers.Providers[n]
+		active := ""
+		if n == providers.Active {
+			active = "*"
+		}
+		probeState := "unprobed"
+		if prov.Probe.ProbedAt != "" {
+			if prov.Probe.ProbedError != "" {
+				probeState = "failed: " + truncate(prov.Probe.ProbedError, 40)
+			} else {
+				probeState = fmt.Sprintf("ok (%d models, %s)", len(prov.Probe.Models), shortTime(prov.Probe.ProbedAt))
+			}
+		}
+		model := prov.Model
+		if model == "" {
+			model = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", n, active, prov.APIURL, model, probeState)
+	}
+	_ = w.Flush()
+}
+
+func runProviderProbe(name string) {
+	providers, err := config.LoadLLMProviders()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading providers: %v\n", err)
+		os.Exit(1)
+	}
+	prov, ok := providers.Providers[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: provider %q not found (use `cata config provider list`)\n", name)
+		os.Exit(1)
+	}
+	fmt.Printf("Probing %s (%s)…\n", name, prov.APIURL)
+	rep, ok := llm.ProbeAndPersist(context.Background(), name, true)
+	if !ok {
+		// 失败不覆盖：读回最新 ProbedError 说明。
+		if again, err := config.LoadLLMProviders(); err == nil {
+			if pv, ok2 := again.Providers[name]; ok2 && pv.Probe.ProbedError != "" {
+				fmt.Fprintf(os.Stderr, "Probe failed; existing config kept: %s\n", pv.Probe.ProbedError)
+				os.Exit(1)
+			}
+		}
+		fmt.Fprintln(os.Stderr, "Probe failed; existing config kept.")
+		os.Exit(1)
+	}
+	fmt.Printf("OK: %d models probed\n", len(rep.Models))
+	for _, m := range rep.Models {
+		mods := ""
+		if c, ok := rep.Capabilities[m]; ok {
+			mods = strings.Join(c.Modalities, ",")
+		}
+		fmt.Printf("  %-40s [%s]\n", m, mods)
+	}
+}
+
+func runProviderSwitch(name, model string) {
+	// 缺探测/过期/上次失败 → 先自动补探（失败保留既有配置，能力表沿用旧值不覆盖）。
+	providers, err := config.LoadLLMProviders()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading providers: %v\n", err)
+		os.Exit(1)
+	}
+	prov, ok := providers.Providers[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: provider %q not found (use `cata config provider list`)\n", name)
+		os.Exit(1)
+	}
+	if config.ProviderProbeExpired(prov.Probe.ProbedAt, 0) || prov.Probe.ProbedError != "" {
+		fmt.Printf("Auto-probing %s (%s)…\n", name, prov.APIURL)
+		if _, ok := llm.ProbeAndPersist(context.Background(), name, true); ok {
+			fmt.Println("Probe OK.")
+		} else {
+			fmt.Println("Probe failed; switching with existing config (capabilities kept).")
+		}
+	}
+	// 可选指定模型：写入 provider 定义后激活。
+	if strings.TrimSpace(model) != "" {
+		if err := config.SetProviderModel(name, model); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if err := config.ActivateProvider(name); err != nil {
+		fmt.Fprintf(os.Stderr, "Error switching: %v\n", err)
+		os.Exit(1)
+	}
+	// 展示当前生效条目。
+	cfg, err := config.LoadConfig()
+	if err == nil {
+		fmt.Printf("Active provider: %s\n", name)
+		fmt.Printf("  model:      %s\n", cfg.LLM.Model)
+		fmt.Printf("  api_url:    %s\n", cfg.LLM.APIURL)
+		fmt.Printf("  api_format: %s\n", cfg.LLM.APIFormat)
+		if v := cfg.LLM.Models["chat_vision"]; v != "" {
+			fmt.Printf("  chat_vision: %s\n", v)
+		}
+		if len(cfg.LLM.Capabilities) > 0 {
+			fmt.Printf("  capabilities: %d model(s) probed\n", len(cfg.LLM.Capabilities))
+		}
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+func shortTime(rfc string) string {
+	ts, err := time.Parse(time.RFC3339, rfc)
+	if err != nil {
+		return rfc
+	}
+	return ts.Format("2006-01-02 15:04")
 }
 
 func printConfigUsage() {
@@ -372,11 +567,15 @@ func printConfigUsage() {
 	fmt.Println("  keys              List keys supported by get/set")
 	fmt.Println("  get <key>         Get a configuration value")
 	fmt.Println("  set <key> <value> Set a configuration value")
+	fmt.Println("  provider          Manage LLM providers (list/probe/switch)")
 	fmt.Println("  edit              Print config file path")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  cata config show")
 	fmt.Println("  cata config get mcp.tool_timeout_seconds")
+	fmt.Println("  cata config provider list")
+	fmt.Println("  cata config provider probe deepseek")
+	fmt.Println("  cata config provider switch deepseek")
 	fmt.Println("  cata config set llm.api_format openai   # or anthropic")
 	fmt.Println("  cata config set llm.provider deepseek   # label only")
 	fmt.Println("  cata config set mcp.tool_timeout_seconds 300")

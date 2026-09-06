@@ -30,6 +30,7 @@ var (
 type AppConfig struct {
 	Brain          BrainConfig          `json:"brain"`
 	LLM            LLMConfig            `json:"llm"`
+	LLMProviders   *LLMProviders        `json:"llm_providers,omitempty"`
 	Server         ServerConfig         `json:"server"`
 	Evolution      EvolutionConfig      `json:"evolution"`
 	Exec           ExecToolConfig       `json:"exec"`

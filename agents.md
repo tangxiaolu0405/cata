@@ -335,7 +335,7 @@ socket_chat history (user/assistant/tool only)
 
 **注意**：`reasoning_content` 只进 LLM history（tool 轮次 API 要求回传），默认**不发** `thinking` 事件；`--show-thinking` 时才实时下发。
 
-斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach`。
+斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach` `/provider`（`/provider [list]`、`/provider probe <name>`、`/provider switch <name> [model]`，见「LLM（多提供商）」）。
 
 **预留**（server 未发或未接）：无（`file_written` 与 `diff` 均已落地：写入工具成功时发
 `file_written{name,path,bytes,id,diff}`——unified diff 在 verbose 模式展示全文、auto 记入侧栏详情）。
@@ -516,7 +516,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 
 ---
 
-## LLM（DeepSeek）
+## LLM（多提供商，能力自动探测）
 
 - **provider**：`deepseek`（[OpenAI 兼容](https://api-docs.deepseek.com/zh-cn/)，代码走 `OpenAICompatAdapter`）
 - **默认**：`https://api.deepseek.com/chat/completions`，模型 `deepseek-v4-flash`（更强用 `deepseek-v4-pro`）
@@ -524,7 +524,14 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 - **`llm.thinking`**：`auto`（默认，有 tools 时 `disabled`，避免 tool 轮次 400）、`enabled`、`disabled`
 - 思考模式 + tool 调用时须回传 `reasoning_content`（已实现）；见 [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)
 - **仅 DeepSeek / MiMo 类网关**会下发非标准 `thinking` / `reasoning_content`；OpenAI、Gemini OpenAI 兼容层等通用端点不发这些字段，换模型只需改 `api_url` / `model` / `api_key`（`api_format=openai`）。`api_url` 可写 base；缺路径时运行时探测并记住（`~/.cata/api_url_resolved.json`）。
-- 原千问配置备份在 `~/.cata/config.json` → `llm_previous_qwen`（不参与加载）
+
+**多提供商注册表**（`config.json` 顶层 `llm_providers`，代码 `internal/cata/config/providers.go`）：
+
+- `providers.<name>` = 连接定义 + `probe` 结果（`models` 清单 + 各模型 `capabilities` + `probed_at` / `probed_error`）；`active` 指向当前激活。
+- **自动探测**（`internal/llm/probe.go`）：`GET {base}/models` 拿清单 → 逐模型最小探针判定 text/image。**成功才覆盖**（`SetProbeResult`）；失败保留既有配置、只记 `probed_error`（下次启动/切换视为需重探）。
+- **启动自动探测**：`cata agent` / `cata server` 后台对缺探测/过期(24h)/失败的 provider 探测；命中激活态（`default` = 当前 `llm` 主条目）时热应用 `capabilities`（自动补 `chat_vision` 候选），不覆盖用户显式 `api_url` / `model` / `api_key`。多进程由 `~/.cata/locks/provider-probe.lock` 互斥。
+- **切换**：`cata config provider list|probe|switch <name> [model]`；TUI `/provider`（同语义，switch 走 socket `provider_switch` → `ActivateProvider` + 重载全局 config，下一轮 chat 生效）。激活 = 把连接定义 + 探测能力写入 `llm` 主条目（LLM 加载路径只读 `llm.*`）。
+- 旧 `llm_deepseek` / `llm_ljllm` / `llm_previous_qwen` 顶层键首次读取**一次性迁移**进 `llm_providers`（`default` = 激活态），之后从文档移除。
 
 ---
 

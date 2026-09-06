@@ -374,6 +374,8 @@ func (ss *SocketServer) handleCommand(req Request) Response {
 	switch req.Command {
 	case "ping":
 		return Response{Success: true, Message: "pong"}
+	case "provider_switch":
+		return ss.handleProviderSwitch(req)
 	default:
 		return Response{
 			Success: false,
