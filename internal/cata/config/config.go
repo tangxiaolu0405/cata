@@ -830,3 +830,33 @@ func getDefaultModelForFormat(apiFormat string) string {
 		return "gpt-3.5-turbo"
 	}
 }
+
+// ResolvedLLMLabel 返回当前激活 LLM 的展示标签（"provider / model"）。
+// 供 gateway /status 等外部组件显示；未配置时返回空串。
+func ResolvedLLMLabel() string {
+	if Config != nil {
+		p := strings.TrimSpace(Config.LLM.Provider)
+		m := strings.TrimSpace(Config.LLM.Model)
+		switch {
+		case p != "" && m != "":
+			return p + " / " + m
+		case p != "":
+			return p
+		case m != "":
+			return m
+		}
+	}
+	// 未加载配置时按环境变量兜底（与 getDefaultProviderLabel 同源）。
+	p := strings.TrimSpace(os.Getenv("LLM_PROVIDER"))
+	if p == "" {
+		p = getDefaultProviderLabel()
+	}
+	m := strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	if m == "" {
+		m = getDefaultModelForFormat("")
+	}
+	if p != "" && m != "" {
+		return p + " / " + m
+	}
+	return p
+}

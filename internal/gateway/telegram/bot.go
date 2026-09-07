@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"cata/internal/gateway"
@@ -17,35 +17,24 @@ type Bot struct {
 	cfg      gateway.Config
 	tg       *Client
 	sessions *gateway.SessionManager
-	binding  *gateway.AgentBinding
 	locks    *gateway.ProcessLock
-
-	mu          sync.Mutex
-	pendingExec map[string]chan bool
-	pendingPick map[string]chan []string
+	pending  *gateway.PendingManager
 }
 
-// NewBot 创建 bot（本地模式：拨本机 socket，按绑定 agent 转发）。
+// NewBot 创建 bot（本地模式：拨本机 socket，按默认 agent 转发）。
 func NewBot(cfg gateway.Config) *Bot {
-	return NewBotWithBinding(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot), gateway.DefaultAgentBinding())
+	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
 }
 
 // NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入
 // 经隧道拨远端 agent 的 SessionManager）。
 func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
-	return NewBotWithBinding(cfg, sessions, gateway.DefaultAgentBinding())
-}
-
-// NewBotWithBinding 使用显式会话管理器 + 绑定存储创建 bot。
-func NewBotWithBinding(cfg gateway.Config, sessions *gateway.SessionManager, binding *gateway.AgentBinding) *Bot {
 	return &Bot{
-		cfg:         cfg,
-		tg:          NewClient(cfg.TelegramBotToken),
-		sessions:    sessions,
-		binding:     binding,
-		locks:       gateway.NewProcessLock(),
-		pendingExec: make(map[string]chan bool),
-		pendingPick: make(map[string]chan []string),
+		cfg:      cfg,
+		tg:       NewClient(cfg.TelegramBotToken),
+		sessions: sessions,
+		locks:    gateway.NewProcessLock(),
+		pending:  gateway.NewPendingManager(),
 	}
 }
 
@@ -95,8 +84,11 @@ func (b *Bot) Run(ctx context.Context) error {
 				go b.handleCallback(ctx, u.CallbackQuery)
 				continue
 			}
-			if u.Message != nil && u.Message.Text != "" {
-				go b.handleMessage(ctx, u.Message)
+			if u.Message != nil {
+				// 纯附件消息（无 caption）Text 为空，但 photo/document/voice 仍要处理。
+				if u.Message.Text != "" || len(u.Message.Photo) > 0 || u.Message.Document != nil || u.Message.Voice != nil {
+					go b.handleMessage(ctx, u.Message)
+				}
 			}
 		}
 	}
@@ -114,6 +106,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 	}
 
 	text := strings.TrimSpace(msg.Text)
+	// 附件消息：caption 作为文本（纯附件无 caption 时给默认提示）。
+	if text == "" && (len(msg.Photo) > 0 || msg.Document != nil || msg.Voice != nil) {
+		text = strings.TrimSpace(msg.Caption)
+		if text == "" {
+			text = "（附件消息，请查看）"
+		}
+	}
 	log.Printf("telegram: chat_id=%d user_id=%d text=%q", msg.Chat.ID, userID, truncLog(text, 120))
 	key := sessionKey(msg.Chat.ID)
 	ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "in", text)
@@ -134,8 +133,11 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 	case text == "/help":
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, helpText(), nil)
 		return
+	case text == "/status":
+		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, gateway.ChannelStatus(b.sessions, b.cfg, "telegram", key), nil)
+		return
 	case strings.HasPrefix(text, "/dir"):
-		reply := gateway.ReplyForWorkdir(b.binding, "telegram", key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.sessions, "telegram", key, strings.TrimPrefix(text, "/dir"))
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, reply, nil)
 		ui.DefaultHub.Publish("telegram", string(key), fmt.Sprintf("%d", msg.Chat.ID), fmt.Sprintf("%d", userID), "out", reply)
 		return
@@ -143,15 +145,22 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 
 	unlock := b.locks.Lock(key)
 	defer unlock()
-	conn, err := b.sessions.ConnForMessage(b.binding, "telegram", key)
+	conn, err := b.sessions.ConnForMessage(b.cfg, "telegram", key)
 	if err != nil {
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, err.Error(), nil)
 		return
 	}
 	handler := &tgStreamHandler{bot: b, ctx: ctx, chatID: msg.Chat.ID}
 
+	// 附件：photo/document/voice → 下载到 worker 产出区 → 作为附件传给 cata。
+	attachments, attErr := b.downloadAttachments(ctx, key, msg)
+	if attErr != nil {
+		log.Printf("telegram: attachment download error chat_id=%d: %v", msg.Chat.ID, attErr)
+		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, "⚠️ 附件下载失败: "+attErr.Error(), nil)
+	}
+
 	log.Printf("telegram: cata chat start chat_id=%d", msg.Chat.ID)
-	result, err := conn.Chat(ctx, text, handler)
+	result, err := conn.ChatAsWithAttachments(ctx, text, "", attachments, handler)
 	if err != nil {
 		log.Printf("telegram: cata chat error chat_id=%d: %v", msg.Chat.ID, err)
 		_, _ = b.tg.SendMessage(ctx, msg.Chat.ID, cataUnavailableHint(err), nil)
@@ -181,6 +190,52 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 	log.Printf("telegram: cata chat done chat_id=%d success=%v chars=%d", msg.Chat.ID, result.Success && result.ErrMsg == "", len(reply))
 }
 
+// downloadAttachments 把 Telegram 消息中的 photo/document/voice 下载到该会话的
+// worker 产出区，返回 cata AttachmentReq 列表（空 = 无附件）。
+// 下载目录 = {worker_root}/telegram/<chat_id>/，在 cata server 的产出区白名单内，
+// 无需额外配置 llm.attachment_dir。
+func (b *Bot) downloadAttachments(ctx context.Context, key gateway.SessionKey, msg *Message) ([]gateway.AttachmentReq, error) {
+	// 无附件直接返回。
+	if len(msg.Photo) == 0 && msg.Document == nil && msg.Voice == nil {
+		return nil, nil
+	}
+	cwd, err := gateway.WorkerCwdForSession(b.cfg.WorkerRoot, key)
+	if err != nil {
+		return nil, err
+	}
+	var reqs []gateway.AttachmentReq
+	// photo：取最大尺寸（数组最后一个）。
+	if len(msg.Photo) > 0 {
+		p := msg.Photo[len(msg.Photo)-1]
+		dest := filepath.Join(cwd, fmt.Sprintf("photo_%d_%s.jpg", msg.MessageID, p.FileID))
+		if _, err := b.tg.DownloadFile(ctx, p.FileID, dest); err != nil {
+			return nil, fmt.Errorf("photo: %w", err)
+		}
+		reqs = append(reqs, gateway.AttachmentReq{Path: dest})
+	}
+	// document：文件名优先，含扩展名。
+	if msg.Document != nil {
+		name := msg.Document.FileName
+		if name == "" {
+			name = fmt.Sprintf("doc_%d", msg.MessageID)
+		}
+		dest := filepath.Join(cwd, gateway.SanitizeFilename(name))
+		if _, err := b.tg.DownloadFile(ctx, msg.Document.FileID, dest); err != nil {
+			return nil, fmt.Errorf("document: %w", err)
+		}
+		reqs = append(reqs, gateway.AttachmentReq{Path: dest})
+	}
+	// voice：OGG 语音。
+	if msg.Voice != nil {
+		dest := filepath.Join(cwd, fmt.Sprintf("voice_%d.ogg", msg.MessageID))
+		if _, err := b.tg.DownloadFile(ctx, msg.Voice.FileID, dest); err != nil {
+			return nil, fmt.Errorf("voice: %w", err)
+		}
+		reqs = append(reqs, gateway.AttachmentReq{Path: dest})
+	}
+	return reqs, nil
+}
+
 func (b *Bot) handleCallback(ctx context.Context, cb *CallbackQuery) {
 	if cb.Message == nil {
 		return
@@ -201,16 +256,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		}
 		confirmID := parts[1]
 		approved := parts[2] == "1"
-		b.mu.Lock()
-		ch := b.pendingExec[confirmID]
-		delete(b.pendingExec, confirmID)
-		b.mu.Unlock()
-		if ch != nil {
-			select {
-			case ch <- approved:
-			default:
-			}
-		}
+		b.pending.ResolveExec(confirmID, approved)
 	case strings.HasPrefix(data, "uc:"):
 		parts := strings.Split(data, ":")
 		if len(parts) != 3 {
@@ -218,16 +264,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		}
 		choiceID := parts[1]
 		optID := parts[2]
-		b.mu.Lock()
-		ch := b.pendingPick[choiceID]
-		delete(b.pendingPick, choiceID)
-		b.mu.Unlock()
-		if ch != nil {
-			select {
-			case ch <- []string{optID}:
-			default:
-			}
-		}
+		b.pending.ResolveChoice(choiceID, optID)
 	}
 }
 
@@ -252,10 +289,7 @@ func (h *tgStreamHandler) OnToolStart(name string) {
 }
 
 func (h *tgStreamHandler) ConfirmExec(ctx context.Context, p gateway.ExecConfirmPrompt) (bool, error) {
-	ch := make(chan bool, 1)
-	h.bot.mu.Lock()
-	h.bot.pendingExec[p.ConfirmID] = ch
-	h.bot.mu.Unlock()
+	ch, cleanup := h.bot.pending.RegisterExec(p.ConfirmID)
 
 	text := fmt.Sprintf("确认执行命令？\n\n`%s`\n\ncwd: %s", p.CommandLine, p.Cwd)
 	kb := [][]InlineKeyboardButton{
@@ -265,36 +299,17 @@ func (h *tgStreamHandler) ConfirmExec(ctx context.Context, p gateway.ExecConfirm
 		},
 	}
 	if _, err := h.bot.tg.SendMessage(ctx, h.chatID, text, kb); err != nil {
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
+		cleanup()
 		return false, err
 	}
-
-	select {
-	case <-ctx.Done():
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
-		return false, ctx.Err()
-	case ok := <-ch:
-		return ok, nil
-	case <-time.After(10 * time.Minute):
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
-		return false, fmt.Errorf("exec confirm timeout")
-	}
+	return gateway.WaitExec(ctx, ch, cleanup)
 }
 
 func (h *tgStreamHandler) Choose(ctx context.Context, p gateway.UserChoicePrompt) ([]string, error) {
 	if len(p.Options) == 0 {
 		return nil, fmt.Errorf("no options")
 	}
-	ch := make(chan []string, 1)
-	h.bot.mu.Lock()
-	h.bot.pendingPick[p.ChoiceID] = ch
-	h.bot.mu.Unlock()
+	ch, cleanup := h.bot.pending.RegisterChoice(p.ChoiceID, p.Options)
 
 	var rows [][]InlineKeyboardButton
 	for _, o := range p.Options {
@@ -312,26 +327,10 @@ func (h *tgStreamHandler) Choose(ctx context.Context, p gateway.UserChoicePrompt
 		prompt = "请选择："
 	}
 	if _, err := h.bot.tg.SendMessage(ctx, h.chatID, prompt, rows); err != nil {
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
+		cleanup()
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
-		return nil, ctx.Err()
-	case sel := <-ch:
-		return sel, nil
-	case <-time.After(10 * time.Minute):
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
-		return nil, fmt.Errorf("user choice timeout")
-	}
+	return gateway.WaitChoice(ctx, ch, cleanup)
 }
 
 func sessionKey(chatID int64) gateway.SessionKey {
@@ -350,13 +349,14 @@ func helpText() string {
 	return strings.TrimSpace(`命令:
 /start — 欢迎
 /help — 本帮助
+/status — 查看当前转发 agent 与 LLM 状态
 /clear — 清空 cata 会话历史
-/dir — 本渠道首次先选要绑定的工作空间（agent），之后消息转发给它；/dir <序号或路径> 换绑；/dir reset 解绑本渠道；各渠道独立绑定
+/dir — 本会话切换工作空间（agent）：/dir 查看列表；/dir <序号或路径> 切换；/dir reset 恢复默认
 
 说明:
 - gateway 启动不依赖 cata；发消息时连接 worker 侧 socket
-- Telegram 渠道的消息按绑定转发到指定工作空间的 agent（本渠道单独绑定；不在线会自动拉起）
-- /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
+- 消息转发到 /dir 选定工作空间的 agent（不在线会自动拉起）；未切换时用默认 agent
+- 支持发送图片/文档/语音作为附件（下载到会话产出区后交给 cata）
 - 危险命令会弹出 Run/Cancel 按钮确认`)
 }
 

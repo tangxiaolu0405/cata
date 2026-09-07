@@ -25,6 +25,12 @@ type UserChoicePrompt = socketclient.UserChoicePrompt
 // ChoiceOption 可选项。
 type ChoiceOption = socketclient.ChoiceOption
 
+// AttachmentReq 单个附件请求（path 与 inline 二选一）。
+type AttachmentReq = socketclient.AttachmentReq
+
+// InlineAttachment 客户端已编码的附件内容。
+type InlineAttachment = socketclient.InlineAttachment
+
 // NewCataConn 创建 cata socket 连接句柄（兼容旧调用）。
 func NewCataConn(socketPath, cwd string) *CataConn {
 	return socketclient.NewConn(socketPath, cwd)

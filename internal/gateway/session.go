@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"sync"
 
 	"cata/internal/gateway/tunnel"
@@ -18,19 +17,21 @@ type ConnFactory func(socketPath, cwd string) *CataConn
 type SessionKey string
 
 // SessionManager 为每个渠道会话维护一条 cata socket（server 侧保留 history）。
-// 各会话 cwd = {worker_root}/{channel}/{chat_id}/。
+// 各会话 cwd = {worker_root}/{channel}/{chat_id}/，可经 /dir 切换。
 type SessionManager struct {
 	socketPath  string
 	workerRoot  string
 	connFactory ConnFactory
 	// remote 远程模式（隧道拨远端 agent）：本地 per-ws 拉起/解析不适用。
 	remote bool
+	// reg remote 模式的隧道注册表（转发目标解析用；本地模式为 nil）。
+	reg *tunnel.Registry
 	// cwdStore /dir 切换的持久化（重启恢复）；nil = 不持久化（测试用）。
 	cwdStore *SessionCwdStore
 	// dirListSeen 该会话是否已看过 /dir 工作区列表：未看列表不允许序号切换
 	// （序号按最近使用排序，重启后可能变化，须先确认列表）。
 	dirListSeen map[SessionKey]bool
-	// remoteDial remote 模式下按绑定 agent 拨其隧道（nil = 退化为默认 connFactory）。
+	// remoteDial remote 模式下按目标 agent 拨其隧道（nil = 退化为默认 connFactory）。
 	remoteDial func(agentID string) func() (net.Conn, error)
 
 	mu       sync.Mutex
@@ -71,26 +72,31 @@ func NewRemoteSessionManagerWithStore(workerRoot string, connFactory ConnFactory
 	}
 }
 
+// NewRemoteSessionManagerWithReg 创建 remote 会话管理器并绑定隧道注册表
+// （转发目标解析 + 按 agent 拨隧道用）。
+func NewRemoteSessionManagerWithReg(workerRoot string, connFactory ConnFactory, reg *tunnel.Registry) *SessionManager {
+	m := NewRemoteSessionManager(workerRoot, connFactory)
+	m.reg = reg
+	return m
+}
+
 // IsRemote 是否 remote（远端隧道）模式：本地 per-ws 拉起/解析逻辑不适用。
 func (m *SessionManager) IsRemote() bool {
 	return m.remote
 }
 
 // RemoteSessionManagerForDefaultAgent 创建 remote 模式通道会话管理器：
-// 所有会话（telegram/qq）拨到指定 agent（v1：cfg.DefaultAgentID 或第一个在线 agent）。
-// cwd 统一用该 agent 的工作空间根路径（远端真实存在；v1 通道会话共享产出区，history 仍 per-连接）。
+// 所有会话（telegram/qq）转发到目标 agent（/dir 选定或默认 agent）。
+// cwd 用该 agent 的工作空间根路径（远端真实存在；通道会话共享产出区，history 仍 per-连接）。
 // 目标 agent 懒解析：网关可以先于 agent 上线启动，连接建立时才选当前在线目标。
 func RemoteSessionManagerForDefaultAgent(cfg Config, reg *tunnel.Registry) (*SessionManager, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("remote registry required")
 	}
-	m := NewRemoteSessionManager(cfg.WorkerRoot, func(_ string, _ string) *CataConn {
-		agentID, root := defaultAgentTarget(cfg, reg)
-		return NewCataConnWithDialer("", root, func() (net.Conn, error) {
-			return reg.DialAgent(agentID)
-		})
-	})
-	// 按绑定 agent 拨隧道（渠道转发的首选；default 仅作未指定时兜底）。
+	m := NewRemoteSessionManagerWithReg(cfg.WorkerRoot, func(_ string, _ string) *CataConn {
+		return NewCataConn("", "")
+	}, reg)
+	// 按目标 agent 拨隧道。
 	m.remoteDial = func(agentID string) func() (net.Conn, error) {
 		if reg == nil || agentID == "" {
 			return nil
@@ -100,21 +106,6 @@ func RemoteSessionManagerForDefaultAgent(cfg Config, reg *tunnel.Registry) (*Ses
 		}
 	}
 	return m, nil
-}
-
-// defaultAgentTarget 返回当前默认通道 agent：优先 cfg.DefaultAgentID，否则第一个在线。
-func defaultAgentTarget(cfg Config, reg *tunnel.Registry) (agentID, root string) {
-	id := strings.TrimSpace(cfg.DefaultAgentID)
-	if id != "" && reg.AgentAlive(id) {
-		if info, ok := reg.FindAgent(id); ok {
-			return id, info.RootPath
-		}
-	}
-	agents := reg.OnlineAgents()
-	if len(agents) == 0 {
-		return "", ""
-	}
-	return agents[0].AgentID, agents[0].RootPath
 }
 
 // Get 获取或创建会话连接：
@@ -198,11 +189,11 @@ func dialerIdentity(d func() (net.Conn, error)) string {
 }
 
 // GetWithCwdDialer 获取或创建会话连接；dialer 非 nil 时该连接用自定义拨号
-// （remote 模式按项目路由到对应在线 agent，本地按绑定 agent 拨其 per-ws socket），
+// （remote 模式按目标 agent 拨其隧道，本地按目标 agent 拨其 per-ws socket），
 // 否则走默认 connFactory。
 // 缓存的连接若已失效（隧道抖动/断线后 socketclient 已标记失效），自动重建。
-// 关键：**dialer 变化也重建**——绑定/换绑后必须拨到新 agent 的 socket，
-// 不能复用旧的（否则换绑后消息仍发到旧工作空间）。
+// 关键：**dialer 变化也重建**——转发目标变化后必须拨到新 agent 的 socket，
+// 不能复用旧的（否则消息仍发到旧工作空间）。
 func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer func() (net.Conn, error)) (*CataConn, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -217,7 +208,7 @@ func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer fun
 				return c, nil
 			}
 		} else {
-			// cwd 或 dialer 变化：旧连接不再匹配（如换绑 agent），必须重建。
+			// cwd 或 dialer 变化：旧连接不再匹配（如转发目标变化），必须重建。
 			log.Printf("session %s: conn demux changed (cwd %q dialer %q -> cwd %q dialer %q), rebuilding",
 				key, c.Cwd(), c.DialKey(), cwd, dialerKey)
 			_ = c.Close()

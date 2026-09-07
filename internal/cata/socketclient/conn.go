@@ -219,6 +219,13 @@ func (c *Conn) Chat(ctx context.Context, text string, h StreamHandler) (ChatResu
 // ChatAs 发送用户消息并消费 NDJSON 流直到 done。
 // runAs 传给 server（"" = 普通对话；"scheduled" = 定时任务，server 强制 full 工具档并跳过任务状态机）。
 func (c *Conn) ChatAs(ctx context.Context, text, runAs string, h StreamHandler) (ChatResult, error) {
+	return c.ChatAsWithAttachments(ctx, text, runAs, nil, h)
+}
+
+// ChatAsWithAttachments 发送用户消息（可带附件）并消费 NDJSON 流直到 done。
+// attachments 为 server 端 AttachmentReq（path 相对产出区或附件白名单目录；
+// inline 为已编码 base64）。逐条失败的会发 attachment_rejected 事件。
+func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, attachments []AttachmentReq, h StreamHandler) (ChatResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -227,12 +234,13 @@ func (c *Conn) ChatAs(ctx context.Context, text, runAs string, h StreamHandler) 
 	}
 	rt := c.runtime
 	if err := c.write(cataRequest{
-		Command: "chat",
-		Text:    text,
-		Stream:  true,
-		Cwd:     c.cwd,
-		Runtime: &rt,
-		RunAs:   runAs,
+		Command:     "chat",
+		Text:        text,
+		Stream:      true,
+		Cwd:         c.cwd,
+		Runtime:     &rt,
+		RunAs:       runAs,
+		Attachments: attachments,
 	}); err != nil {
 		return ChatResult{}, err
 	}
@@ -332,16 +340,29 @@ func (c *Conn) ChatAs(ctx context.Context, text, runAs string, h StreamHandler) 
 }
 
 type cataRequest struct {
-	Command   string            `json:"command"`
-	Text      string            `json:"text,omitempty"`
-	Stream    bool              `json:"stream,omitempty"`
-	ConfirmID string            `json:"confirm_id,omitempty"`
-	Approved  bool              `json:"approved,omitempty"`
-	ChoiceID  string            `json:"choice_id,omitempty"`
-	Selected  []string          `json:"selected,omitempty"`
-	Cwd       string            `json:"cwd,omitempty"`
-	Runtime   *brain.RuntimeEnv `json:"runtime,omitempty"`
-	RunAs     string            `json:"run_as,omitempty"`
+	Command     string            `json:"command"`
+	Text        string            `json:"text,omitempty"`
+	Stream      bool              `json:"stream,omitempty"`
+	ConfirmID   string            `json:"confirm_id,omitempty"`
+	Approved    bool              `json:"approved,omitempty"`
+	ChoiceID    string            `json:"choice_id,omitempty"`
+	Selected    []string          `json:"selected,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Runtime     *brain.RuntimeEnv `json:"runtime,omitempty"`
+	RunAs       string            `json:"run_as,omitempty"`
+	Attachments []AttachmentReq   `json:"attachments,omitempty"`
+}
+
+// AttachmentReq 单个附件请求：path 与 inline 二选一（与 server 端协议一致）。
+type AttachmentReq struct {
+	Path   string            `json:"path,omitempty"`
+	Inline *InlineAttachment `json:"inline,omitempty"`
+}
+
+// InlineAttachment 客户端已编码的附件内容（剪贴板粘贴/渠道下载等场景）。
+type InlineAttachment struct {
+	MIME   string `json:"mime,omitempty"`
+	Base64 string `json:"base64,omitempty"`
 }
 
 type cataResponse struct {

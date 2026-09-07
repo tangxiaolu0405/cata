@@ -60,8 +60,8 @@ API：
 
 ## 产出区（worker 目录）
 
-gateway 与 cata 之间按**绑定 agent（工作空间）**转发消息；会话的 `cwd` 即绑定
-agent 的工作空间根路径。未绑定前的默认 worker 布局：
+gateway 与 cata 之间**转发消息**：会话通过 `/dir` 切换工作空间，消息转发到该工作空间的
+agent（`cwd` = 该 agent 工作空间根路径）。未切换前的默认 worker 布局：
 
 ```
 {CATA_WORKER_ROOT}/<channel>/<chat_id>/
@@ -73,26 +73,26 @@ agent 的工作空间根路径。未绑定前的默认 worker 布局：
 ~/.cata_worker/telegram/12345/
 ```
 
-- 未绑定前：每个渠道会话一个 worker 目录（仅作兜底，不参与转发目标选择）
-- 绑定后：QQ/TG **任何渠道的消息统一转发到同一个 agent**，`cwd` = 该 agent 工作空间根
+- 未切换前：每个渠道会话一个 worker 目录（兜底），消息转发到默认 agent
+  （`default_agent_id` 或第一个注册工作空间）
+- `/dir` 切换后：该会话消息转发到选定工作空间的 agent，`cwd` = 该 agent 工作空间根
 
-### 按渠道绑定 agent（telegram / qq 各绑一个）
+### 会话切换工作空间（/dir）
 
-**第一次使用先绑定**：发 `/dir` 列出本机已注册工作区（agent），进入选择。
-各渠道**独立绑定**——telegram 选 A、qq 可选 B，互不影响。
+**按会话切换**：每个渠道会话独立 `/dir` 选择工作空间，各会话互不影响。
 
 ```
-/dir                    # 查看/选择绑定的 agent（未绑定首次会引导；须先看列表才能 /dir <序号>）
-/dir 1                  # 绑定本渠道为列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
-/dir ~/stock            # 也可直接绑定该路径所在工作区的 agent
-/dir reset              # 解绑本渠道（下次消息重新引导）
+/dir                    # 查看/选择本会话的工作空间（须先看列表才能 /dir <序号>）
+/dir 1                  # 切换为列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
+/dir ~/stock            # 也可直接切换为该路径所在工作区
+/dir reset              # 恢复默认 worker 目录
 ```
 
-- **转发模型**：gateway 按「渠道→agent」绑定把一个渠道的消息**转发给该 agent**；
-  目标 agent 不在线（不在 supervisor）时自动拉起
-- **持久化**：绑定写入 `~/.cata/gateway_channel_agent.json`，**重启自动恢复**（内存只是缓存，
-  更换时先 save → 清缓存 → 从配置读取，严格按此顺序）
-- 更换绑定后续会话连接重建，历史按新 agent 转发；`/help` 中同样列出
+- **转发模型**：gateway 把消息转发到 `/dir` 选定工作空间的 agent；目标 agent 不在线
+  （不在 supervisor）时自动拉起
+- **持久化**：切换写入 `~/.cata/gateway_session_cwd.json`，**重启自动恢复**
+- 切换后续会话连接重建，历史按新工作空间转发；`/help` 中同样列出
+- 远程（remote）模式同样支持：切换后经隧道拨该工作空间 agent
 
 ## 发行档位（edition）
 
@@ -242,5 +242,5 @@ Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
 
 1. ✅ 模式一：Telegram + socket + per-chat worker 目录
 2. ✅ 模式四（remote）：WSS 隧道注册中心 + 路由（`cata agent --link` / `cata link` / `cata supervisor`），见 [tunnel.md](tunnel.md)
-3. 模式一完善：更多 Telegram 能力（附件、/status）、渠道插件结构
+3. ✅ 模式一完善：Telegram 附件（photo/document/voice → worker 产出区 → cata attachments）、/status（当前工作空间 + LLM 状态）、渠道插件结构（`gateway.Channel` 接口 + `PendingManager` 共享 exec/choice 等待）、QQ /status + 工具执行提示、渠道转发改为「会话 /dir 切换工作空间」（移除 per-channel agent 绑定）
 4. v2：逐 agent token、按项目路由（web 会话已按项目；渠道可扩展 per-channel agent）

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -73,6 +75,37 @@ type Message struct {
 	Chat      Chat   `json:"chat"`
 	From      *User  `json:"from"`
 	Text      string `json:"text"`
+	// Caption 附件消息的文字说明（photo/document/voice 的 caption）。
+	Caption string `json:"caption,omitempty"`
+	// 附件：photo（图片数组，最后一个最大）、document（文件/PDF）、voice（语音）。
+	Photo    []PhotoSize `json:"photo,omitempty"`
+	Document *Document   `json:"document,omitempty"`
+	Voice    *Voice      `json:"voice,omitempty"`
+}
+
+// PhotoSize Telegram 图片尺寸。
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size,omitempty"`
+}
+
+// Document Telegram 文档（文件/PDF）。
+type Document struct {
+	FileID   string     `json:"file_id"`
+	FileName string     `json:"file_name,omitempty"`
+	MimeType string     `json:"mime_type,omitempty"`
+	FileSize int        `json:"file_size,omitempty"`
+	Thumb    *PhotoSize `json:"thumb,omitempty"`
+}
+
+// Voice Telegram 语音消息。
+type Voice struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
+	Duration int    `json:"duration,omitempty"`
 }
 
 // CallbackQuery 按钮回调。
@@ -166,6 +199,64 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 		OK bool `json:"ok"`
 	}
 	return c.postJSON(ctx, "/sendChatAction", body, &out)
+}
+
+// File Telegram 文件元信息（getFile 返回）。
+type File struct {
+	FileID   string `json:"file_id"`
+	FilePath string `json:"file_path,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
+}
+
+// GetFile 查询文件下载路径。
+func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
+	body := map[string]any{"file_id": fileID}
+	var out struct {
+		apiError
+		Result File `json:"result"`
+	}
+	if err := c.postJSON(ctx, "/getFile", body, &out); err != nil {
+		return File{}, err
+	}
+	if !out.OK {
+		return File{}, out.err("getFile")
+	}
+	return out.Result, nil
+}
+
+// DownloadFile 下载 Telegram 文件到本地路径，返回字节数。
+// 需要先 GetFile 拿 file_path；file_path 为空（无下载路径）时返回错误。
+func (c *Client) DownloadFile(ctx context.Context, fileID, destPath string) (int64, error) {
+	f, err := c.GetFile(ctx, fileID)
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(f.FilePath) == "" {
+		return 0, fmt.Errorf("telegram file %s has no download path", fileID)
+	}
+	url := apiBase + "/file/bot" + c.token + "/" + f.FilePath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return 0, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+	out, err := os.Create(destPath)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+	n, err := io.Copy(out, io.LimitReader(resp.Body, 20*1024*1024))
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, dest any) error {

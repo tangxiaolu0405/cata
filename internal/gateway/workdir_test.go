@@ -121,51 +121,8 @@ func reqWsID(t *testing.T, cwd string) string {
 	return ws.ID
 }
 
-// TestAgentBindingPerChannel 严格顺序（save → 删缓存 → 重载）且按渠道独立。
-func TestAgentBindingPerChannel(t *testing.T) {
-	home := workTestHome(t)
-	path := filepath.Join(home, "binding.json")
-	b := NewAgentBinding(path)
-	if got := b.Agent("telegram"); got != "" {
-		t.Fatalf("初始应为空，got %q", got)
-	}
-	b.Set("telegram", "ws-a")
-	if got := b.Agent("telegram"); got != "ws-a" {
-		t.Fatalf("telegram Agent=%q want ws-a", got)
-	}
-	// 其它渠道不受影响。
-	if got := b.Agent("qq"); got != "" {
-		t.Fatalf("qq 不应被 telegram 绑定影响，got %q", got)
-	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "ws-a") || !strings.Contains(string(raw), "telegram") {
-		t.Fatalf("配置文件未保存渠道绑定：%s", string(raw))
-	}
-	// 重启（新实例）恢复；两渠道并存。
-	b.Set("qq", "ws-b")
-	b2 := NewAgentBinding(path)
-	if got := b2.Agent("telegram"); got != "ws-a" {
-		t.Fatalf("重启后 telegram 应恢复 ws-a，got %q", got)
-	}
-	if got := b2.Agent("qq"); got != "ws-b" {
-		t.Fatalf("重启后 qq 应恢复 ws-b，got %q", got)
-	}
-	// 更换渠道不影响其它；解绑只清该渠道。
-	b2.Set("telegram", "ws-c")
-	if got := b2.Agent("qq"); got != "ws-b" {
-		t.Fatalf("telegram 更换不应影响 qq，got %q", got)
-	}
-	b2.Clear("telegram")
-	if got := b2.Agent("telegram"); got != "" {
-		t.Fatalf("解绑 telegram 后应为空，got %q", got)
-	}
-	if got := b2.Agent("qq"); got != "ws-b" {
-		t.Fatalf("解绑 telegram 不应影响 qq，got %q", got)
-	}
-}
-
-// TestHandleAgentBindCommand 绑定命令（按渠道）：菜单、list-first、序号绑定、路径绑定、reset。
-func TestHandleAgentBindCommand(t *testing.T) {
+// TestReplyForWorkdir /dir 切换工作空间：列表、list-first、序号切换、路径切换、reset。
+func TestReplyForWorkdir(t *testing.T) {
 	home, proj1, proj2 := mkTestSetup(t)
 	now := time.Now()
 	ws1 := reqWsID(t, proj1)
@@ -174,88 +131,106 @@ func TestHandleAgentBindCommand(t *testing.T) {
 		registryEntry(ws1, proj1, "proj1", now.Add(-time.Minute)),
 		registryEntry(ws2, proj2, "proj2", now.Add(-time.Hour)),
 	})
-	path := filepath.Join(home, "binding.json")
-	b := NewAgentBinding(path)
+	root := filepath.Join(home, "w")
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, NewSessionCwdStore(filepath.Join(home, "cwd.json")))
 	key := SessionKeyFor("tg", "1")
 
-	// 模拟本渠道从未看过列表（重置确认标记）。
-	ResetAgentListSeen("telegram")
-	reply, handled := HandleAgentBindCommand(b, "telegram", key, "1")
-	if !handled {
-		t.Fatal("未看列表的序号绑定应视为已处理（拒绝并提示）")
-	}
+	// 未看列表的序号切换应拒绝并提示。
+	reply := ReplyForWorkdir(m, "telegram", key, "1")
 	if !strings.Contains(reply, "请先发 /dir") {
-		t.Fatalf("未看列表应禁止序号绑定：%q", reply)
+		t.Fatalf("未看列表应禁止序号切换：%q", reply)
 	}
-	// 看列表后允许序号绑定。
-	HandleAgentBindCommand(b, "telegram", key, "")
-	reply, _ = HandleAgentBindCommand(b, "telegram", key, "1")
-	if !strings.Contains(reply, "已绑定 telegram") || !strings.Contains(reply, ws1) {
-		t.Fatalf("序号绑定应成功：%q, ws=%s", reply, ws1)
+	// 看列表后允许序号切换。
+	ReplyForWorkdir(m, "telegram", key, "")
+	reply = ReplyForWorkdir(m, "telegram", key, "1")
+	if !strings.Contains(reply, "已切换本会话工作区") || !strings.Contains(reply, proj1) {
+		t.Fatalf("序号切换应成功：%q", reply)
 	}
-	if got := b.Agent("telegram"); got != ws1 {
-		t.Fatalf("绑定后 Agent=%q want %s", got, ws1)
+	if got := m.CwdOverride(key); got != proj1 {
+		t.Fatalf("切换后 CwdOverride=%q want %q", got, proj1)
 	}
-	// 路径绑定（不要求看过列表）。
-	b.Clear("telegram")
-	reply, _ = HandleAgentBindCommand(b, "telegram", key, proj2)
-	if !strings.Contains(reply, "已绑定 telegram") || !strings.Contains(reply, ws2) {
-		t.Fatalf("路径绑定应成功：%q", reply)
+	// 路径切换（不要求看过列表）。
+	reply = ReplyForWorkdir(m, "telegram", key, proj2)
+	if !strings.Contains(reply, "已切换本会话工作区") || !strings.Contains(reply, proj2) {
+		t.Fatalf("路径切换应成功：%q", reply)
 	}
-	if got := b.Agent("telegram"); got != ws2 {
-		t.Fatalf("路径绑定后 Agent=%q want %s", got, ws2)
+	if got := m.CwdOverride(key); got != proj2 {
+		t.Fatalf("路径切换后 CwdOverride=%q want %q", got, proj2)
 	}
-	reply, _ = HandleAgentBindCommand(b, "telegram", key, "reset")
-	if !strings.Contains(reply, "已解绑 telegram") {
-		t.Fatalf("reset 应解绑：%q", reply)
+	// reset 恢复默认。
+	reply = ReplyForWorkdir(m, "telegram", key, "reset")
+	if !strings.Contains(reply, "已恢复默认产出区") {
+		t.Fatalf("reset 应恢复默认：%q", reply)
 	}
-	if got := b.Agent("telegram"); got != "" {
-		t.Fatalf("reset 后应为空，got %q", got)
+	if got := m.CwdOverride(key); got != "" {
+		t.Fatalf("reset 后 CwdOverride=%q want empty", got)
 	}
 }
 
-// TestConnForMessageRoutesAndBringsUp 按绑定 agent 转发：目标不在线也自动拉起，
-// 连接 cwd = 绑定 agent 工作空间根路径；同一会话复用连接。
-func TestConnForMessageRoutesAndBringsUp(t *testing.T) {
+// TestConnForMessageRoutesToDir /dir 切换后转发到该工作空间 agent（本地拉起 + cwd=工作区根）。
+func TestConnForMessageRoutesToDir(t *testing.T) {
 	home, proj1, _ := mkTestSetup(t)
 	ws1 := reqWsID(t, proj1)
 	writeRegistry(t, []map[string]any{
 		registryEntry(ws1, proj1, "proj1", time.Now()),
 	})
-	path := filepath.Join(home, "binding.json")
-	b := NewAgentBinding(path)
-	b.Set("qq", ws1)
 	root := filepath.Join(home, "w")
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, NewSessionCwdStore(filepath.Join(home, "cwd.json")))
 	key := SessionKeyFor("qq", "9")
+	// /dir 切到 proj1。
+	ReplyForWorkdir(m, "qq", key, proj1)
 
-	conn, err := m.ConnForMessage(b, "qq", key)
+	conn, err := m.ConnForMessage(Config{}, "qq", key)
 	if err != nil {
 		t.Fatalf("转发连接失败：%v", err)
 	}
 	if conn.Cwd() != proj1 {
 		t.Fatalf("转发连接 cwd=%q want %q", conn.Cwd(), proj1)
 	}
-	// 断线自愈由 socketclient 负责；这里只验证每次转发都指向同一绑定 agent 的 cwd。
-	_ = conn
-}
-
-// TestConnForMessageUnbound 未绑定 → 引导错误。
-func TestConnForMessageUnbound(t *testing.T) {
-	home := workTestHome(t)
-	path := filepath.Join(home, "binding.json")
-	b := NewAgentBinding(path)
-	root := filepath.Join(home, "w")
-	_ = os.MkdirAll(root, 0755)
-	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
-	_, err := m.ConnForMessage(b, "telegram", SessionKeyFor("tg", "1"))
-	if err == nil || !strings.Contains(err.Error(), "telegram 渠道尚未绑定 agent") {
-		t.Fatalf("未绑定应报引导错误，got %v", err)
+	if conn.DialKey() != "dialer" {
+		t.Fatalf("转发连接应带 dialer（拨工作空间 agent），got %q", conn.DialKey())
 	}
 }
 
-// TestAgentBindingRemoteRoutesToBoundAgent 远程模式按绑定 agent 拨隧道（不再发到默认 agent）。
-func TestAgentBindingRemoteRoutesToBoundAgent(t *testing.T) {
+// TestConnForMessageNoDir 无 /dir 切换时用默认转发目标（第一个注册工作区）。
+func TestConnForMessageNoDir(t *testing.T) {
+	home, proj1, _ := mkTestSetup(t)
+	ws1 := reqWsID(t, proj1)
+	writeRegistry(t, []map[string]any{
+		registryEntry(ws1, proj1, "proj1", time.Now()),
+	})
+	root := filepath.Join(home, "w")
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	key := SessionKeyFor("qq", "9")
+
+	conn, err := m.ConnForMessage(Config{}, "qq", key)
+	if err != nil {
+		t.Fatalf("转发连接失败：%v", err)
+	}
+	if conn.Cwd() != proj1 {
+		t.Fatalf("默认转发 cwd=%q want %q", conn.Cwd(), proj1)
+	}
+	if conn.DialKey() != "dialer" {
+		t.Fatalf("默认转发应带 dialer，got %q", conn.DialKey())
+	}
+}
+
+// TestConnForMessageNoTarget 无注册工作区且无 /dir → 引导错误。
+func TestConnForMessageNoTarget(t *testing.T) {
+	home := workTestHome(t)
+	t.Setenv(config.EnvCataHome, home)
+	t.Setenv(config.EnvConfigFile, "")
+	root := filepath.Join(home, "w")
+	_ = os.MkdirAll(root, 0755)
+	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
+	_, err := m.ConnForMessage(Config{}, "telegram", SessionKeyFor("tg", "1"))
+	if err == nil || !strings.Contains(err.Error(), "无可用转发目标") {
+		t.Fatalf("应报无目标错误，got %v", err)
+	}
+}
+
+// TestConnForMessageRemoteRoutesToDir 远程模式 /dir 切换后拨该工作空间 agent 的隧道。
+func TestConnForMessageRemoteRoutesToDir(t *testing.T) {
 	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
 	t.Setenv(config.EnvConfigFile, "")
@@ -265,26 +240,25 @@ func TestAgentBindingRemoteRoutesToBoundAgent(t *testing.T) {
 	writeRegistry(t, []map[string]any{
 		registryEntry(ws, proj, "proj", time.Now()),
 	})
-	path := filepath.Join(home, "binding.json")
-	b := NewAgentBinding(path)
-	b.Set("telegram", ws)
 
 	var dialed []string
 	m := NewRemoteSessionManagerWithStore(home, func(_ string, cwd string) *CataConn {
 		return NewCataConn("", cwd)
-	}, nil)
-	// 注入 agent 隧道拨号器：记录拨谁。
+	}, NewSessionCwdStore(filepath.Join(home, "cwd.json")))
 	m.remoteDial = func(agentID string) func() (net.Conn, error) {
 		dialed = append(dialed, agentID)
 		return func() (net.Conn, error) { return &eofConn{}, nil }
 	}
+	key := SessionKeyFor("tg", "5")
+	// /dir 切到 proj。
+	ReplyForWorkdir(m, "telegram", key, proj)
 
-	conn, err := m.ConnForMessage(b, "telegram", SessionKeyFor("tg", "5"))
+	conn, err := m.ConnForMessage(Config{}, "telegram", key)
 	if err != nil {
 		t.Fatalf("远程转发失败：%v", err)
 	}
 	if len(dialed) != 1 || dialed[0] != ws {
-		t.Fatalf("应拨绑定 agent 的隧道，dialed=%v want [%s]", dialed, ws)
+		t.Fatalf("应拨 /dir 工作空间 agent 的隧道，dialed=%v want [%s]", dialed, ws)
 	}
 	if conn.Cwd() != proj {
 		t.Fatalf("远程 cwd=%q want %q", conn.Cwd(), proj)
@@ -294,8 +268,8 @@ func TestAgentBindingRemoteRoutesToBoundAgent(t *testing.T) {
 	}
 }
 
-// TestGetWithCwdDialerRebuildsOnRebind 换绑 agent 后连接必须重建（不能复用 cwd 相同的旧连接）。
-func TestGetWithCwdDialerRebuildsOnRebind(t *testing.T) {
+// TestGetWithCwdDialerRebuildsOnSwitch /dir 切换后连接必须重建（不能复用 cwd 相同的旧连接）。
+func TestGetWithCwdDialerRebuildsOnSwitch(t *testing.T) {
 	home, proj1, proj2 := mkTestSetup(t)
 	ws1 := reqWsID(t, proj1)
 	ws2 := reqWsID(t, proj2)
@@ -312,21 +286,21 @@ func TestGetWithCwdDialerRebuildsOnRebind(t *testing.T) {
 		t.Fatalf("默认连接应无 dialer，got %q", c0.DialKey())
 	}
 
-	// 绑定 ws1（dialer）→ 连接应重建为 dialer、cwd=proj1。
+	// /dir 切到 ws1（dialer）→ 连接应重建为 dialer、cwd=proj1。
 	c1, err := m.GetWithCwdDialer(key, proj1, DialLocalAgent(ws1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c1.DialKey() != "dialer" || c1.Cwd() != proj1 {
-		t.Fatalf("绑定后连接应 dialer+cwd=proj1，got dialer=%q cwd=%q", c1.DialKey(), c1.Cwd())
+		t.Fatalf("切换后连接应 dialer+cwd=proj1，got dialer=%q cwd=%q", c1.DialKey(), c1.Cwd())
 	}
 
-	// 换绑 ws2（cwd 不同）→ 必须重建到 proj2。
+	// 切到 ws2（cwd 不同）→ 必须重建到 proj2。
 	c2, err := m.GetWithCwdDialer(key, proj2, DialLocalAgent(ws2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c2.Cwd() != proj2 {
-		t.Fatalf("换绑后 cwd=%q want %q", c2.Cwd(), proj2)
+		t.Fatalf("再切换后 cwd=%q want %q", c2.Cwd(), proj2)
 	}
 }

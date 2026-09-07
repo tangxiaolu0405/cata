@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"cata/internal/gateway"
 	"cata/internal/gateway/ui"
@@ -18,34 +17,25 @@ type Bot struct {
 	cfg      gateway.Config
 	api      *Client
 	sessions *gateway.SessionManager
-	binding  *gateway.AgentBinding
 	locks    *gateway.ProcessLock
+	pending  *gateway.PendingManager
 
-	mu           sync.Mutex
-	pendingExec  map[string]chan bool
-	pendingPick  map[string]chan []string
+	progressMu   sync.Mutex
 	progressOnce map[string]bool // eventMsgID
 }
 
-// NewBot 创建 QQ bot（本地模式：拨本机 socket，按绑定 agent 转发）。
+// NewBot 创建 QQ bot（本地模式：拨本机 socket，按默认 agent 转发）。
 func NewBot(cfg gateway.Config) *Bot {
-	return NewBotWithBinding(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot), gateway.DefaultAgentBinding())
+	return NewBotWithSessions(cfg, gateway.NewSessionManager(cfg.SocketPath, cfg.WorkerRoot))
 }
 
 // NewBotWithSessions 创建 bot 并使用显式会话管理器（remote 模式由 gateway 传入）。
 func NewBotWithSessions(cfg gateway.Config, sessions *gateway.SessionManager) *Bot {
-	return NewBotWithBinding(cfg, sessions, gateway.DefaultAgentBinding())
-}
-
-// NewBotWithBinding 使用显式会话管理器 + 绑定存储创建 bot。
-func NewBotWithBinding(cfg gateway.Config, sessions *gateway.SessionManager, binding *gateway.AgentBinding) *Bot {
 	return &Bot{
 		cfg:          cfg,
 		sessions:     sessions,
-		binding:      binding,
 		locks:        gateway.NewProcessLock(),
-		pendingExec:  make(map[string]chan bool),
-		pendingPick:  make(map[string]chan []string),
+		pending:      gateway.NewPendingManager(),
 		progressOnce: make(map[string]bool),
 	}
 }
@@ -90,6 +80,9 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	case text == "/start", text == "/help":
 		_ = b.reply(ctx, msg, helpText())
 		return
+	case text == "/status":
+		_ = b.reply(ctx, msg, gateway.ChannelStatus(b.sessions, b.cfg, "qq", key))
+		return
 	case text == "/clear", text == "/reset":
 		unlock := b.locks.Lock(key)
 		defer unlock()
@@ -100,7 +93,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 		_ = b.reply(ctx, msg, "会话已清空。")
 		return
 	case strings.HasPrefix(text, "/dir"):
-		reply := gateway.ReplyForWorkdir(b.binding, "qq", key, strings.TrimPrefix(text, "/dir"))
+		reply := gateway.ReplyForWorkdir(b.sessions, "qq", key, strings.TrimPrefix(text, "/dir"))
 		_ = b.reply(ctx, msg, reply)
 		ui.DefaultHub.Publish("qq", string(key), SessionIDFor(msg), msg.UserOpenID, "out", reply)
 		return
@@ -109,7 +102,7 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	unlock := b.locks.Lock(key)
 	defer unlock()
 
-	conn, err := b.sessions.ConnForMessage(b.binding, "qq", key)
+	conn, err := b.sessions.ConnForMessage(b.cfg, "qq", key)
 	if err != nil {
 		_ = b.reply(ctx, msg, err.Error())
 		return
@@ -165,12 +158,12 @@ func helpText() string {
 
 命令:
 /help — 本帮助
+/status — 查看当前转发 agent 与 LLM 状态
 /clear — 清空会话
-/dir — 本渠道首次先选要绑定的工作空间（agent），之后消息转发给它；/dir <序号或路径> 换绑；/dir reset 解绑本渠道；各渠道独立绑定
+/dir — 本会话切换工作空间（agent）：/dir 查看列表；/dir <序号或路径> 切换；/dir reset 恢复默认
 
 说明:
-- QQ 渠道的消息按绑定转发到指定工作空间的 agent（本渠道单独绑定；不在线会自动拉起）
-- /dir 第一次使用会列出本机工作区供选择，重启后绑定保持
+- 消息转发到 /dir 选定工作空间的 agent（不在线会自动拉起）；未切换时用默认 agent
 - 危险命令请回复 yes / no
 - 官方已逐步下线 WebSocket；连不上则本渠道不可用`)
 }
@@ -184,49 +177,25 @@ func trunc(s string, n int) string {
 
 func (b *Bot) tryTextConfirm(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	// exec: yes/no / 是/否 / y/n
-	if len(b.pendingExec) == 1 {
-		var id string
-		var ch chan bool
-		for k, v := range b.pendingExec {
-			id, ch = k, v
-		}
+	if id, _, ok := b.pending.HasPendingExec(); ok {
 		switch lower {
 		case "yes", "y", "是", "同意", "run", "ok":
-			delete(b.pendingExec, id)
-			select {
-			case ch <- true:
-			default:
-			}
+			b.pending.ResolveExec(id, true)
 			return true
 		case "no", "n", "否", "取消", "cancel":
-			delete(b.pendingExec, id)
-			select {
-			case ch <- false:
-			default:
-			}
+			b.pending.ResolveExec(id, false)
 			return true
 		}
 	}
 
 	// choice: reply with 1-based index or option id
-	if len(b.pendingPick) == 1 {
-		var id string
-		var ch chan []string
-		for k, v := range b.pendingPick {
-			id, ch = k, v
-		}
+	if id, _, _, ok := b.pending.HasPendingChoice(); ok {
 		if lower == "" {
 			return false
 		}
-		delete(b.pendingPick, id)
-		select {
-		case ch <- []string{text}:
-		default:
-		}
+		b.pending.ResolveChoice(id, text)
 		return true
 	}
 	return false
@@ -242,55 +211,47 @@ func (h *qqStreamHandler) OnProgress(message string) {
 	if message == "" {
 		return
 	}
-	h.bot.mu.Lock()
+	h.bot.progressMu.Lock()
 	if h.bot.progressOnce[h.msg.MsgID] {
-		h.bot.mu.Unlock()
+		h.bot.progressMu.Unlock()
 		return
 	}
 	h.bot.progressOnce[h.msg.MsgID] = true
-	h.bot.mu.Unlock()
+	h.bot.progressMu.Unlock()
 	_ = h.bot.reply(h.ctx, h.msg, "⏳ "+message)
 }
 
-func (h *qqStreamHandler) OnToolStart(name string) {}
+func (h *qqStreamHandler) OnToolStart(name string) {
+	if name == "" {
+		return
+	}
+	// QQ 无 typing action；工具开始时提示一次（与 OnProgress 共享 progressOnce 去重）。
+	h.bot.progressMu.Lock()
+	if h.bot.progressOnce[h.msg.MsgID] {
+		h.bot.progressMu.Unlock()
+		return
+	}
+	h.bot.progressOnce[h.msg.MsgID] = true
+	h.bot.progressMu.Unlock()
+	_ = h.bot.reply(h.ctx, h.msg, "🔧 正在执行: "+name)
+}
 
 func (h *qqStreamHandler) ConfirmExec(ctx context.Context, p gateway.ExecConfirmPrompt) (bool, error) {
-	ch := make(chan bool, 1)
-	h.bot.mu.Lock()
-	h.bot.pendingExec[p.ConfirmID] = ch
-	h.bot.mu.Unlock()
+	ch, cleanup := h.bot.pending.RegisterExec(p.ConfirmID)
 
 	text := fmt.Sprintf("确认执行命令？\n\n%s\n\ncwd: %s\n\n请回复 yes 或 no", p.CommandLine, p.Cwd)
 	if err := h.bot.reply(ctx, h.msg, text); err != nil {
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
+		cleanup()
 		return false, err
 	}
-	select {
-	case <-ctx.Done():
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
-		return false, ctx.Err()
-	case ok := <-ch:
-		return ok, nil
-	case <-time.After(10 * time.Minute):
-		h.bot.mu.Lock()
-		delete(h.bot.pendingExec, p.ConfirmID)
-		h.bot.mu.Unlock()
-		return false, fmt.Errorf("exec confirm timeout")
-	}
+	return gateway.WaitExec(ctx, ch, cleanup)
 }
 
 func (h *qqStreamHandler) Choose(ctx context.Context, p gateway.UserChoicePrompt) ([]string, error) {
 	if len(p.Options) == 0 {
 		return nil, fmt.Errorf("no options")
 	}
-	ch := make(chan []string, 1)
-	h.bot.mu.Lock()
-	h.bot.pendingPick[p.ChoiceID] = ch
-	h.bot.mu.Unlock()
+	ch, cleanup := h.bot.pending.RegisterChoice(p.ChoiceID, p.Options)
 
 	var b strings.Builder
 	prompt := p.Prompt
@@ -311,29 +272,18 @@ func (h *qqStreamHandler) Choose(ctx context.Context, p gateway.UserChoicePrompt
 	}
 	b.WriteString("\n\n请回复选项编号或 id")
 	if err := h.bot.reply(ctx, h.msg, b.String()); err != nil {
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
+		cleanup()
 		return nil, err
 	}
 
-	select {
-	case <-ctx.Done():
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
-		return nil, ctx.Err()
-	case sel := <-ch:
-		if len(sel) == 1 {
-			if n, err := strconv.Atoi(strings.TrimSpace(sel[0])); err == nil && n >= 1 && n <= len(p.Options) {
-				return []string{p.Options[n-1].ID}, nil
-			}
-		}
-		return sel, nil
-	case <-time.After(10 * time.Minute):
-		h.bot.mu.Lock()
-		delete(h.bot.pendingPick, p.ChoiceID)
-		h.bot.mu.Unlock()
-		return nil, fmt.Errorf("user choice timeout")
+	sel, err := gateway.WaitChoice(ctx, ch, cleanup)
+	if err != nil {
+		return nil, err
 	}
+	if len(sel) == 1 {
+		if n, err := strconv.Atoi(strings.TrimSpace(sel[0])); err == nil && n >= 1 && n <= len(p.Options) {
+			return []string{p.Options[n-1].ID}, nil
+		}
+	}
+	return sel, nil
 }
