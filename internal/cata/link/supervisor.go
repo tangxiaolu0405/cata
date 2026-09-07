@@ -142,10 +142,11 @@ func (s *Supervisor) ensureAll() error {
 	// 自动接入本机已有工作空间（git/marked），避免用户逐个手动 link add。
 	if err := autoLinkExistingWorkspaces(cfg); err != nil {
 		log.Printf("supervisor: auto-link: %v", err)
-		cfg, err = LoadConfig() // 重载，纳入刚自动注册的 agent
-		if err != nil {
-			return err
-		}
+	}
+	// 无条件重载：auto-link 可能新增了 agent（无论成功还是部分失败后 cfg 都已变）。
+	cfg, err = LoadConfig()
+	if err != nil {
+		return err
 	}
 	ids := cfg.LinkedAgentIDs()
 	for _, id := range ids {
@@ -162,9 +163,14 @@ func (s *Supervisor) ensureAll() error {
 	return nil
 }
 
-// autoLinkExistingWorkspaces 扫描 ~/.cata/brain/workspaces 下的所有工作空间
-// （新旧项目都算，跳过 .cata_worker 渠道沙箱），把尚未注册到 link.json 的自动
-// Add（keep-alive），使本机已有项目自动接入 gateway，避免逐个手动接入。
+// autoLinkExistingWorkspaces 扫描 home 脑子格下的工作空间，把尚未注册到 link.json 的
+// git/marked 项目自动 Add（keep-alive），使本机已有项目自动接入 gateway，避免逐个手动接入。
+//
+// 过滤规则（与 docs/tunnel.md「自动接入」一致）：
+//   - 仅接入 kind ∈ {git, marked}：ephemeral（临时目录/一次性会话）不常驻、不接入
+//   - 跳过 home 目录 / CATA_HOME 作为 root_path 的格子（防 agent 绑定敏感目录）
+//   - 跳过 root_path 空 / 目录不存在的格子
+//   - 已在 link.json 的不重复 Add（幂等）
 func autoLinkExistingWorkspaces(cfg Config) error {
 	wsList, err := brain.ListHomeWorkspaces()
 	if err != nil {
@@ -174,6 +180,10 @@ func autoLinkExistingWorkspaces(cfg Config) error {
 	added := 0
 	for _, w := range wsList {
 		if w.ID == "" || w.RootPath == "" {
+			continue
+		}
+		// 仅自动接入 git/marked 项目；ephemeral 临时工作区不常驻。
+		if w.Kind != brain.KindGit && w.Kind != brain.KindMarked {
 			continue
 		}
 		if isHomeRootPath(w.RootPath) {
