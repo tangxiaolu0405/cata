@@ -14,20 +14,17 @@ import (
 )
 
 // ChannelStatus 构建渠道 /status 回复（TG/QQ 共用）。
-// 显示：当前工作空间（/dir 切换或默认）、LLM provider/model。
+// 显示：当前绑定工作空间（/dir 切换）、LLM provider/model。
 func ChannelStatus(sessions *SessionManager, cfg Config, channel string, key SessionKey) string {
 	var b strings.Builder
 	b.WriteString("Cata Gateway 状态\n")
 	b.WriteString("──────────────\n")
 
-	// 当前工作空间：/dir 切换的产出区优先，否则默认转发目标。
+	// 当前绑定工作空间：/dir 切换的产出区。
 	if dir := sessions.CwdOverride(key); dir != "" {
 		fmt.Fprintf(&b, "工作空间: %s\n", dir)
-	} else if agentID, root, ok := sessions.ResolveForwardTarget(cfg); ok {
-		fmt.Fprintf(&b, "工作空间: %s\n", root)
-		fmt.Fprintf(&b, "转发 agent: %s\n", agentID)
 	} else {
-		b.WriteString("工作空间: (无可用目标 —— 请 /dir 选择或确认已注册工作空间 agent)\n")
+		b.WriteString("工作空间: (未绑定 —— 发 /dir 选择后消息才会转发)\n")
 	}
 
 	// LLM provider/model（读 ~/.cata/config.json）。

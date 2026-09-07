@@ -60,8 +60,8 @@ API：
 
 ## 产出区（worker 目录）
 
-gateway 与 cata 之间**转发消息**：会话通过 `/dir` 切换工作空间，消息转发到该工作空间的
-agent（`cwd` = 该 agent 工作空间根路径）。未切换前的默认 worker 布局：
+gateway 与 cata 之间**转发消息**：会话必须先通过 `/dir` 绑定工作空间，消息才转发到该工作空间的
+agent（`cwd` = 该 agent 工作空间根路径）。未绑定前的默认 worker 布局（仅作兜底，不参与转发）：
 
 ```
 {CATA_WORKER_ROOT}/<channel>/<chat_id>/
@@ -73,9 +73,8 @@ agent（`cwd` = 该 agent 工作空间根路径）。未切换前的默认 worke
 ~/.cata_worker/telegram/12345/
 ```
 
-- 未切换前：每个渠道会话一个 worker 目录（兜底），消息转发到默认 agent
-  （`default_agent_id` 或第一个注册工作空间）
-- `/dir` 切换后：该会话消息转发到选定工作空间的 agent，`cwd` = 该 agent 工作空间根
+- **未绑定前：不转发**——发消息会提示先 `/dir` 选择工作空间（**无默认转发目标**）
+- `/dir` 绑定后：该会话消息转发到选定工作空间的 agent，`cwd` = 该 agent 工作空间根
 
 ### 会话切换工作空间（/dir）
 
@@ -85,7 +84,7 @@ agent（`cwd` = 该 agent 工作空间根路径）。未切换前的默认 worke
 /dir                    # 查看/选择本会话的工作空间（须先看列表才能 /dir <序号>）
 /dir 1                  # 切换为列表第 1 个（序号按最近使用排序，须先发 /dir 确认列表）
 /dir ~/stock            # 也可直接切换为该路径所在工作区
-/dir reset              # 恢复默认 worker 目录
+/dir reset              # 恢复默认 worker 目录（此后消息不再转发，需重新 /dir）
 ```
 
 - **转发模型**：gateway 把消息转发到 `/dir` 选定工作空间的 agent；目标 agent 不在线

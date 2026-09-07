@@ -84,7 +84,8 @@ type Config struct {
 	TunnelListen string `json:"tunnel_listen,omitempty"`
 	// AllowAgentIDs 允许注册的 agent_id 白名单；空 = 放行所有（仍要求 token）。
 	AllowAgentIDs []string `json:"allow_agent_ids,omitempty"`
-	// DefaultAgentID 通道类会话（telegram/qq）在远端默认路由到的 agent（空 = 第一个在线）。
+	// DefaultAgentID 历史字段：通道会话默认路由 agent。当前通道转发要求会话先 /dir
+	// 绑定工作空间（无默认转发），此字段不再参与转发目标选择，保留仅为向后兼容。
 	DefaultAgentID string `json:"default_agent_id,omitempty"`
 }
 

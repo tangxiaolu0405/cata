@@ -192,8 +192,8 @@ func TestConnForMessageRoutesToDir(t *testing.T) {
 	}
 }
 
-// TestConnForMessageNoDir 无 /dir 切换时用默认转发目标（第一个注册工作区）。
-func TestConnForMessageNoDir(t *testing.T) {
+// TestConnForMessageUnbound 无 /dir 绑定 → 引导错误（不默认转发）。
+func TestConnForMessageUnbound(t *testing.T) {
 	home, proj1, _ := mkTestSetup(t)
 	ws1 := reqWsID(t, proj1)
 	writeRegistry(t, []map[string]any{
@@ -203,19 +203,14 @@ func TestConnForMessageNoDir(t *testing.T) {
 	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	key := SessionKeyFor("qq", "9")
 
-	conn, err := m.ConnForMessage(Config{}, "qq", key)
-	if err != nil {
-		t.Fatalf("转发连接失败：%v", err)
-	}
-	if conn.Cwd() != proj1 {
-		t.Fatalf("默认转发 cwd=%q want %q", conn.Cwd(), proj1)
-	}
-	if conn.DialKey() != "dialer" {
-		t.Fatalf("默认转发应带 dialer，got %q", conn.DialKey())
+	// 即使有注册工作区，未 /dir 绑定也不转发。
+	_, err := m.ConnForMessage(Config{}, "qq", key)
+	if err == nil || !strings.Contains(err.Error(), "尚未绑定工作空间") {
+		t.Fatalf("未绑定应报引导错误，got %v", err)
 	}
 }
 
-// TestConnForMessageNoTarget 无注册工作区且无 /dir → 引导错误。
+// TestConnForMessageNoTarget 无注册工作区且无 /dir → 同样引导错误（不默认转发）。
 func TestConnForMessageNoTarget(t *testing.T) {
 	home := workTestHome(t)
 	t.Setenv(config.EnvCataHome, home)
@@ -224,8 +219,8 @@ func TestConnForMessageNoTarget(t *testing.T) {
 	_ = os.MkdirAll(root, 0755)
 	m := NewSessionManagerWithStore(filepath.Join(root, "cata.sock"), root, nil)
 	_, err := m.ConnForMessage(Config{}, "telegram", SessionKeyFor("tg", "1"))
-	if err == nil || !strings.Contains(err.Error(), "无可用转发目标") {
-		t.Fatalf("应报无目标错误，got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "尚未绑定工作空间") {
+		t.Fatalf("应报引导错误，got %v", err)
 	}
 }
 
