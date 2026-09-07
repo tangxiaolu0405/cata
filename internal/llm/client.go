@@ -99,6 +99,11 @@ type Client struct {
 	card             *RoleCard // 角色卡片：身份 + 协议 + 采样 + 注入策略（NewClientForRole 挂载）
 	// llmCfg 保留完整配置（capabilities / models），用于多模态能力路由与出站编码。
 	llmCfg config.LLMConfig
+	// extraHeaders 出站自定义请求头（来自 config.llm.headers）。
+	extraHeaders map[string]string
+	// opencodeSessionID 本 Chat 会话的 opencode 会话路由 id（x-opencode-session）。
+	// /clear（chat_reset）后由 server 重新生成并不再沿用旧会话 id。
+	opencodeSessionID string
 	// lastRetrieved 本轮组装时检索命中的记忆 source 列表（命中观测；appendLLMLog 记录）。
 	lastRetrieved []string
 	// onModelSwitch 多模态路由发生模型切换时回调（from, to）。server 用它下发 model_switch 事件。
@@ -435,7 +440,16 @@ func NewClientFromLLMConfig(llmCfg config.LLMConfig, model string) (*Client, err
 		return nil, err
 	}
 	c.llmCfg = llmCfg
+	if len(llmCfg.Headers) > 0 {
+		c.extraHeaders = llmCfg.Headers
+	}
 	return c, nil
+}
+
+// SetOpenCodeSessionId 设置本 Chat 会话的 opencode 会话路由 id（x-opencode-session）。
+// server 在会话首轮/round 前调用；/clear 后由 server 换新 id 再设。
+func (c *Client) SetOpenCodeSessionId(sid string) {
+	c.opencodeSessionID = sid
 }
 
 // NewClient 创建新的 LLM 客户端（从环境变量或配置读取）

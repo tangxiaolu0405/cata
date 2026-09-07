@@ -221,6 +221,9 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 
 	var chatHistory []llm.Message
 	var chatPromptPeak brain.PromptProfile
+	// chatOpenCodeSID 本 Chat 会话的 opencode 会话路由 id（x-opencode-session）。
+	// 会话级生命周期：随 history 生成；chat_reset 清空 history 时一并清空，令下次重开新 id。
+	var chatOpenCodeSID string
 	var connWS *brain.Workspace // 本连接最近一次 chat 解析出的脑子分区（chat_reset 复用，勿用全局 Active）
 
 	br := bufio.NewReaderSize(conn, 64*1024)
@@ -290,7 +293,7 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 			if req.RunAs == "scheduled" {
 				chatCtx = WithScheduledRun(chatCtx)
 			}
-			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, req.Text, req.Attachments, ws, &chatPromptPeak, req.ShowThinking); err != nil {
+			if err := ss.handleTerminalChatStream(chatCtx, conn, br, &chatHistory, &chatOpenCodeSID, req.Text, req.Attachments, ws, &chatPromptPeak, req.ShowThinking); err != nil {
 				log.Printf("terminal chat stream: %v", err)
 			}
 			// chat 结束后 drain connLineReader 残留行：pump 在停止竞态窗口可能已读入
@@ -305,17 +308,17 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 					if err := json.Unmarshal(raw, &pr); err != nil {
 						continue
 					}
-					ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, pr)
+					ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &chatOpenCodeSID, &connWS, pr)
 				}
 			}
 			continue
 		case "chat_reset":
-			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, req)
+			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &chatOpenCodeSID, &connWS, req)
 			continue
 		case "chat_cancel":
 			// chat 流进行中时由 connLineReader.pump 消费（onCancel）；此处仅服务
 			// 无活动流时的语义（保留兼容：回执 no active stream）。
-			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &connWS, req)
+			ss.handleNonChatCommand(conn, br, &chatSession, &chatHistory, &chatPromptPeak, &chatOpenCodeSID, &connWS, req)
 			continue
 		default:
 			resp := ss.handleCommand(req)
@@ -326,12 +329,13 @@ func (ss *SocketServer) handleConnection(conn net.Conn) {
 
 // handleNonChatCommand 处理 chat 会话相关的非流式命令（chat_reset / chat_cancel）。
 // 主循环与 chat 结束后的 drain 共用，避免逻辑重复。
-func (ss *SocketServer) handleNonChatCommand(conn net.Conn, br *bufio.Reader, chatSession *bool, chatHistory *[]llm.Message, chatPromptPeak *brain.PromptProfile, connWS **brain.Workspace, req Request) {
+func (ss *SocketServer) handleNonChatCommand(conn net.Conn, br *bufio.Reader, chatSession *bool, chatHistory *[]llm.Message, chatPromptPeak *brain.PromptProfile, chatOpenCodeSID *string, connWS **brain.Workspace, req Request) {
 	switch req.Command {
 	case "chat_reset":
 		ss.markChatSession(chatSession)
 		*chatHistory = nil
 		*chatPromptPeak = ""
+		*chatOpenCodeSID = "" // 清空 opencode 会话 id：下次 chat 首轮重新生成（新会话独立路由）
 		if err := brain.AppendSessionBoundaryFor(*connWS); err != nil {
 			log.Printf("short-term session boundary: %v", err)
 		}

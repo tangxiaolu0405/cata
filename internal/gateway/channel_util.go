@@ -11,16 +11,18 @@ import (
 	"time"
 
 	"cata/internal/cata/config"
+	"cata/internal/cata/link"
 )
 
 // ChannelStatus 构建渠道 /status 回复（TG/QQ 共用）。
-// 显示：当前绑定工作空间（/dir 切换）、LLM provider/model。
+// 显示：当前会话绑定工作空间、LLM、gateway 模式、注册工作区概览。
 func ChannelStatus(sessions *SessionManager, cfg Config, channel string, key SessionKey) string {
 	var b strings.Builder
 	b.WriteString("Cata Gateway 状态\n")
 	b.WriteString("──────────────\n")
 
-	// 当前绑定工作空间：/dir 切换的产出区。
+	// 当前会话：渠道 + 绑定工作空间。
+	fmt.Fprintf(&b, "渠道: %s\n", channel)
 	if dir := sessions.CwdOverride(key); dir != "" {
 		fmt.Fprintf(&b, "工作空间: %s\n", dir)
 	} else {
@@ -32,6 +34,28 @@ func ChannelStatus(sessions *SessionManager, cfg Config, channel string, key Ses
 		fmt.Fprintf(&b, "LLM: %s\n", llm)
 	} else {
 		b.WriteString("LLM: (未配置)\n")
+	}
+
+	// Gateway 模式。
+	fmt.Fprintf(&b, "Gateway: %s\n", cfg.EditionLabel())
+	if cfg.RemoteMode() {
+		b.WriteString("模式: remote（云端隧道）\n")
+	} else {
+		b.WriteString("模式: 本地（per-ws agent）\n")
+	}
+
+	// 注册工作区概览。
+	entries, err := listRegistryEntries()
+	if err != nil {
+		fmt.Fprintf(&b, "工作区: (读取失败 %v)\n", err)
+	} else {
+		online := 0
+		for _, e := range entries {
+			if link.AgentAlive(e.ID) {
+				online++
+			}
+		}
+		fmt.Fprintf(&b, "工作区: %d 已注册 / %d 在线\n", len(entries), online)
 	}
 
 	b.WriteString("\n命令: /help /clear /dir /status")

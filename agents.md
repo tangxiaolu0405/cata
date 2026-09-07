@@ -524,6 +524,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 - **`llm.thinking`**：`auto`（默认，有 tools 时 `disabled`，避免 tool 轮次 400）、`enabled`、`disabled`
 - 思考模式 + tool 调用时须回传 `reasoning_content`（已实现）；见 [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)
 - **仅 DeepSeek / MiMo 类网关**会下发非标准 `thinking` / `reasoning_content`；OpenAI、Gemini OpenAI 兼容层等通用端点不发这些字段，换模型只需改 `api_url` / `model` / `api_key`（`api_format=openai`）。`api_url` 可写 base；缺路径时运行时探测并记住（`~/.cata/api_url_resolved.json`）。
+- **OpenCode 网关（`opencode.ai`）与会话路由头**：出站对 host 含 `opencode.ai` 的请求自动附加 `x-opencode-session`。主 chat / QQ/TG 渠道为**每个 Chat 会话维护独立会话 id**（存在 server 连接层，`chat_reset`/`/clear` 清空 history 时一并清空，下轮首条重生成绑定），从而 opencode 能按会话路由聚合；worker / 演进等无会话语义的调用用一个进程内稳定回退值兜底（避免 400）。也支持 `llm.headers`（如 `{"x-opencode-session": "..."}`）显式固定。实现：`llm/chat_methods.go applyOutboundHeaders`、`server/socket_chat.go newOpenCodeSessionID`。
 
 **多提供商注册表**（`config.json` 顶层 `llm_providers`，代码 `internal/cata/config/providers.go`）：
 

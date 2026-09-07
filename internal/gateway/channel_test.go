@@ -148,6 +148,16 @@ func TestChannelStatus(t *testing.T) {
 	if !contains(s, "/dir") {
 		t.Errorf("status missing /dir hint: %s", s)
 	}
+	// v2 增强字段。
+	if !contains(s, "渠道") {
+		t.Errorf("status missing channel: %s", s)
+	}
+	if !contains(s, "Gateway") {
+		t.Errorf("status missing gateway mode: %s", s)
+	}
+	if !contains(s, "工作区") {
+		t.Errorf("status missing workspace overview: %s", s)
+	}
 }
 
 func contains(s, sub string) bool {

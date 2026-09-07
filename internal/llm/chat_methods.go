@@ -2,14 +2,19 @@ package llm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/clock"
@@ -177,7 +182,67 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
+	applyOutboundHeaders(httpReq, c)
 	return httpReq, nil
+}
+
+// applyOutboundHeaders 附加出站自定义请求头：
+//  1. config.llm.headers（若已由框架/适配器设置则保留原值不覆盖）；
+//  2. opencode 网关（host 含 opencode.ai）请求附 x-opencode-session——优先
+//     用 server 会话绑定 id（/clear 后更新），否则取 headers 里显式配置的值。
+func applyOutboundHeaders(httpReq *http.Request, c *Client) {
+	if c == nil || httpReq == nil {
+		return
+	}
+	for k, v := range c.extraHeaders {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		if httpReq.Header.Get(k) == "" {
+			httpReq.Header.Set(k, v)
+		}
+	}
+	if isOpenCodeHost(c.apiURL) {
+		if httpReq.Header.Get("x-opencode-session") == "" {
+			sid := strings.TrimSpace(c.opencodeSessionID)
+			if sid == "" && c.extraHeaders != nil {
+				sid = strings.TrimSpace(c.extraHeaders["x-opencode-session"])
+			}
+			if sid == "" {
+				sid = defaultOpenCodeSessionID()
+			}
+			if sid != "" {
+				httpReq.Header.Set("x-opencode-session", sid)
+			}
+		}
+	}
+}
+
+// defaultOpenCodeSessionID 非聊天类（worker/摘要/演进等无会话语义）在 opencode 网关
+// 也要带 x-opencode-session 才能路由。用进程内稳定的回退 id（主 chat 有 server 绑定
+// 的真实会话 id；此处仅兜底避免 400）。延迟生成一次。
+var defaultOCSOnce sync.Once
+var defaultOCS string
+
+func defaultOpenCodeSessionID() string {
+	defaultOCSOnce.Do(func() {
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err != nil {
+			defaultOCS = fmt.Sprintf("sess-%x", time.Now().UnixNano())
+			return
+		}
+		defaultOCS = hex.EncodeToString(b)
+	})
+	return defaultOCS
+}
+
+func isOpenCodeHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "opencode.ai" || strings.HasSuffix(h, ".opencode.ai")
 }
 
 // chatWithContext 发送 HTTP 请求到 LLM API（内部统一入口）。ctx 透传给 HTTP 请求；

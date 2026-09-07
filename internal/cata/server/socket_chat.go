@@ -3,6 +3,8 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,7 +45,7 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
 // chatWS 为本轮 chat 解析出的脑子分区（勿用 brain.Active()，后台 evolve 会临时改写全局 Active）。
 // promptPeak 为本连接会话内已达最高 prompt 档位（sticky，chat_reset 清零）。
-func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, userText string, attachments []AttachmentReq, chatWS *brain.Workspace, promptPeak *brain.PromptProfile, showThinking bool) (err error) {
+func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.Conn, br *bufio.Reader, history *[]llm.Message, chatOpenCodeSID *string, userText string, attachments []AttachmentReq, chatWS *brain.Workspace, promptPeak *brain.PromptProfile, showThinking bool) (err error) {
 	atomic.AddInt32(&activeChatStreams, 1)
 	defer atomic.AddInt32(&activeChatStreams, -1)
 	cc := brain.ChatContextFrom(ctx)
@@ -90,6 +92,17 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": fmt.Sprintf("LLM: %v", err)})
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 		return err
+	}
+	// 本 Chat 会话的 opencode 会话路由 id（x-opencode-session）：
+	// 会话级状态，随 history 生命周期；chat_reset 已由上层清空 chatOpenCodeSID。
+	// 新会话（history 空，含 clear 后首个文字）在此补一个稳定 id，供本会话每轮复用。
+	if len(*history) == 0 && (chatOpenCodeSID == nil || *chatOpenCodeSID == "") {
+		if chatOpenCodeSID != nil {
+			*chatOpenCodeSID = newOpenCodeSessionID()
+		}
+	}
+	if chatOpenCodeSID != nil {
+		client.SetOpenCodeSessionId(*chatOpenCodeSID)
 	}
 	// 多模态模型切换（如附图切到 chat_vision）实时下发 model_switch 事件，TUI 可提示用户。
 	client.SetModelSwitchHook(func(from, to string) {
@@ -669,4 +682,14 @@ func (ss *SocketServer) emitChatStats(ctx context.Context, conn net.Conn, client
 		}
 	}
 	_ = ss.emitStreamLine(conn, ev)
+}
+
+// newOpenCodeSessionID 生成 OpenCode 会话路由 id（x-opencode-session，8 字节 hex）。
+// 每个 Chat 会话独立；chat_reset 后上层清空 SID，下次首轮据此重生成。
+func newOpenCodeSessionID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("sess-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }

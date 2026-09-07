@@ -119,6 +119,9 @@ type LLMConfig struct {
 	// ImageTokenEstimate 单张图片估算占用的输入 token（无 tiktoken 时的保守估计；
 	// 用于会话压缩预算与超窗判定）。0 = 用默认 1000。
 	ImageTokenEstimate int `json:"image_token_estimate,omitempty"`
+	// Headers 出站请求附加的自定义 HTTP 头（如 opencode 网关需要 x-opencode-session、
+	// 或 OpenAI 网关要传入 x-title 等）。每轮请求都会带上；已由框架提供的头不覆盖。
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // ModelCapCfg LLMConfig.Capabilities 中单个模型的配置。
