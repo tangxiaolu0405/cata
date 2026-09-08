@@ -296,6 +296,7 @@
       <div class="composer">
         <textarea id="input" placeholder="对当前工作区说点什么…" disabled></textarea>
         <button type="button" id="btnSend" disabled>发送</button>
+        <button type="button" id="btnStop" class="ghost" disabled style="display:none">停止</button>
       </div>
     </main>
 
@@ -714,12 +715,21 @@
     };
 
     $("btnSend").onclick = send;
+    $("btnStop").onclick = stopGeneration;
     $("input").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         send();
       }
     });
+
+    /** 当前进行中请求的 AbortController（停止生成用）。 */
+    let currentAbort = null;
+
+    /** 停止生成：中止 fetch（服务端 r.Context() 取消 → 发 chat_cancel 给 agent）。 */
+    function stopGeneration() {
+      if (currentAbort) currentAbort.abort();
+    }
 
     async function send() {
       if (!activeId || busy) return;
@@ -731,16 +741,22 @@
       const bot = addBubble("bot", "");
       busy = true;
       $("btnSend").disabled = true;
+      $("btnStop").style.display = "";
+      $("btnStop").disabled = false;
+      const ac = new AbortController();
+      currentAbort = ac;
       try {
         const resp = await fetch("/api/projects/" + encodeURIComponent(activeId) + "/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
+          signal: ac.signal,
         });
         if (!resp.ok) throw new Error(await resp.text());
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
+        let stopped = false;
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -751,15 +767,25 @@
             buf = buf.slice(i + 1);
             if (!line) continue;
             const ev = JSON.parse(line);
+            // 服务端已收到 chat_cancel：停止按钮失效，等待 done 或直接结束。
+            if (ev.type === "cancelled" || (ev.type === "done" && ev.cancelled)) stopped = true;
             await handleStream(ev, bot, trace);
           }
         }
+        if (stopped) bot.textContent += "\n（已停止）";
       } catch (e) {
-        bot.textContent += "\n⚠️ " + (e.message || e);
+        if (e.name === "AbortError") {
+          bot.textContent += "\n（已停止）";
+        } else {
+          bot.textContent += "\n⚠️ " + (e.message || e);
+        }
       } finally {
+        if (currentAbort === ac) currentAbort = null;
         trace.finish();
         busy = false;
         $("btnSend").disabled = !activeId;
+        $("btnStop").style.display = "none";
+        $("btnStop").disabled = true;
         saveActiveTranscript();
       }
     }

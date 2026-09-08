@@ -196,28 +196,12 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 - 配置：`TELEGRAM_BOT_TOKEN`、`CATA_WORKER_ROOT`（可选；`CATA_SOCKET` 已无实际用途，本地走 per-ws socket）
 - 首渠道：Telegram 长轮询（`cmd/cata-gateway`）
 
-### 模式二（预留）
+### 模式二/三（设计归档，由模式四取代）
 
-场景：Telegram/飞书 webhook 在公网，cata 在内网，API Key 与产出区不出内网。
-
-```
-Internet ──▶ gateway (cloud) ──TLS──▶ cata serve-api (intranet)
-                                         cwd = ~/.cata_worker/...
-```
-
-待实现（模式一完成后）：
-
-- `cata serve-api` 或 `cata run --listen`：复用 `socket_chat` 语义，NDJSON over SSE/WebSocket
-- gateway `CATA_URL` + 认证（token/mTLS）
-- `exec_confirm` / `user_choice` 经 HTTP 回传（与 Telegram 按钮映射）
-
-### 模式三（预留）
-
-场景：gateway 与 worker 均在云上，可能同 VM 或 K8s 两 Pod。
-
-- 同 VM：可继续 Unix socket（等同模式一）
-- 跨 VM：同模式二 HTTP API
-- 运维：worker 镜像 + gateway 镜像分离；`CATA_WORKER_ROOT` 挂卷
+模式二（安全隔离：公网 gateway → 内网 worker HTTP API）与模式三（全云端）原设计依赖
+`cata serve-api` 独立 HTTP API，**该实现已删除**（gateway UI 的 `/api/projects/:id/chat`
+已提供完整 HTTP chat 能力，且 remote 隧道已覆盖跨机场景）。这两个模式不再演进，
+需要时从 git 历史（`a04abaa`）捡回 serve-api 或复用 gateway UI 的 HTTP 端点。
 
 ## 配置字段
 

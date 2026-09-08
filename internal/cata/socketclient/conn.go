@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -143,12 +144,38 @@ func (c *Conn) invalidateLocked() {
 	c.invalidate()
 }
 
-func (c *Conn) readLine() ([]byte, error) {
+// readLine 读取一行；stopCh 非 nil 时读阻塞会周期性唤醒检查停止信号
+// （供 ctx 感知的读 goroutine 优雅退出，避免泄漏）。
+func (c *Conn) readLine(stopCh <-chan struct{}) ([]byte, error) {
 	for {
+		if stopCh != nil {
+			select {
+			case <-stopCh:
+				return nil, fmt.Errorf("read stopped")
+			default:
+			}
+			// 短 deadline：阻塞读周期性唤醒，检查 stopCh（不影响正常数据流）。
+			_ = c.conn.SetReadDeadline(time.Now().Add(time.Second))
+		}
 		line, err := c.br.ReadBytes('\n')
 		if err != nil {
+			if stopCh != nil {
+				// 超时（net.Error.Timeout()）且未停止 → 继续读；其它错误 → 失效。
+				select {
+				case <-stopCh:
+					return nil, fmt.Errorf("read stopped")
+				default:
+				}
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					continue
+				}
+			}
 			c.invalidate()
 			return nil, err
+		}
+		if stopCh != nil {
+			_ = c.conn.SetReadDeadline(time.Time{}) // 清除 deadline
 		}
 		line = bytes.ReplaceAll(line, []byte{0}, nil)
 		line = bytes.TrimSpace(line)
@@ -197,7 +224,7 @@ func (c *Conn) Reset() error {
 	if err := c.write(cataRequest{Command: "chat_reset"}); err != nil {
 		return err
 	}
-	line, err := c.readLine()
+	line, err := c.readLine(nil)
 	if err != nil {
 		return err
 	}
@@ -246,97 +273,129 @@ func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, at
 	}
 
 	var out strings.Builder
+	// ctxLine 用常驻 goroutine 读行到 channel，使 ctx 取消能立即打断阻塞的 readLine
+	// （server 长时间无输出如 LLM 思考中时，停止生成必须即时生效）。
+	lineCh := make(chan lineResult, 8)
+	readStopped := make(chan struct{})
+	defer close(readStopped) // 函数返回时通知读 goroutine 退出（防泄漏）
+	go func() {
+		for {
+			line, err := c.readLine(readStopped)
+			select {
+			case lineCh <- lineResult{line: line, err: err}:
+			case <-readStopped:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	cancelling := false // 已发 chat_cancel，等待 server 回 done（不再重复发）
 	for {
 		select {
 		case <-ctx.Done():
-			_ = c.write(cataRequest{Command: "chat_cancel"})
-			return ChatResult{Cancelled: true}, ctx.Err()
-		default:
-		}
-
-		line, err := c.readLine()
-		if err != nil {
-			return ChatResult{Text: out.String()}, err
-		}
-		var ev map[string]any
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		typ, _ := ev["type"].(string)
-		switch typ {
-		case "token":
-			if s, ok := ev["content"].(string); ok {
-				out.WriteString(s)
-				if th, ok := any(h).(interface{ OnToken(string) }); ok && th != nil {
-					th.OnToken(s)
+			if !cancelling {
+				// 首次取消：发 chat_cancel，继续等 server 收尾回 done，
+				// 连接与 history 得以保留（server 端 chat_cancel 只取消当前轮）。
+				cancelling = true
+				_ = c.write(cataRequest{Command: "chat_cancel"})
+			}
+		case lr := <-lineCh:
+			if lr.err != nil {
+				return ChatResult{Text: out.String()}, lr.err
+			}
+			line := lr.line
+			var ev map[string]any
+			if err := json.Unmarshal(line, &ev); err != nil {
+				continue
+			}
+			typ, _ := ev["type"].(string)
+			switch typ {
+			case "token":
+				if s, ok := ev["content"].(string); ok {
+					out.WriteString(s)
+					if th, ok := any(h).(interface{ OnToken(string) }); ok && th != nil {
+						th.OnToken(s)
+					}
 				}
-			}
-		case "progress":
-			if h != nil {
-				if s, ok := ev["message"].(string); ok {
-					h.OnProgress(s)
+			case "progress":
+				if h != nil {
+					if s, ok := ev["message"].(string); ok {
+						h.OnProgress(s)
+					}
 				}
-			}
-		case "tool_start":
-			if h != nil {
-				if s, ok := ev["name"].(string); ok {
-					h.OnToolStart(s)
+			case "tool_start":
+				if h != nil {
+					if s, ok := ev["name"].(string); ok {
+						h.OnToolStart(s)
+					}
 				}
-			}
-		case "error":
-			msg, _ := ev["message"].(string)
-			return ChatResult{Text: out.String(), Success: false, ErrMsg: msg}, nil
-		case "exec_confirm_required":
-			if h == nil {
-				return ChatResult{Text: out.String()}, fmt.Errorf("exec_confirm_required but no handler")
-			}
-			p := ExecConfirmPrompt{
-				ConfirmID:   str(ev["confirm_id"]),
-				CommandLine: str(ev["command_line"]),
-				Cwd:         str(ev["cwd"]),
-			}
-			ok, err := h.ConfirmExec(ctx, p)
-			if err != nil {
-				return ChatResult{Text: out.String()}, err
-			}
-			if err := c.write(cataRequest{
-				Command:   "exec_confirm",
-				ConfirmID: p.ConfirmID,
-				Approved:  ok,
-			}); err != nil {
-				return ChatResult{Text: out.String()}, err
-			}
-		case "user_choice":
-			if h == nil {
-				return ChatResult{Text: out.String()}, fmt.Errorf("user_choice but no handler")
-			}
-			p := UserChoicePrompt{
-				ChoiceID: str(ev["id"]),
-				Prompt:   str(ev["prompt"]),
-				Multi:    boolVal(ev["multi"]),
-				Options:  parseChoiceOptions(ev["options"]),
-			}
-			selected, err := h.Choose(ctx, p)
-			if err != nil {
-				return ChatResult{Text: out.String()}, err
-			}
-			if err := c.write(cataRequest{
-				Command:  "user_choice",
-				ChoiceID: p.ChoiceID,
-				Selected: selected,
-			}); err != nil {
+			case "error":
+				msg, _ := ev["message"].(string)
+				return ChatResult{Text: out.String(), Success: false, ErrMsg: msg}, nil
+			case "exec_confirm_required":
+				if h == nil {
+					return ChatResult{Text: out.String()}, fmt.Errorf("exec_confirm_required but no handler")
+				}
+				p := ExecConfirmPrompt{
+					ConfirmID:   str(ev["confirm_id"]),
+					CommandLine: str(ev["command_line"]),
+					Cwd:         str(ev["cwd"]),
+				}
+				ok, err := h.ConfirmExec(ctx, p)
+				if err != nil {
+					return ChatResult{Text: out.String()}, err
+				}
+				if err := c.write(cataRequest{
+					Command:   "exec_confirm",
+					ConfirmID: p.ConfirmID,
+					Approved:  ok,
+				}); err != nil {
+					return ChatResult{Text: out.String()}, err
+				}
+			case "user_choice":
+				if h == nil {
+					return ChatResult{Text: out.String()}, fmt.Errorf("user_choice but no handler")
+				}
+				p := UserChoicePrompt{
+					ChoiceID: str(ev["id"]),
+					Prompt:   str(ev["prompt"]),
+					Multi:    boolVal(ev["multi"]),
+					Options:  parseChoiceOptions(ev["options"]),
+				}
+				selected, err := h.Choose(ctx, p)
+				if err != nil {
+					return ChatResult{Text: out.String()}, err
+				}
+				if err := c.write(cataRequest{
+					Command:  "user_choice",
+					ChoiceID: p.ChoiceID,
+					Selected: selected,
+				}); err != nil {
 				return ChatResult{Text: out.String()}, err
 			}
 		case "done":
 			success, _ := ev["success"].(bool)
 			cancelled, _ := ev["cancelled"].(bool)
+			// ctx 已取消（停止生成）时，强制标记 cancelled。
+			if cancelling {
+				cancelled = true
+			}
 			return ChatResult{
 				Text:      out.String(),
 				Success:   success,
 				Cancelled: cancelled,
 			}, nil
 		}
+		}
 	}
+}
+
+// lineResult 承载 ctx 感知读取的一行结果。
+type lineResult struct {
+	line []byte
+	err  error
 }
 
 type cataRequest struct {
