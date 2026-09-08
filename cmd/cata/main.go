@@ -59,6 +59,8 @@ func main() {
 		runServer(args[1:]) // legacy 支撑命令：供 cata-pet / scheduler 内部拉起，用户一般不直接使用
 	case "agent":
 		runAgent(args[1:])
+	case "serve-api":
+		runServeAPI(args[1:])
 	case "link":
 		runLink(args[1:])
 	case "supervisor":
@@ -82,6 +84,7 @@ func printUsage() {
 	fmt.Println("  cata chat [--dir <path>] [--quiet|-q] [--verbose|-v] [--show-thinking]  Start chat at output dir")
 	fmt.Println("  cata run                Start legacy server (internal: cata-pet / scheduler 用; chat 不再依赖)")
 	fmt.Println("  cata agent              Start one agent per workspace (one LLM loop; --workspace <ws_id>)")
+	fmt.Println("  cata serve-api          Start mode-2 HTTP API (socket_chat semantics over HTTP/SSE; --workspace)")
 	fmt.Println("  cata link               Register local workspaces to a remote gateway (add/remove/list)")
 	fmt.Println("  cata supervisor [stop]   Per-machine daemon: keep registered agent processes alive; stop 级联关闭全部 agent")
 	fmt.Println("  cata schedule           Self-hosted scheduler daemon (discovers tasks, fires as real client)")
