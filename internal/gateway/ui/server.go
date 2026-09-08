@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"cata/internal/cata/config"
 	"cata/internal/cata/link"
 	"cata/internal/gateway"
 	"cata/internal/gateway/tunnel"
@@ -90,6 +91,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/join/approve", s.handleJoinApprove)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/channels/", s.handleChannelMessages)
+	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/events", s.handleEventsSSE)
 	mux.HandleFunc("/api/settings/app", s.handleSettingsApp)
 	mux.HandleFunc("/api/settings/gateway", s.handleSettingsGateway)
@@ -104,6 +106,12 @@ func (s *Server) Run(ctx context.Context) error {
 	s.httpSrv = &http.Server{
 		Handler:           s.authHandler(mux),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// 会话空闲回收：web 会话超时无消息自动关闭（触发 agent idle 回收链路）。
+	if s.web != nil {
+		s.web.sessions.SetIdleTimeout(s.cfg.SessionIdleTimeout())
+		s.web.sessions.StartReaper(ctx, time.Hour)
 	}
 
 	errCh := make(chan error, 1)
@@ -502,6 +510,39 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// handleStatus GET /api/status → gateway 运行状态（会话数、空闲回收、provider/model、remote）。
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	cfg := s.loadCfg()
+	// provider/model 从 cata config 读取（红act 后返回）。
+	appCfg, extras, _, err := config.LoadAppConfigDocument()
+	_ = extras
+	provider := ""
+	model := ""
+	if err == nil {
+		provider = appCfg.LLM.Provider
+		model = appCfg.LLM.Model
+	}
+	sessions := 0
+	if s.web != nil {
+		sessions = s.web.SessionCount()
+	}
+	writeJSON(w, map[string]any{
+		"ok":             true,
+		"remote":         s.reg != nil,
+		"edition":        cfg.Edition,
+		"ui_listen":      cfg.ResolvedUIListen(),
+		"web_sessions":   sessions,
+		"provider":       provider,
+		"model":          model,
+		"idle_timeout_s": int(cfg.SessionIdleTimeout().Seconds()),
+		"now":            time.Now().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {

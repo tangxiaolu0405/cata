@@ -133,6 +133,11 @@ func (w *WebChat) sessionConn(key gateway.SessionKey, abs string, project gatewa
 	return w.sessions.GetWithCwdDialer(key, abs, gateway.DialLocalAgent(project.ID))
 }
 
+// SessionCount 当前 web 会话数。
+func (w *WebChat) SessionCount() int {
+	return w.sessions.SessionCount()
+}
+
 // Reset 清空项目会话。
 func (w *WebChat) Reset(project gateway.Project) error {
 	abs, err := filepath.Abs(strings.TrimSpace(project.Path))

@@ -51,6 +51,10 @@ func (b *Bot) Run(ctx context.Context) error {
 	log.Printf("cata-gateway: telegram bot started @%s (worker_root=%s socket=%s)", username, root, b.cfg.SocketPath)
 	log.Printf("telegram: long polling; open Telegram and message @%s (try /start)", username)
 
+	// 会话空闲回收：TG 会话超时无消息自动关闭（触发 agent idle 回收链路）。
+	b.sessions.SetIdleTimeout(b.cfg.SessionIdleTimeout())
+	b.sessions.StartReaper(ctx, time.Hour)
+
 	var offset int64
 	var pollOK bool
 	for {

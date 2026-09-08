@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"cata/internal/gateway/tunnel"
 )
@@ -33,9 +35,14 @@ type SessionManager struct {
 	dirListSeen map[SessionKey]bool
 	// remoteDial remote 模式下按目标 agent 拨其隧道（nil = 退化为默认 connFactory）。
 	remoteDial func(agentID string) func() (net.Conn, error)
+	// sessionIdleTimeout 会话空闲回收阈值：超过该时长无消息的会话连接被关闭
+	// （触发 server 侧 ClientDisconnected → agent idle 回收链路）。0 = 不回收。
+	sessionIdleTimeout time.Duration
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*CataConn
+	// lastUsed 各会话最近一次使用时间（GetWithCwdDialer 更新；回收判断用）。
+	lastUsed map[SessionKey]time.Time
 }
 
 // NewSessionManager 创建会话管理器（本地模式：拨本机 Unix socket）。
@@ -52,6 +59,7 @@ func NewSessionManagerWithStore(socketPath, workerRoot string, store *SessionCwd
 		cwdStore:    store,
 		dirListSeen: make(map[SessionKey]bool),
 		sessions:    make(map[SessionKey]*CataConn),
+		lastUsed:    make(map[SessionKey]time.Time),
 	}
 }
 
@@ -69,6 +77,7 @@ func NewRemoteSessionManagerWithStore(workerRoot string, connFactory ConnFactory
 		cwdStore:    store,
 		dirListSeen: make(map[SessionKey]bool),
 		sessions:    make(map[SessionKey]*CataConn),
+		lastUsed:    make(map[SessionKey]time.Time),
 	}
 }
 
@@ -197,6 +206,7 @@ func dialerIdentity(d func() (net.Conn, error)) string {
 func (m *SessionManager) GetWithCwdDialer(key SessionKey, cwd string, dialer func() (net.Conn, error)) (*CataConn, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lastUsed[key] = time.Now()
 	dialerKey := dialerIdentity(dialer)
 	if c, ok := m.sessions[key]; ok {
 		if c.Cwd() == cwd && c.DialKey() == dialerKey {
@@ -241,6 +251,79 @@ func (m *SessionManager) CloseAll() {
 	for k, c := range m.sessions {
 		_ = c.Close()
 		delete(m.sessions, k)
+		delete(m.lastUsed, k)
+	}
+}
+
+// SetIdleTimeout 设置会话空闲回收阈值（0 = 不回收）。
+func (m *SessionManager) SetIdleTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionIdleTimeout = d
+}
+
+// SessionCount 当前活跃会话数。
+func (m *SessionManager) SessionCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sessions)
+}
+
+// IdleSince 返回指定会话最近使用时间（无会话返回 zero time）。
+func (m *SessionManager) IdleSince(key SessionKey) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastUsed[key]
+}
+
+// StartReaper 启动会话空闲回收后台 goroutine：每 interval 扫描一次，
+// 关闭超过 sessionIdleTimeout 无消息的会话连接（触发 server 侧 ClientDisconnected
+// → agent idle 回收链路），并清理 lastUsed。ctx 取消时停止。
+// sessionIdleTimeout <= 0 时不启动。
+func (m *SessionManager) StartReaper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if m.sessionIdleTimeout <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.reapIdle()
+			}
+		}
+	}()
+}
+
+// reapIdle 扫描并关闭超时空闲的会话连接。
+func (m *SessionManager) reapIdle() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessionIdleTimeout <= 0 {
+		return
+	}
+	now := time.Now()
+	for k, c := range m.sessions {
+		last := m.lastUsed[k]
+		if last.IsZero() {
+			last = now // 无记录（旧会话）→ 本次不回收，先建立基线
+			m.lastUsed[k] = now
+			continue
+		}
+		if now.Sub(last) > m.sessionIdleTimeout {
+			log.Printf("session %s: idle for %s, closing (idle timeout %s)", k, now.Sub(last).Round(time.Second), m.sessionIdleTimeout)
+			_ = c.Close()
+			delete(m.sessions, k)
+			delete(m.lastUsed, k)
+			// 注意：连接关闭后 server 侧 ClientDisconnected 会触发 agent idle 回收
+			// （非 keep-alive agent）；下次消息时 GetWithCwdDialer 自动重建 + EnsureAgent 拉起。
+		}
 	}
 }
 

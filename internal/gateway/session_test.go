@@ -75,3 +75,64 @@ type dummyAddr struct{}
 
 func (dummyAddr) Network() string { return "dummy" }
 func (dummyAddr) String() string  { return "dummy" }
+// TestSessionManagerReapIdle 验证会话空闲回收：超过 idle 阈值的会话连接被关闭并删除。
+func TestSessionManagerReapIdle(t *testing.T) {
+	m := NewSessionManagerWithStore("", t.TempDir(), nil)
+	m.SetIdleTimeout(50 * time.Millisecond)
+
+	// 建立两个会话连接（eofConn 即可，不实际读写）。
+	dial1 := func() (net.Conn, error) { return &eofConn{}, nil }
+	dial2 := func() (net.Conn, error) { return &eofConn{}, nil }
+
+	if _, err := m.GetWithCwdDialer("tg:1", "/tmp", dial1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.GetWithCwdDialer("tg:2", "/tmp", dial2); err != nil {
+		t.Fatal(err)
+	}
+	if m.SessionCount() != 2 {
+		t.Fatalf("session count: got %d want 2", m.SessionCount())
+	}
+
+	// 模拟 c1 被使用（刷新 lastUsed），c2 保持旧。
+	time.Sleep(30 * time.Millisecond)
+	if _, err := m.GetWithCwdDialer("tg:1", "/tmp", dial1); err != nil {
+		t.Fatal(err)
+	}
+
+	// 再等 30ms：c2 超时（50ms），c1 未超时（30ms 前刚用）。
+	time.Sleep(30 * time.Millisecond)
+	m.reapIdle()
+
+	if m.SessionCount() != 1 {
+		t.Fatalf("after reap: session count = %d, want 1 (c2 reaped, c1 kept)", m.SessionCount())
+	}
+	if m.conn("tg:1") == nil {
+		t.Fatal("tg:1 should still exist (recently used)")
+	}
+	if m.conn("tg:2") != nil {
+		t.Fatal("tg:2 should be reaped")
+	}
+}
+
+// TestSessionManagerReapDisabled 验证 idle timeout=0 时不回收。
+func TestSessionManagerReapDisabled(t *testing.T) {
+	m := NewSessionManagerWithStore("", t.TempDir(), nil)
+	m.SetIdleTimeout(0) // 不回收
+
+	dial := func() (net.Conn, error) { return &eofConn{}, nil }
+	if _, err := m.GetWithCwdDialer("tg:1", "/tmp", dial); err != nil {
+		t.Fatal(err)
+	}
+	m.reapIdle()
+	if m.SessionCount() != 1 {
+		t.Fatalf("idle timeout 0 should not reap, got %d", m.SessionCount())
+	}
+}
+
+// conn 辅助：取内部连接（测试用）。
+func (m *SessionManager) conn(key SessionKey) *CataConn {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[key]
+}

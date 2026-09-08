@@ -215,7 +215,7 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 | `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | — | 通道会话默认路由 agent |
 | `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 项目 = 在线 agent |
 | `projects` | （可选遗留；UI 列表改读 brain/workspaces） | — |
-| `socket_path` / `CATA_SOCKET` | ✓ | 本地模式专用 |
+| `socket_path` / `CATA_SOCKET` | ⚠️ deprecated（本地走 per-ws socket，不再读取） | — |
 | `cata_url` / `CATA_URL` | 忽略 | 设置即进入 remote 模式 |
 | `worker_root` / `CATA_WORKER_ROOT` | ✓（渠道沙箱） | ✓（远端 cwd 基址） |
 

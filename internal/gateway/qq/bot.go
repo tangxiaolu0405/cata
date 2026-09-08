@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"cata/internal/gateway"
 	"cata/internal/gateway/ui"
@@ -49,6 +50,10 @@ func (b *Bot) Run(ctx context.Context) error {
 	root := gateway.WorkerRoot(b.cfg.WorkerRoot)
 	log.Printf("cata-gateway: qq bot starting (sandbox=%v worker_root=%s) — WebSocket is experimental / may be disabled by QQ",
 		b.cfg.QQSandbox, root)
+
+	// 会话空闲回收：QQ 会话超时无消息自动关闭（触发 agent idle 回收链路）。
+	b.sessions.SetIdleTimeout(b.cfg.SessionIdleTimeout())
+	b.sessions.StartReaper(ctx, time.Hour)
 
 	tokens := NewTokenSource(b.cfg.QQAppID, b.cfg.QQAppSecret)
 	if err := tokens.Refresh(ctx); err != nil {

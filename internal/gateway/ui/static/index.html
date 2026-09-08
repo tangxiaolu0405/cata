@@ -290,6 +290,7 @@
         <p class="sub" id="chatPath"></p>
         <div class="row" style="margin-top:0.5rem">
           <button type="button" class="ghost" id="btnReset" disabled>清空会话</button>
+          <span class="sub" id="statusBar" style="margin-left:auto;font-size:12px;opacity:.7"></span>
         </div>
       </div>
       <div class="chat" id="chat"></div>
@@ -412,7 +413,7 @@
           <div class="sec">
             <h4>Server / Evolution</h4>
             <div class="grid2">
-              <label class="field"><span>server.socket_path</span><input id="app_server_socket" type="text" /></label>
+              <label class="field"><span>server.socket_path (deprecated)</span><input id="app_server_socket" type="text" /></label>
               <label class="field"><span>server.log_level</span><input id="app_server_log" type="text" /></label>
               <label class="field"><span>server.timezone</span><input id="app_server_tz" type="text" /></label>
               <label class="field"><span>evolution.cycle_interval</span><input id="app_evo_cycle" type="number" /></label>
@@ -472,7 +473,7 @@
             </div>
             <div class="grid2">
               <label class="field"><span>ui_listen</span><input id="gw_ui" type="text" placeholder="0.0.0.0:8787" /></label>
-              <label class="field"><span>socket_path</span><input id="gw_socket" type="text" /></label>
+              <label class="field"><span>socket_path (deprecated)</span><input id="gw_socket" type="text" /></label>
               <label class="field"><span>worker_root</span><input id="gw_worker" type="text" /></label>
               <label class="field"><span>cata_server.binary</span><input id="gw_bin" type="text" /></label>
             </div>
@@ -691,6 +692,8 @@
 
     async function loadProjects() {
       projects = await api("/api/projects");
+      // 后台刷新状态栏（不阻塞项目列表）。
+      refreshStatus().catch(() => {});
       if (activeId && !projects.find((x) => x.id === activeId)) {
         saveActiveTranscript();
         activeId = null;
@@ -705,6 +708,21 @@
     }
 
     $("btnRefresh").onclick = () => loadProjects().catch((e) => alert(e.message || e));
+
+    /** 拉取 /api/status 更新状态栏（会话数、provider/model、idle 配置）。 */
+    async function refreshStatus() {
+      const st = await api("/api/status");
+      const el = $("statusBar");
+      if (!el) return;
+      const parts = [];
+      if (st.remote) parts.push("remote");
+      if (st.provider) parts.push(st.provider + (st.model ? ":" + st.model : ""));
+      if (typeof st.web_sessions === "number") parts.push(st.web_sessions + " 会话");
+      if (typeof st.idle_timeout_s === "number" && st.idle_timeout_s > 0) {
+        parts.push("idle " + Math.round(st.idle_timeout_s / 3600) + "h");
+      }
+      el.textContent = parts.join(" · ");
+    }
 
     $("btnReset").onclick = async () => {
       if (!activeId || busy) return;
