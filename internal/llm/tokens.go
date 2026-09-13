@@ -82,9 +82,9 @@ func (c *Client) EstimatedChatInputTokens(ctx context.Context, messages []Messag
 	return n
 }
 
-// DefaultImageTokenEstimate 单张图片默认估算 token（无 tiktoken 时按 512×512 tile 粗算的保守占位）。
+// DefaultImageTokenEstimate 单张图片默认估算 token（DeepSeek 文档：单图缩放后上限 1024 token）。
 // 设计见 agents.md §多模态 Token 与保护：估算不足以精算，只用于压缩预算与超窗判定。
-const DefaultImageTokenEstimate = 1000
+const DefaultImageTokenEstimate = 1024
 
 // imageTokenEstimate 返回配置的图片 token 估算；未配置时用默认。
 // 音频/文档附件 v1 同量级占位（不区分 modality 的成本）。

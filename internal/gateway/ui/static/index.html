@@ -186,9 +186,24 @@
       border-top: 1px solid var(--line);
       padding: 0.75rem 1rem;
       display: flex;
+      flex-direction: column;
       gap: 0.5rem;
     }
+    .composer-row { display: flex; gap: 0.5rem; align-items: flex-end; }
     .composer textarea { flex: 1; min-height: 52px; resize: vertical; }
+    /* 待发送图片 chips + 气泡内缩略图（图片以 base64 内联发给 agent，不落盘） */
+    .att-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .att-chip {
+      display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.2rem 0.45rem;
+      border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.75);
+      font-size: 0.74rem; color: var(--muted); max-width: 240px;
+    }
+    .att-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; }
+    .att-chip .x { cursor: pointer; font-weight: 700; }
+    .att-chip .x:hover { color: var(--accent-deep); }
+    .bubble .att-thumbs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .bubble .att-thumbs img { max-width: 220px; max-height: 220px; border-radius: 10px; display: block; }
+    .chat.drop-hint { outline: 2px dashed var(--accent-deep); outline-offset: -6px; }
     .empty {
       margin: auto;
       text-align: center;
@@ -294,10 +309,15 @@
         </div>
       </div>
       <div class="chat" id="chat"></div>
-      <div class="composer">
-        <textarea id="input" placeholder="对当前工作区说点什么…" disabled></textarea>
-        <button type="button" id="btnSend" disabled>发送</button>
-        <button type="button" id="btnStop" class="ghost" disabled style="display:none">停止</button>
+      <div class="composer" id="composer">
+        <div class="att-list" id="attList"></div>
+        <div class="composer-row">
+          <button type="button" class="ghost" id="btnAttach" title="上传图片（也可拖拽到聊天区，或 Ctrl/⌘+V 粘贴）" disabled>📎</button>
+          <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none" />
+          <textarea id="input" placeholder="对当前工作区说点什么…（可拖拽/粘贴图片）" disabled></textarea>
+          <button type="button" id="btnSend" disabled>发送</button>
+          <button type="button" id="btnStop" class="ghost" disabled style="display:none">停止</button>
+        </div>
       </div>
     </main>
 
@@ -572,11 +592,22 @@
 
     function saveActiveTranscript() {
       if (!activeId) return;
-      const html = $("chat").innerHTML;
-      transcripts[activeId] = html;
+      transcripts[activeId] = transcriptHTML();
       try {
-        sessionStorage.setItem(transcriptKey(activeId), html);
+        sessionStorage.setItem(transcriptKey(activeId), transcripts[activeId]);
       } catch (_) {}
+    }
+
+    /** 聊天区 HTML；图片（data URL）换成一行占位再存，避免 sessionStorage 配额被撑爆。 */
+    function transcriptHTML() {
+      const clone = $("chat").cloneNode(true);
+      clone.querySelectorAll("img").forEach((im) => {
+        const ph = document.createElement("span");
+        ph.className = "att-chip";
+        ph.textContent = "🖼 " + (im.alt || "image");
+        im.replaceWith(ph);
+      });
+      return clone.innerHTML;
     }
 
     function loadStoredTranscript(id) {
@@ -626,6 +657,9 @@
       $("input").disabled = !p;
       $("btnSend").disabled = !p || busy;
       $("btnReset").disabled = !p;
+      if ($("btnAttach")) $("btnAttach").disabled = !p;
+      pendingImages = [];
+      renderPendingImages();
       if (!id) {
         $("chat").innerHTML = "";
       } else if (!restoreTranscript(id)) {
@@ -636,11 +670,27 @@
       renderProjects();
     }
 
-    function addBubble(role, text) {
-      if (!text && role === "sys") return;
+    function addBubble(role, text, images) {
+      if (!text && role === "sys" && !(images && images.length)) return;
       const d = document.createElement("div");
       d.className = "bubble " + role;
-      d.textContent = text;
+      if (images && images.length) {
+        const box = document.createElement("div");
+        box.className = "att-thumbs";
+        images.forEach((img) => {
+          const im = document.createElement("img");
+          im.src = img.dataUrl;
+          im.alt = img.name || "image";
+          im.title = (img.name || "image") + " · " + fmtBytes(img.bytes || 0);
+          box.appendChild(im);
+        });
+        d.appendChild(box);
+      }
+      if (text) {
+        const t = document.createElement("span");
+        t.textContent = text;
+        d.appendChild(t);
+      }
       $("chat").appendChild(d);
       $("chat").scrollTop = $("chat").scrollHeight;
       saveActiveTranscript();
@@ -707,6 +757,9 @@
         $("input").disabled = true;
         $("btnSend").disabled = true;
         $("btnReset").disabled = true;
+        if ($("btnAttach")) $("btnAttach").disabled = true;
+        pendingImages = [];
+        renderPendingImages();
         $("chat").innerHTML = "";
       }
       renderProjects();
@@ -739,12 +792,135 @@
 
     $("btnSend").onclick = send;
     $("btnStop").onclick = stopGeneration;
+    $("btnAttach").onclick = () => $("fileInput").click();
+    $("fileInput").addEventListener("change", (e) => {
+      addImageFiles(Array.from((e.target && e.target.files) || []));
+      e.target.value = ""; // 允许重复选同一张
+    });
+    // Ctrl/⌘+V 粘贴图片（截图直接粘）
+    document.addEventListener("paste", (e) => {
+      if (!activeId || busy) return;
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      const files = [];
+      for (const it of items) {
+        if (it.kind === "file" && String(it.type || "").startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        addImageFiles(files);
+      }
+    });
+    // 拖拽图片到聊天区
+    const chatDrop = $("chat");
+    ["dragenter", "dragover"].forEach((t) =>
+      chatDrop.addEventListener(t, (e) => {
+        e.preventDefault();
+        chatDrop.classList.add("drop-hint");
+      })
+    );
+    chatDrop.addEventListener("dragleave", () => chatDrop.classList.remove("drop-hint"));
+    chatDrop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      chatDrop.classList.remove("drop-hint");
+      if (!activeId || busy) return;
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter((f) =>
+        String(f.type || "").startsWith("image/")
+      );
+      if (files.length) addImageFiles(files);
+    });
     $("input").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         send();
       }
     });
+
+    /** 待发送图片（浏览器读成 base64 内联提交；不落盘、不经 URL）。 */
+    let pendingImages = [];
+    /** DeepSeek 图像理解：单张 ≤32 MiB、格式 JPEG/PNG/GIF/WebP。 */
+    const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+    const IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+    function fmtBytes(n) {
+      if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MiB";
+      if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
+      return n + " B";
+    }
+
+    function renderPendingImages() {
+      const el = $("attList");
+      if (!el) return;
+      el.innerHTML = "";
+      pendingImages.forEach((img, i) => {
+        const chip = document.createElement("span");
+        chip.className = "att-chip";
+        chip.title = img.name + " · " + fmtBytes(img.bytes);
+        const thumb = document.createElement("img");
+        thumb.src = img.dataUrl;
+        thumb.alt = img.name;
+        const label = document.createElement("span");
+        label.textContent = img.name.length > 16 ? img.name.slice(0, 15) + "…" : img.name;
+        const x = document.createElement("span");
+        x.className = "x";
+        x.textContent = "✕";
+        x.title = "移除";
+        x.onclick = () => {
+          pendingImages.splice(i, 1);
+          renderPendingImages();
+        };
+        chip.append(thumb, label, x);
+        el.appendChild(chip);
+      });
+    }
+
+    function readFileAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ""));
+        r.onerror = () => reject(r.error || new Error("read failed"));
+        r.readAsDataURL(file);
+      });
+    }
+
+    /** 把选中的图片读成 base64 入待发队列（超过上限或非图片直接提示并跳过）。 */
+    async function addImageFiles(files) {
+      for (const f of files || []) {
+        const mime = String(f.type || "").toLowerCase();
+        if (!mime.startsWith("image/")) {
+          toast("只支持图片：" + (f.name || mime || "unknown"));
+          continue;
+        }
+        if (IMAGE_MIMES.indexOf(mime) < 0) {
+          toast("格式不支持（png/jpeg/webp/gif）：" + (f.name || mime));
+          continue;
+        }
+        if (f.size > MAX_IMAGE_BYTES) {
+          toast("图片过大（" + fmtBytes(f.size) + " > 32 MiB）：" + (f.name || ""));
+          continue;
+        }
+        try {
+          const dataUrl = await readFileAsDataURL(f);
+          const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+          if (!m) {
+            toast("图片读取失败：" + (f.name || ""));
+            continue;
+          }
+          pendingImages.push({
+            name: f.name || "pasted.png",
+            mime: m[1],
+            base64: m[2],
+            dataUrl,
+            bytes: f.size,
+          });
+        } catch (e) {
+          toast("图片读取失败：" + (e.message || e));
+        }
+      }
+      renderPendingImages();
+    }
 
     /** 当前进行中请求的 AbortController（停止生成用）。 */
     let currentAbort = null;
@@ -757,9 +933,12 @@
     async function send() {
       if (!activeId || busy) return;
       const text = $("input").value.trim();
-      if (!text) return;
+      const images = pendingImages.slice();
+      if (!text && !images.length) return;
       $("input").value = "";
-      addBubble("user", text);
+      pendingImages = [];
+      renderPendingImages();
+      addBubble("user", text, images);
       const trace = createTrace();
       const bot = addBubble("bot", "");
       busy = true;
@@ -772,7 +951,11 @@
         const resp = await fetch("/api/projects/" + encodeURIComponent(activeId) + "/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text,
+            // 图片以 base64 内联（agent 侧编码为 data:<mime>;base64,… 发给模型）
+            attachments: images.map((i) => ({ inline: { mime: i.mime, base64: i.base64 } })),
+          }),
           signal: ac.signal,
         });
         if (!resp.ok) throw new Error(await resp.text());
@@ -827,6 +1010,13 @@
           break;
         case "error":
           bot.textContent += "\n⚠️ " + (ev.message || "");
+          break;
+        case "attachment_rejected":
+          // 服务端 ingest 拒绝了某张图（MIME/大小/路径越界）。
+          trace.add("progress", "⚠️ 附件被拒：" + (ev.path || "") + " — " + (ev.reason || ""));
+          break;
+        case "model_switch":
+          trace.add("progress", "🔀 切到多模态模型：" + (ev.from || "?") + " → " + (ev.to || "?"));
           break;
         case "exec_confirm_required":
           await askConfirm(ev);

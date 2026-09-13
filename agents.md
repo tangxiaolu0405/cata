@@ -236,7 +236,7 @@ socket_chat history (user/assistant/tool only)
 | `evolve` 决策 | `system` + `user` | **否**（`ChatEvolution` → `NoBrainInject`） |
 | `Summarize` / 查询预处理 | 内联 `system` + `user` | 是（经 `chat()`） |
 
-**会话压缩**（与 system 无关）：估算 token ≥ `context_window × context_compress_ratio`（默认 85%）→ `evolve.RunSessionCompress` → history 裁到窗口比例内；**先剥掉最早带 Media 的 user 轮（保留文本），再裁条数**；每张图按 `llm.image_token_estimate`（默认 1000）计入预算。
+**会话压缩**（与 system 无关）：估算 token ≥ `context_window × context_compress_ratio`（默认 85%）→ `evolve.RunSessionCompress` → history 裁到窗口比例内；**先剥掉最早带 Media 的 user 轮（保留文本），再裁条数**；每张图按 `llm.image_token_estimate`（默认 1024）计入预算。
 
 **硬限制**（与代码常量一致）：
 
@@ -362,7 +362,19 @@ Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` /
 
 ---
 
-## 多模态（已实现 A/B + M2/M3 + M4 基础：出站编码 + 能力路由 + 附件摄取 + TUI /attach/@路径 + 事件 + 压缩与 token 估算）
+## 多模态（出站编码 + 能力路由 + 附件摄取 + 三个上传入口：TUI /attach|@path|Ctrl+V、Web 控制台、TG/QQ 渠道 + 事件 + 压缩与 token 估算）
+
+**上传入口（base64 内联，先做这一层）**：
+
+| 入口 | 方式 | 代码 |
+|------|------|------|
+| `cata chat` TUI | `/attach <path>` · 行内 `@path` · `/attach clip` 或 **Ctrl+V**（读系统剪贴板图片） | `client/tui_input.go`、`client/clipboard_image_*.go` |
+| cata-gateway Web 控制台 | 📎 选择文件 / 拖拽到聊天区 / Ctrl+V 粘贴 → FileReader → `attachments[].inline` | `gateway/ui/static/index.html`、`gateway/ui/webchat.go` |
+| Telegram / QQ | 渠道图片下载到产出区 → `attachments[].path` | `gateway/telegram/bot.go`、`gateway/qq/bot.go` |
+
+三条入口最终都汇到 server 的同一处 ingest（`server/attachments.go`），再按模型 capabilities 编码为
+`data:<mime>;base64,…`（DeepSeek 图像理解要求的格式，见 api-docs.deepseek.com/zh-cn/guides/vision）。
+**不做**（v1）：外部图片 URL、Files API `file_id`、服务端落盘存储。
 
 **目标**：终端 chat 可向模型附带**图片**（音频/PDF 基础已就绪，按模型 capabilities 启用）；**换模型**时只改配置，不改业务代码路径。
 **非目标（v1）**：演进 LLM、Summarize、MCP 默认不走 vision；不做视频流；不在 `~/.cata` 脑子正文里存原图。
@@ -379,14 +391,18 @@ Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` /
     "model": "deepseek-v4-flash",
     "models": { "chat": "deepseek-v4-flash", "chat_vision": "gpt-4o" },
     "capabilities": {
-      "deepseek-v4-flash": { "modalities": ["text"] },
+      "deepseek-flash": {
+        "modalities": ["text", "image"],
+        "max_image_bytes": 33554432,
+        "max_request_bytes": 50331648
+      },
       "gpt-4o": {
         "modalities": ["text", "image"],
         "max_images_per_message": 4,
         "image_mime_allow": ["image/png", "image/jpeg", "image/webp", "image/gif"]
       }
     },
-    "image_token_estimate": 1000,
+    "image_token_estimate": 1024,
     "attachment_dir": ""
   }
 }
@@ -408,10 +424,14 @@ Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` /
 |--------|------|
 | `modalities` | `text` \| `image` \| `audio` \| `document`（按能力） |
 | `max_images_per_message` | 单条 user 消息最多几张 |
-| `max_image_bytes` | 单张解码后上限（默认 10MiB） |
-| `image_mime_allow` | 白名单 MIME（默认 png/jpeg/webp/gif） |
-| `image_token_estimate` | 单图估算 token（默认 1000，计入压缩预算） |
+| `max_image_bytes` | 单张解码后上限（默认 **32MiB**，DeepSeek 文档单图上限） |
+| `max_request_bytes` | 单轮请求体上限（默认 **48MiB**，base64 膨胀后计入；DeepSeek 文档） |
+| `image_mime_allow` | 白名单 MIME（默认 png/jpeg/webp/gif，与 DeepSeek 一致） |
+| `image_token_estimate` | 单图估算 token（默认 **1024**，DeepSeek 文档单图 token 上限，计入压缩预算） |
 | `attachment_dir` | 附件白名单目录（默认仅产出区） |
+
+限额落在三处（都读同一份 capabilities）：server 侧 ingest（单张，`maxAttachmentBytes()`）、
+llm 侧出站校验（单张 + 单轮请求体预算 `validateMediaPayload`）、会话压缩预算（`image_token_estimate`）。
 
 换供应商时：只改 `api_url` + `model` + `capabilities` 三条，**不改** server 工具循环与 socket 协议字段名。
 
@@ -480,7 +500,7 @@ type MediaRef struct {
 | 字段 | 说明 |
 |------|------|
 | `attachments[].path` | 相对产出区或绝对路径（经 `safePathUnder`） |
-| `attachments[].inline` | TUI 粘贴/拖拽时用（`InlineAttachment{MIME, Base64}`） |
+| `attachments[].inline` | TUI 剪贴板图片 / Web 控制台上传 / 渠道已编码内容（`InlineAttachment{MIME, Base64}`）；服务端按**内容**嗅探 MIME 纠正客户端声明 |
 
 **事件**：`attachment_rejected`（`reason`, `path`）、`model_switch`（`from`, `to`）。
 
@@ -489,7 +509,9 @@ type MediaRef struct {
 | 操作 | 行为 |
 |------|------|
 | `/attach <path>` | 加入待发送附件队列，发送时一并提交（`/attach clear` 清空，`/attach` 查看）；行内 `@path` 亦识别 |
-| 发送 | `text` + `attachments` 一并提交（队列 + 本行 `@` 合并） |
+| `/attach clip`（别名 `clipboard`/`paste`） | 读系统剪贴板图片（macOS osascript / Linux wl-paste·xclip / Windows PowerShell）→ base64 入队（最多 6 张） |
+| **Ctrl+V** | 剪贴板是图片则作为内联附件入队；不是图片则落回普通按键，不影响文本编辑 |
+| 发送 | `text` + `attachments` 一并提交（本行 `@` > `/attach` 路径队列 > 剪贴板图片） |
 | 主区展示 | 不嵌大图，一行附件摘要；被拒发错误行 |
 
 ### Provider 抽象（便于换模型）
@@ -511,6 +533,7 @@ DeepSeek / 千问 / OpenAI / 本地 vLLM / Anthropic 的差异集中在**出站�
 | **M2** ✅ | TUI `/attach`、发送栏附件提示、`model_switch` / `attachment_rejected` 事件 | 交互式附图 |
 | **M3** ✅ | 压缩优先去旧轮 Media、按图 token 估算（`image_token_estimate`） | 长会话不爆窗 |
 | **M4** ✅ | audio wire（`input_audio`）+ 能力路由 + Anthropic 图片 + **PDF 文本提取**（pdftotext 拼入 user 正文） | 按所选模型 capabilities 启用 |
+| **M5** ✅ | **图片上传（base64 内联）**：TUI `/attach clip`+Ctrl+V、Web 控制台 📎/拖拽/粘贴、限额对齐 DeepSeek（单图 32MiB、请求体 48MiB、1024 token） | 三个入口都能把图发给 DeepSeek 并得到描述 |
 
 **刻意不做（与多模态相关）**：不把图片写入 `memory/short/current.md` 全文；不让 evolve 自动选 vision 模型；不在 v1 支持「管道 `cata chat < img.png`」。
 

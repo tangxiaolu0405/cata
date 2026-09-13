@@ -19,6 +19,10 @@ import (
 	"cata/internal/gateway/tunnel"
 )
 
+// maxChatBodyBytes 单轮 chat 请求体上限（含 base64 内联图片）。
+// DeepSeek 请求体上限 48 MiB；这里留一点余量放 JSON 包装与文本，超出由 MaxBytesReader 直接 413。
+const maxChatBodyBytes = 56 << 20
+
 //go:embed static/*
 var staticFS embed.FS
 
@@ -436,15 +440,42 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case action == "chat" && r.Method == http.MethodPost:
+		// 带附件（图片 base64 内联）的请求体远大于纯文本：放宽读取上限到与 DeepSeek
+		// 请求体上限同量级（超出即 413，不读爆内存）。
+		r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
 		var body struct {
 			Text string `json:"text"`
+			// Attachments 随消息提交的附件，目前只支持 inline（浏览器读文件 → base64）：
+			// [{"inline":{"mime":"image/png","base64":"…"}}]。
+			Attachments []struct {
+				Path   string `json:"path,omitempty"`
+				Inline *struct {
+					MIME   string `json:"mime"`
+					Base64 string `json:"base64"`
+				} `json:"inline,omitempty"`
+			} `json:"attachments,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
 		text := strings.TrimSpace(body.Text)
-		if text == "" {
+		attachments := make([]gateway.AttachmentReq, 0, len(body.Attachments))
+		for _, a := range body.Attachments {
+			req := gateway.AttachmentReq{Path: strings.TrimSpace(a.Path)}
+			if a.Inline != nil {
+				req.Inline = &gateway.InlineAttachment{
+					MIME:   strings.TrimSpace(a.Inline.MIME),
+					Base64: strings.TrimSpace(a.Inline.Base64),
+				}
+			}
+			if req.Path == "" && req.Inline == nil {
+				continue
+			}
+			attachments = append(attachments, req)
+		}
+		// 允许「只有图、没有字」：模型可自行理解（DeepSeek 支持纯图输入）。
+		if text == "" && len(attachments) == 0 {
 			http.Error(w, "empty text", 400)
 			return
 		}
@@ -464,7 +495,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}
-		result, err := s.web.Chat(r.Context(), proj, text, emit)
+		result, err := s.web.Chat(r.Context(), proj, text, attachments, emit)
 		if err != nil {
 			_ = emit(StreamEvent{"type": "error", "message": err.Error()})
 			_ = emit(StreamEvent{"type": "done", "success": false})

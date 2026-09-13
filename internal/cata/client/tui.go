@@ -106,6 +106,14 @@ func (i pickItem) FilterValue() string { return i.title }
 func (i pickItem) Title() string       { return i.title }
 func (i pickItem) Description() string { return i.desc }
 
+// inlinePending 待发送的内联附件（剪贴板图片）：已 base64 编码，发送时走 attachments[].inline。
+type inlinePending struct {
+	Label  string // 展示名（clip-1.png）
+	MIME   string
+	Base64 string
+	Bytes  int
+}
+
 type model struct {
 	sess   *session
 	cwd    string
@@ -144,6 +152,8 @@ type model struct {
 	subagents      []subagentRecord
 	// attachQueue /attach 命令累积的待发送附件（发送时与行内 @path 合并提交；成功后清空）。
 	attachQueue []string
+	// attachInline 剪贴板图片（/attach clip 或 Ctrl+V）：base64 内联附件，与上者一起提交。
+	attachInline []inlinePending
 }
 
 type streamTickMsg struct {
@@ -168,7 +178,7 @@ func newChatTextarea() textarea.Model {
 func newModel(s *session, cwd string, ws *brain.Workspace) model {
 	ti := newChatTextarea()
 
-	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste") + "\n"
+	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste（剪贴板是图片即作为附件）") + "\n"
 	vp := viewport.New(80, 20)
 
 	m := model{
@@ -329,6 +339,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "d" && len(m.subagents) > 0 {
 			return m.openSubagentPicker()
+		}
+		// Ctrl+V：剪贴板里是图片就作为内联附件入队（终端没有通用图片粘贴协议）；
+		// 不是图片则落回普通按键处理，不影响文本粘贴/编辑。
+		if msg.Type == tea.KeyCtrlV && !m.streaming {
+			if img, err := readClipboardImage(); err == nil && len(img.Data) > 0 {
+				m.queueInlineImage(img)
+				return m, nil
+			}
+			break
 		}
 		// 粘贴（bracketed paste）整段进编辑区，不触发发送。
 		if msg.Paste {
@@ -799,7 +818,7 @@ func (m *model) footerView() string {
 	if sidebarActive(m.width) {
 		return styleDim.Render("滚轮切换区 · d 子任务 · /status · ctrl+c quit")
 	}
-	return styleDim.Render("enter send · double-enter newline · ctrl+v paste · ctrl+c quit · /exit")
+	return styleDim.Render("enter send · double-enter newline · ctrl+v paste(图片→附件) · ctrl+c quit · /exit")
 }
 
 func (m *model) View() string {

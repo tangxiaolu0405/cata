@@ -99,8 +99,12 @@ func (w *WebChat) Close() {
 // StreamEvent 推给浏览器的 NDJSON 事件。
 type StreamEvent map[string]any
 
-// Chat 对某项目发一轮对话；emit 写流式事件。
-func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string, emit func(StreamEvent) error) (gateway.ChatResult, error) {
+// Chat 对某项目发一轮对话；emit 写流式事件；attachments 为随消息提交的附件。
+//
+// 附件走 **inline base64**（浏览器 FileReader → data URL → base64），不落盘、不经 URL：
+// server 侧 ingestInlineAttachment 校验 MIME/大小后编码为 data:<mime>;base64,… 发给模型
+// （DeepSeek 图像理解要求的格式）；remote 模式下 NDJSON 逐字节过隧道，无需额外改动。
+func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string, attachments []gateway.AttachmentReq, emit func(StreamEvent) error) (gateway.ChatResult, error) {
 	abs, err := filepath.Abs(strings.TrimSpace(project.Path))
 	if err != nil {
 		return gateway.ChatResult{}, err
@@ -118,7 +122,7 @@ func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string
 		return gateway.ChatResult{}, err
 	}
 	h := &webStreamHandler{w: w, ctx: ctx, emit: emit, projectID: project.ID}
-	return conn.Chat(ctx, text, h)
+	return conn.ChatAsWithAttachments(ctx, text, "", attachments, h)
 }
 
 // sessionConn 获取会话连接：remote 模式经隧道拨对应在线 agent；
@@ -205,6 +209,24 @@ func (h *webStreamHandler) OnProgress(message string) {
 
 func (h *webStreamHandler) OnToolStart(name string) {
 	_ = h.emit(StreamEvent{"type": "tool_start", "name": name})
+}
+
+// OnEvent 透传 StreamHandler 未覆盖的事件（socketclient.EventSink）：
+// 附件被拒（attachment_rejected）与模型切换（model_switch）是上传图片时用户最需要看到的提示，
+// 直接转发给浏览器；其余事件（tool_result/stats/…）浏览器不消费，忽略以省带宽。
+func (h *webStreamHandler) OnEvent(ev map[string]any) {
+	typ, _ := ev["type"].(string)
+	switch typ {
+	case "attachment_rejected", "model_switch":
+		out := StreamEvent{"type": typ}
+		for k, v := range ev {
+			if k == "type" {
+				continue
+			}
+			out[k] = v
+		}
+		_ = h.emit(out)
+	}
 }
 
 func (h *webStreamHandler) ConfirmExec(ctx context.Context, p gateway.ExecConfirmPrompt) (bool, error) {

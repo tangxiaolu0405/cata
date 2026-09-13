@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -215,21 +216,16 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	m.lastIn = line
 	m.stats.turns++
 	m.stats.state = "thinking"
-	// 附件：同行内 `@<path>` 提取 + /attach 队列合并，随 chat 发送。
+	// 附件：同行内 `@<path>` 提取 + /attach 队列（本地路径）+ 剪贴板图片（inline base64）
+	// 合并，随 chat 一起提交。
 	sendText, inlinePaths := splitAttachmentTokens(line)
-	attachments := make([]attachReq, 0, len(inlinePaths)+len(m.attachQueue))
-	for _, p := range inlinePaths {
-		attachments = append(attachments, attachReq{Path: p})
-	}
-	for _, p := range m.attachQueue {
-		attachments = append(attachments, attachReq{Path: p})
-	}
-	hadQueue := len(m.attachQueue) > 0
+	attachments := m.pendingAttachments(inlinePaths)
 	queueTip := ""
-	if hadQueue {
-		queueTip = " (" + queueSummary(m.attachQueue) + ")"
+	if tip := queueTipFor(len(m.attachQueue), m.attachInline); tip != "" {
+		queueTip = " (" + tip + ")"
 	}
 	m.attachQueue = nil // 发送即提交；失败可 /attach retry 或重输
+	m.attachInline = nil
 	m.appendLog(styleUser.Render("you: ")+line+queueTip+"\n\n", true)
 
 	// 断线（agent 空闲退出）时先唤醒 agent 再发：用户无感，休眠工作空间不白占进程。
@@ -260,7 +256,23 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	return m, waitStream(m.sess)
 }
 
-// handleAttachCmd 处理 /attach 命令：加附件、清空、查看队列。
+// pendingAttachments 汇总本轮要提交的附件：行内 @path（本次输入）+ /attach 队列路径
+// + 剪贴板图片（inline base64）。顺序：本行 > 队列 > 剪贴板。
+func (m *model) pendingAttachments(inlinePaths []string) []attachReq {
+	out := make([]attachReq, 0, len(inlinePaths)+len(m.attachQueue)+len(m.attachInline))
+	for _, p := range inlinePaths {
+		out = append(out, attachReq{Path: p})
+	}
+	for _, p := range m.attachQueue {
+		out = append(out, attachReq{Path: p})
+	}
+	for _, img := range m.attachInline {
+		out = append(out, attachReq{Inline: &inlineAttach{MIME: img.MIME, Base64: img.Base64}})
+	}
+	return out
+}
+
+// handleAttachCmd 处理 /attach 命令：加附件、加剪贴板图片、清空、查看队列。
 func (m *model) handleAttachCmd(cmd string) tea.Model {
 	// 兼容 /attach clear / /attach list；空参数列出当前队列。
 	fields := strings.Fields(strings.TrimSpace(cmd))
@@ -268,15 +280,18 @@ func (m *model) handleAttachCmd(cmd string) tea.Model {
 	if len(fields) >= 2 {
 		arg = strings.TrimPrefix(fields[1], "@")
 	}
-	switch arg {
+	switch strings.ToLower(arg) {
 	case "clear":
 		m.attachQueue = nil
+		m.attachInline = nil
 		m.appendLog("— attachment queue cleared\n", true)
+	case "clip", "clipboard", "paste":
+		m.attachFromClipboard()
 	case "list", "":
-		if len(m.attachQueue) == 0 {
-			m.appendLog("— no pending attachments (use /attach <path> 或行内 @path)\n", true)
+		if len(m.attachQueue) == 0 && len(m.attachInline) == 0 {
+			m.appendLog("— no pending attachments（/attach <path> · 行内 @path · /attach clip 读剪贴板图片）\n", true)
 		} else {
-			m.appendLog("— pending: "+queueSummary(m.attachQueue)+"\n", true)
+			m.appendLog("— pending: "+queueTipFor(len(m.attachQueue), m.attachInline)+"\n", true)
 		}
 	default:
 		m.attachQueue = append(m.attachQueue, arg)
@@ -289,6 +304,39 @@ func (m *model) handleAttachCmd(cmd string) tea.Model {
 	return m
 }
 
+// attachFromClipboard 读取系统剪贴板里的图片，编码为 inline base64 入队。
+// 终端没有通用图片粘贴协议，所以走「读剪贴板 → base64 → socket inline 附件」这条路
+// （与 Web 控制台上传、Telegram 渠道附件最终都汇到 server 的同一条 ingest）。
+func (m *model) attachFromClipboard() {
+	img, err := readClipboardImage()
+	if err != nil {
+		m.appendLog(styleErr.Render("! "+err.Error())+"\n", true)
+		return
+	}
+	m.queueInlineImage(img)
+}
+
+// queueInlineImage 把剪贴板/粘贴得到的图片放进待发队列（最多 6 张，超出丢最早的）。
+func (m *model) queueInlineImage(img clipboardImage) {
+	if len(img.Data) == 0 {
+		m.appendLog(styleErr.Render("! 剪贴板图片为空")+"\n", true)
+		return
+	}
+	label := fmt.Sprintf("clip-%d.png", len(m.attachInline)+1)
+	m.attachInline = append(m.attachInline, inlinePending{
+		Label:  label,
+		MIME:   img.MIME,
+		Base64: base64.StdEncoding.EncodeToString(img.Data),
+		Bytes:  len(img.Data),
+	})
+	if len(m.attachInline) > 6 {
+		m.attachInline = m.attachInline[len(m.attachInline)-6:]
+	}
+	m.appendLog(styledLogLine(styleDim,
+		fmt.Sprintf("— 已附加剪贴板图片 %s (%s) · 发送时一并提交 · /attach clear 清空",
+			label, humanSize(len(img.Data))))+"\n", true)
+}
+
 // queueSummary 渲染附件队列为 "[1] a.png, [2] b.png" 形式。
 func queueSummary(paths []string) string {
 	parts := make([]string, 0, len(paths))
@@ -296,6 +344,29 @@ func queueSummary(paths []string) string {
 		parts = append(parts, fmt.Sprintf("[%d] %s", i+1, filepath.Base(p)))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// queueTipFor 汇总待发附件（路径 + 剪贴板图片）为一行提示。
+func queueTipFor(nPaths int, inline []inlinePending) string {
+	parts := make([]string, 0, nPaths+len(inline))
+	for i, p := range inline {
+		parts = append(parts, fmt.Sprintf("[%d] %s %s", i+1, p.Label, humanSize(p.Bytes)))
+	}
+	for i := range nPaths {
+		parts = append(parts, fmt.Sprintf("path#%d", i+1))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// humanSize 人类可读字节数（附件提示用）。
+func humanSize(n int) string {
+	switch {
+	case n >= 1024*1024:
+		return fmt.Sprintf("%.1fMiB", float64(n)/(1024*1024))
+	case n >= 1024:
+		return fmt.Sprintf("%.0fKiB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%dB", n)
 }
 
 // splitAttachmentTokens 从输入行中提取 @<path> 附件 token（空格分隔），

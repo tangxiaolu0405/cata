@@ -13,6 +13,7 @@ import (
 
 	"cata/internal/cata/brain"
 	"cata/internal/cata/config"
+	"cata/internal/llm"
 )
 
 // AttachmentReject 被拒绝的附件（reason + 原始 path/id）。
@@ -99,13 +100,19 @@ func ingestAttachmentPath(outCwd, p string) (ref llmMediaRef, doc *attachmentDoc
 }
 
 func ingestInlineAttachment(in *InlineAttachment) (ref llmMediaRef, doc *attachmentDoc, reason string) {
-	mime := strings.ToLower(strings.TrimSpace(in.MIME))
+	declared := strings.ToLower(strings.TrimSpace(in.MIME))
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.Base64))
 	if err != nil {
 		return llmMediaRef{}, nil, "inline base64 decode failed"
 	}
 	if int64(len(raw)) > maxAttachmentBytes() {
 		return llmMediaRef{}, nil, fmt.Sprintf("%d bytes exceeds max %d", len(raw), maxAttachmentBytes())
+	}
+	// 以内容嗅探为准（客户端声明的 MIME 只作兜底）：DeepSeek 也是按文件实际内容判格式，
+	// 这样浏览器/剪贴板给出 image/tiff、application/octet-stream 等也能正确处理。
+	mime := declared
+	if sniffed := sniffMIME(raw); sniffed != "" && sniffed != "application/octet-stream" {
+		mime = sniffed
 	}
 	if mime == "application/pdf" {
 		return ingestPDFData("inline-pdf", raw)
@@ -204,8 +211,14 @@ func attachmentDir() string {
 	return ""
 }
 
-// maxAttachmentBytes 单张图片上限（默认 10MiB）。
+// maxAttachmentBytes 单个附件（图片/音频/PDF）解码后上限：跟当前 chat 模型的
+// capabilities 对齐（默认 32 MiB，DeepSeek 图像理解文档的单图上限），
+// 可用 config.json 的 llm.capabilities.<model>.max_image_bytes 覆盖。
+// 出站前 llm 侧还会再校验一次单张与单轮请求体预算（默认 48 MiB）。
 func maxAttachmentBytes() int64 {
+	if n := llm.ImageBytesLimitForCurrentModel(); n > 0 {
+		return int64(n)
+	}
 	return 10 * 1024 * 1024
 }
 

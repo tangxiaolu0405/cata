@@ -16,15 +16,20 @@
     "thinking": "auto",
     "enabled": true,
     "capabilities": {
-      "_comment": "可选：按模型名声明多模态能力。modalities 支持 text|image|audio|document；配了带图会路由到 chat_vision 模型（llm.models.chat_vision）",
+      "_comment": "可选：按模型名声明多模态能力。modalities 支持 text|image|audio|document；带图会路由到 chat_vision 模型（llm.models.chat_vision）。限额默认对齐 DeepSeek 图像理解：单张 32MiB、请求体 48MiB、每图 1024 token",
+      "deepseek-flash": {
+        "modalities": ["text", "image"],
+        "max_image_bytes": 33554432,
+        "max_request_bytes": 50331648
+      },
       "deepseek-v4-flash": { "modalities": ["text"] },
       "qwen-vl-plus": {
         "modalities": ["text", "image"],
         "max_images_per_message": 5,
-        "max_image_bytes": 10485760
+        "max_image_bytes": 33554432
       }
     },
-    "image_token_estimate": 1000,
+    "image_token_estimate": 1024,
     "attachment_dir": ""
   },
   "llm_previous_qwen": {

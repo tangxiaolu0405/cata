@@ -232,3 +232,32 @@ func TestLoadLLMProvidersNormalizesAndPersists(t *testing.T) {
 		t.Fatalf("second load changed providers")
 	}
 }
+
+// TestDefaultCapabilitiesSeedsKnownVisionModel 新装机默认配置：已知支持图片输入的
+// DeepSeek flash 预置 image 能力（开箱可问图）；未知模型不预置（保守仅 text）。
+func TestDefaultCapabilitiesSeedsKnownVisionModel(t *testing.T) {
+	caps := defaultCapabilities("deepseek-flash")
+	cfg, ok := caps["deepseek-flash"]
+	if !ok {
+		t.Fatalf("deepseek-flash should be pre-seeded: %v", caps)
+	}
+	hasImage := false
+	for _, m := range cfg.Modalities {
+		if m == "image" {
+			hasImage = true
+		}
+	}
+	if !hasImage {
+		t.Fatalf("deepseek-flash modalities=%v want image", cfg.Modalities)
+	}
+	// 限额留空 = 用默认（DeepSeek 文档：单图 32MiB / 请求体 48MiB）。
+	if cfg.MaxImageBytes != 0 || cfg.MaxRequestBytes != 0 {
+		t.Fatalf("limits should stay unset (use defaults): %+v", cfg)
+	}
+	if got := defaultCapabilities("gpt-4o-mini-unknown"); got != nil {
+		t.Fatalf("unknown model must not be pre-seeded: %v", got)
+	}
+	if got := defaultCapabilities("  DeepSeek-Flash "); len(got) == 0 {
+		t.Fatal("model name matching should be case/space insensitive")
+	}
+}

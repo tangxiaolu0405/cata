@@ -402,6 +402,13 @@ func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, at
 					Success:   success,
 					Cancelled: cancelled,
 				}, nil
+			default:
+				// 其余事件（attachment_rejected / model_switch / tool_result / file_written /
+				// thinking / stats …）不属于 StreamHandler 的必需回调：实现了 EventSink 的
+				// 调用方（如 gateway 的 Web 流式转发）可原样收到，用于展示附件被拒、模型切换等提示。
+				if es, ok := any(h).(EventSink); ok && es != nil {
+					es.OnEvent(ev)
+				}
 			}
 		}
 	}
@@ -472,6 +479,13 @@ type StreamHandler interface {
 	OnToolStart(name string)
 	ConfirmExec(ctx context.Context, p ExecConfirmPrompt) (approved bool, err error)
 	Choose(ctx context.Context, p UserChoicePrompt) (selected []string, err error)
+}
+
+// EventSink 可选扩展：希望收到 StreamHandler 未覆盖的原始流式事件（attachment_rejected、
+// model_switch、tool_result、file_written、thinking、stats 等）的调用方实现它。
+// 通过类型断言调用，不实现也不影响原有行为（向后兼容）。
+type EventSink interface {
+	OnEvent(ev map[string]any)
 }
 
 // ChatResult 一轮 chat 结果。

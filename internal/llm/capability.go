@@ -16,6 +16,7 @@ type ModelCaps struct {
 	Modalities          map[string]bool // "text" / "image"
 	MaxImagesPerMessage int
 	MaxImageBytes       int
+	MaxRequestBytes     int
 	ImageMIMEAllow      map[string]bool
 }
 
@@ -40,22 +41,35 @@ func (c ModelCaps) SupportsModality(mod string) bool {
 	return false
 }
 
-// DefaultImageMIMEs 默认允许的图片 MIME。
+// DefaultImageMIMEs 默认允许的图片 MIME（与 DeepSeek 图像理解一致：JPEG/PNG/GIF/WebP）。
 var DefaultImageMIMEs = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
 
-// DefaultMaxImageBytes 单张默认上限。
-const DefaultMaxImageBytes = 10 * 1024 * 1024
+// 附件上限默认值：对齐 DeepSeek 图像理解文档（api-docs.deepseek.com/zh-cn/guides/vision）：
+//   - 单张图片（base64 / 外部 URL）≤ 32 MiB
+//   - 单轮请求体 ≤ 48 MiB（base64 内联图片计入该上限，膨胀约 4/3）
+//   - 单个请求最多 600 张图（本实现不做 600 张的硬校验，受请求体与上下文窗口自然约束）
+const (
+	// DefaultMaxImageBytes 单张图片**解码后**上限（32 MiB）。
+	DefaultMaxImageBytes = 32 * 1024 * 1024
+	// DefaultMaxRequestBytes 单轮请求体上限（48 MiB，base64 膨胀后计入）。
+	DefaultMaxRequestBytes = 48 * 1024 * 1024
+)
 
 // capsForModel 从全局配置解析指定模型的能力（未知/未配置 → 仅 text）。
 func capsForModel(cfg config.LLMConfig, model string) ModelCaps {
 	mod, ok := cfg.Capabilities[model]
 	if !ok {
-		return ModelCaps{Modalities: map[string]bool{"text": true}}
+		return ModelCaps{
+			Modalities:      map[string]bool{"text": true},
+			MaxImageBytes:   DefaultMaxImageBytes,
+			MaxRequestBytes: DefaultMaxRequestBytes,
+		}
 	}
 	c := ModelCaps{
 		Modalities:          map[string]bool{},
 		MaxImagesPerMessage: mod.MaxImagesPerMessage,
 		MaxImageBytes:       mod.MaxImageBytes,
+		MaxRequestBytes:     mod.MaxRequestBytes,
 		ImageMIMEAllow:      map[string]bool{},
 	}
 	for _, m := range mod.Modalities {
@@ -70,6 +84,9 @@ func capsForModel(cfg config.LLMConfig, model string) ModelCaps {
 	if c.MaxImageBytes <= 0 {
 		c.MaxImageBytes = DefaultMaxImageBytes
 	}
+	if c.MaxRequestBytes <= 0 {
+		c.MaxRequestBytes = DefaultMaxRequestBytes
+	}
 	if len(mod.ImageMIMEAllow) == 0 {
 		for _, m := range DefaultImageMIMEs {
 			c.ImageMIMEAllow[m] = true
@@ -80,6 +97,24 @@ func capsForModel(cfg config.LLMConfig, model string) ModelCaps {
 		}
 	}
 	return c
+}
+
+// ImageBytesLimitForCurrentModel 当前 chat 模型的单张图片上限（解码后字节数）。
+// 供 server 侧 ingest 使用：附件读写在同一台机器/同一个模型配置下，两边上限保持一致
+// （默认 32 MiB，可用 capabilities.<model>.max_image_bytes 覆盖）。
+func ImageBytesLimitForCurrentModel() int {
+	if config.Config == nil {
+		return DefaultMaxImageBytes
+	}
+	return capsForModel(config.Config.LLM, currentChatModel(config.Config.LLM)).MaxImageBytes
+}
+
+// currentChatModel 解析当前实际用于对话的模型名（models["chat"] 优先，回退 model）。
+func currentChatModel(cfg config.LLMConfig) string {
+	if v, ok := cfg.Models["chat"]; ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return cfg.Model
 }
 
 // mimeAllowed 该模型是否允许此图片 MIME。
@@ -223,10 +258,12 @@ func sortedModalities(mods map[string]bool) []string {
 	return out
 }
 
-// validateMediaPayload 校验数量 / 单张大小 / MIME 白名单（以目标模型能力为准）。
+// validateMediaPayload 校验数量 / 单张大小 / MIME 白名单 / 单轮请求体预算（以目标模型能力为准）。
+// 限额默认对齐 DeepSeek：单张解码后 32 MiB、单轮请求体 48 MiB（base64 膨胀后计入）。
 func validateMediaPayload(cfg config.LLMConfig, model string, msgs []Message) error {
 	caps := capsForModel(cfg, model)
 	nImg := 0
+	payload := 0 // 本轮所有内联附件（base64 字符数）之和，近似请求体增量
 	for _, m := range msgs {
 		for _, ref := range m.Media {
 			mod := mediaModality(ref.MIME)
@@ -236,33 +273,62 @@ func validateMediaPayload(cfg config.LLMConfig, model string, msgs []Message) er
 				if !caps.mimeAllowed(ref.MIME) {
 					return fmt.Errorf("图片 MIME %q 不在模型 %q 白名单内", ref.MIME, model)
 				}
-				if ref.Data != "" && len(ref.Data) > caps.MaxImageBytes*4/3 {
-					// base64 膨胀约 4/3；近似按解码上限反推。
-					return fmt.Errorf("图片 %q 超过模型 %q 单张大小上限", ref.ID, model)
-				}
 			case "audio":
 				if !caps.audioMimeAllowed(ref.MIME) {
 					return fmt.Errorf("音频 MIME %q 不在模型 %q 白名单内", ref.MIME, model)
-				}
-				if ref.Data != "" && len(ref.Data) > caps.MaxImageBytes*4/3 {
-					return fmt.Errorf("音频 %q 超过模型 %q 单张大小上限", ref.ID, model)
 				}
 			case "document":
 				if ref.MIME != "application/pdf" {
 					return fmt.Errorf("文档 MIME %q 不支持（仅 application/pdf）", ref.MIME)
 				}
-				if ref.Data != "" && len(ref.Data) > caps.MaxImageBytes*4/3 {
-					return fmt.Errorf("文档 %q 超过模型 %q 大小上限", ref.ID, model)
-				}
 			default:
 				return fmt.Errorf("附件 MIME %q 无法识别 modality（image/audio/document）", ref.MIME)
+			}
+			// 出站前 Data 才被填充；未填充（history 引用态）不参与体积校验。
+			if ref.Data == "" {
+				continue
+			}
+			payload += len(ref.Data)
+			if dec := decodedBase64Len(ref.Data); dec > caps.MaxImageBytes {
+				return fmt.Errorf("附件 %q 解码后 %s 超过模型 %q 单张上限 %s（capabilities.%s.max_image_bytes）",
+					ref.ID, humanBytes(dec), model, humanBytes(caps.MaxImageBytes), model)
 			}
 		}
 	}
 	if caps.MaxImagesPerMessage > 0 && nImg > caps.MaxImagesPerMessage {
 		return fmt.Errorf("单条消息图片数 %d 超过模型 %q 上限 %d", nImg, model, caps.MaxImagesPerMessage)
 	}
+	if payload > caps.MaxRequestBytes {
+		return fmt.Errorf("本轮附件共 %s（base64 膨胀后）超过模型 %q 单轮请求体上限 %s：请减少张数或压缩图片（capabilities.%s.max_request_bytes）",
+			humanBytes(payload), model, humanBytes(caps.MaxRequestBytes), model)
+	}
 	return nil
+}
+
+// decodedBase64Len base64 字符串解码后的字节数（不实际解码，按长度估算，含 padding 修正）。
+func decodedBase64Len(s string) int {
+	n := len(s)
+	if n == 0 {
+		return 0
+	}
+	pad := 0
+	if strings.HasSuffix(s, "==") {
+		pad = 2
+	} else if strings.HasSuffix(s, "=") {
+		pad = 1
+	}
+	return n/4*3 - pad
+}
+
+// humanBytes 人类可读的字节数（用于错误提示）。
+func humanBytes(n int) string {
+	switch {
+	case n >= 1024*1024:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1024*1024))
+	case n >= 1024:
+		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // encodeContentForWire 把一条消息编码为 wire 的 content 值。

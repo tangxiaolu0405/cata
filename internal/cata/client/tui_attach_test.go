@@ -70,3 +70,62 @@ func TestQueueSummary(t *testing.T) {
 		t.Fatalf("summary=%q", s)
 	}
 }
+
+// TestQueueInlineClipboardImage 剪贴板图片（base64 内联附件）：入队、上限、清空、参与发送。
+func TestQueueInlineClipboardImage(t *testing.T) {
+	m := &model{input: newChatTextarea(), vp: viewport.New(80, 20), sidebarVP: newSidebarViewport()}
+
+	m.queueInlineImage(clipboardImage{Data: []byte("PNGDATA"), MIME: "image/png"})
+	if len(m.attachInline) != 1 {
+		t.Fatalf("inline queue=%v", m.attachInline)
+	}
+	got := m.attachInline[0]
+	if got.MIME != "image/png" || got.Base64 != "UE5HREFUQQ==" {
+		t.Fatalf("inline entry=%+v（base64 编码应正确）", got)
+	}
+	if got.Label == "" {
+		t.Fatal("inline entry should carry a display label")
+	}
+
+	// 空图片拒绝入队。
+	m.queueInlineImage(clipboardImage{})
+	if len(m.attachInline) != 1 {
+		t.Fatal("empty image should not be queued")
+	}
+
+	// 上限 6 张。
+	for i := 0; i < 10; i++ {
+		m.queueInlineImage(clipboardImage{Data: []byte("x"), MIME: "image/png"})
+	}
+	if len(m.attachInline) != 6 {
+		t.Fatalf("inline queue len=%d want 6", len(m.attachInline))
+	}
+
+	// /attach clear 同时清空路径队列与内联队列。
+	m.attachQueue = append(m.attachQueue, "a.png")
+	m.handleAttachCmd("/attach clear")
+	if len(m.attachInline) != 0 || len(m.attachQueue) != 0 {
+		t.Fatalf("clear 未生效: inline=%v path=%v", m.attachInline, m.attachQueue)
+	}
+}
+
+// TestPendingAttachments 发送时三类附件合并：行内 @path > /attach 队列 > 剪贴板图片。
+func TestPendingAttachments(t *testing.T) {
+	m := &model{input: newChatTextarea(), vp: viewport.New(80, 20), sidebarVP: newSidebarViewport()}
+	m.attachQueue = []string{"queued.png"}
+	m.attachInline = []inlinePending{{Label: "clip-1.png", MIME: "image/png", Base64: "AAA=", Bytes: 2}}
+
+	got := m.pendingAttachments([]string{"inline.png"})
+	if len(got) != 3 {
+		t.Fatalf("attachments=%+v want 3", got)
+	}
+	if got[0].Path != "inline.png" || got[1].Path != "queued.png" {
+		t.Fatalf("path order wrong: %+v", got)
+	}
+	if got[2].Inline == nil || got[2].Inline.MIME != "image/png" || got[2].Inline.Base64 != "AAA=" {
+		t.Fatalf("inline attachment wrong: %+v", got[2])
+	}
+	if tip := queueTipFor(1, m.attachInline); !strings.Contains(tip, "clip-1.png") {
+		t.Fatalf("queueTipFor=%q 应含剪贴板图片标签", tip)
+	}
+}

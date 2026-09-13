@@ -192,3 +192,82 @@ func TestEncodeContentForWireTextModel(t *testing.T) {
 		t.Fatal("text model with image should error")
 	}
 }
+
+// TestCapsDefaultsMatchDeepSeek 附件限额默认值对齐 DeepSeek 图像理解文档：
+// 单张解码后 32 MiB、单轮请求体 48 MiB；显式配置优先。
+func TestCapsDefaultsMatchDeepSeek(t *testing.T) {
+	if DefaultMaxImageBytes != 32*1024*1024 {
+		t.Fatalf("DefaultMaxImageBytes=%d want 32MiB", DefaultMaxImageBytes)
+	}
+	if DefaultMaxRequestBytes != 48*1024*1024 {
+		t.Fatalf("DefaultMaxRequestBytes=%d want 48MiB", DefaultMaxRequestBytes)
+	}
+	if DefaultImageTokenEstimate != 1024 {
+		t.Fatalf("DefaultImageTokenEstimate=%d want 1024", DefaultImageTokenEstimate)
+	}
+	// 未配置 capabilities 的未知模型也拿到默认限额（不是 0，避免「无上限」）。
+	caps := capsForModel(config.LLMConfig{Model: "unknown"}, "unknown")
+	if caps.MaxImageBytes != DefaultMaxImageBytes || caps.MaxRequestBytes != DefaultMaxRequestBytes {
+		t.Fatalf("unknown model caps=%+v", caps)
+	}
+	// 显式配置优先。
+	cfg := config.LLMConfig{
+		Model: "m",
+		Capabilities: map[string]config.ModelCapCfg{
+			"m": {Modalities: []string{"text", "image"}, MaxImageBytes: 1234, MaxRequestBytes: 5678},
+		},
+	}
+	caps = capsForModel(cfg, "m")
+	if caps.MaxImageBytes != 1234 || caps.MaxRequestBytes != 5678 {
+		t.Fatalf("explicit caps ignored: %+v", caps)
+	}
+}
+
+// TestValidateMediaPayloadLimits 单张上限与单轮请求体预算（base64 膨胀后）都要拦住。
+func TestValidateMediaPayloadLimits(t *testing.T) {
+	cfg := config.LLMConfig{
+		Model: "vision",
+		Capabilities: map[string]config.ModelCapCfg{
+			"vision": {Modalities: []string{"text", "image"}, MaxImageBytes: 3000, MaxRequestBytes: 4000},
+		},
+	}
+	// base64 长度 4000 → 解码 3000 字节：正好等于单张上限（放行）。
+	ok := []Message{{Role: "user", Media: []MediaRef{{ID: "a.png", MIME: "image/png", Data: strings.Repeat("A", 4000)}}}}
+	if err := validateMediaPayload(cfg, "vision", ok); err != nil {
+		t.Fatalf("at-limit image rejected: %v", err)
+	}
+	// 解码 3003 字节 > 3000：单张超限。
+	over := []Message{{Role: "user", Media: []MediaRef{{ID: "big.png", MIME: "image/png", Data: strings.Repeat("A", 4004)}}}}
+	err := validateMediaPayload(cfg, "vision", over)
+	if err == nil || !strings.Contains(err.Error(), "单张上限") {
+		t.Fatalf("expected 单张上限 error, got %v", err)
+	}
+	// 两张各 2000 字节（base64 2668）→ 合计 5336 > 4000：请求体超预算。
+	two := []Message{{Role: "user", Media: []MediaRef{
+		{ID: "a.png", MIME: "image/png", Data: strings.Repeat("A", 2668)},
+		{ID: "b.png", MIME: "image/png", Data: strings.Repeat("A", 2668)},
+	}}}
+	err = validateMediaPayload(cfg, "vision", two)
+	if err == nil || !strings.Contains(err.Error(), "请求体上限") {
+		t.Fatalf("expected 请求体上限 error, got %v", err)
+	}
+}
+
+// TestDecodedBase64Len 长度换算（含 padding）。
+func TestDecodedBase64Len(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", 0},
+		{"QUJD", 3}, // "ABC"
+		{"QQ==", 1}, // "A"
+		{"QUI=", 2}, // "AB"
+		{"AAAA", 3},
+	}
+	for _, c := range cases {
+		if got := decodedBase64Len(c.in); got != c.want {
+			t.Fatalf("decodedBase64Len(%q)=%d want %d", c.in, got, c.want)
+		}
+	}
+}

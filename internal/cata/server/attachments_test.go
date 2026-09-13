@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cata/internal/cata/config"
+	"cata/internal/llm"
 )
 
 // writeTestPNG 生成一张 2x2 PNG。
@@ -163,4 +166,73 @@ func TestIngestPDFNoPdftotext(t *testing.T) {
 	if !strings.Contains(rejects[0].Reason, "pdftotext") {
 		t.Fatalf("reason=%q, want pdftotext hint", rejects[0].Reason)
 	}
+}
+
+// TestIngestInlineSniffsMIME 内联附件以**内容**判定 MIME（浏览器/剪贴板可能给错 MIME，
+// DeepSeek 也是按实际内容判格式）：声明 octet-stream 的真 PNG 应被接受并纠正为 image/png。
+func TestIngestInlineSniffsMIME(t *testing.T) {
+	dir := t.TempDir()
+	raw := testPNGBytes(t)
+
+	media, _, rejects := ingestAttachments(dir, []AttachmentReq{{
+		Inline: &InlineAttachment{MIME: "application/octet-stream", Base64: base64.StdEncoding.EncodeToString(raw)},
+	}})
+	if len(rejects) != 0 {
+		t.Fatalf("rejects=%v", rejects)
+	}
+	if len(media) != 1 || media[0].MIME != "image/png" {
+		t.Fatalf("media=%+v（应按内容纠正 MIME）", media)
+	}
+	// 反过来：声明 image/png 但内容不是图片 → 拒绝（不靠客户端声明放行）。
+	media, _, rejects = ingestAttachments(dir, []AttachmentReq{{
+		Inline: &InlineAttachment{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString([]byte("not an image"))},
+	}})
+	if len(media) != 0 || len(rejects) != 1 {
+		t.Fatalf("media=%v rejects=%v（非图片内容应被拒）", media, rejects)
+	}
+}
+
+// TestIngestInlineSizeLimitFollowsModelCaps 单张上限跟模型 capabilities 走（默认 32 MiB）。
+func TestIngestInlineSizeLimitFollowsModelCaps(t *testing.T) {
+	prev := config.Config
+	config.Config = &config.AppConfig{LLM: config.LLMConfig{
+		Model: "m",
+		Capabilities: map[string]config.ModelCapCfg{
+			"m": {Modalities: []string{"text", "image"}, MaxImageBytes: 16}, // 故意压到 16 字节
+		},
+	}}
+	t.Cleanup(func() { config.Config = prev })
+
+	if got := maxAttachmentBytes(); got != 16 {
+		t.Fatalf("maxAttachmentBytes()=%d want 16（应读模型 capabilities）", got)
+	}
+	raw := testPNGBytes(t)
+	if int64(len(raw)) <= 16 {
+		t.Fatalf("test png too small: %d", len(raw))
+	}
+	media, _, rejects := ingestAttachments(t.TempDir(), []AttachmentReq{{
+		Inline: &InlineAttachment{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString(raw)},
+	}})
+	if len(media) != 0 || len(rejects) != 1 || !strings.Contains(rejects[0].Reason, "exceeds max") {
+		t.Fatalf("media=%v rejects=%v", media, rejects)
+	}
+
+	// 未配置模型时的兜底：默认 32 MiB（DeepSeek 文档单图上限）。
+	config.Config = &config.AppConfig{}
+	if got := maxAttachmentBytes(); got != int64(llm.DefaultMaxImageBytes) {
+		t.Fatalf("fallback maxAttachmentBytes()=%d want %d", got, llm.DefaultMaxImageBytes)
+	}
+}
+
+// testPNGBytes 生成一张 2x2 PNG 的字节。
+func testPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "t.png")
+	writeTestPNG(t, p)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

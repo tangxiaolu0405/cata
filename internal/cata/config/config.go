@@ -117,7 +117,7 @@ type LLMConfig struct {
 	// AttachmentDir 可选：允许读取附件的白名单目录（默认仅产出区）。空 = 产出区即可。
 	AttachmentDir string `json:"attachment_dir,omitempty"`
 	// ImageTokenEstimate 单张图片估算占用的输入 token（无 tiktoken 时的保守估计；
-	// 用于会话压缩预算与超窗判定）。0 = 用默认 1000。
+	// 用于会话压缩预算与超窗判定）。0 = 用默认 1024（DeepSeek 文档：单图上限 1024 token）。
 	ImageTokenEstimate int `json:"image_token_estimate,omitempty"`
 	// Headers 出站请求附加的自定义 HTTP 头（如 opencode 网关需要 x-opencode-session、
 	// 或 OpenAI 网关要传入 x-title 等）。每轮请求都会带上；已由框架提供的头不覆盖。
@@ -125,10 +125,13 @@ type LLMConfig struct {
 }
 
 // ModelCapCfg LLMConfig.Capabilities 中单个模型的配置。
+// 默认值对齐 DeepSeek 图像理解文档（常量见 llm/capability.go）：
+// 单张解码后 32 MiB、单轮请求体（base64 膨胀后）48 MiB、每图按 1024 token 估算。
 type ModelCapCfg struct {
 	Modalities          []string `json:"modalities,omitempty"`             // text | image（v2+ 可加 audio/document）
 	MaxImagesPerMessage int      `json:"max_images_per_message,omitempty"` // 单条 user 消息最多几张图；0=不限制计数
-	MaxImageBytes       int      `json:"max_image_bytes,omitempty"`        // 单张解码后上限；0=默认 10MiB
+	MaxImageBytes       int      `json:"max_image_bytes,omitempty"`        // 单张解码后上限；0=默认 32MiB
+	MaxRequestBytes     int      `json:"max_request_bytes,omitempty"`      // 单轮带附件请求体上限（base64 膨胀后）；0=默认 48MiB
 	ImageMIMEAllow      []string `json:"image_mime_allow,omitempty"`       // 白名单 MIME；空=放行 png/jpeg/webp/gif
 }
 
@@ -295,6 +298,9 @@ func getDefaultConfig() *AppConfig {
 			MaxTokens: 8192,
 			Timeout:   600,
 			Enabled:   getDefaultAPIKey() != "",
+			// 已知支持图片输入的模型预置能力，新装机即可直接问图；
+			// 未知模型不预置（保守视为仅 text），由启动探测判定后热应用。
+			Capabilities: defaultCapabilities(getDefaultModel()),
 		},
 		Server: ServerConfig{
 			SocketPath: "",
@@ -817,6 +823,18 @@ func ensureLLMModelRoles(llm *LLMConfig) {
 	if llm.Models == nil {
 		llm.Models = make(map[string]string)
 	}
+}
+
+// defaultCapabilities 内置的已知模型能力（仅限**明确已知**支持图片输入的模型名）。
+// 限额留空 → 用 llm/capability.go 的默认值（对齐 DeepSeek 图像理解：单图 32MiB、请求体 48MiB）。
+// 其它模型不预置条目：缺省对未知模型保守视为仅 text，由 llm.AutoProbeStartup 探测后热应用。
+func defaultCapabilities(model string) map[string]ModelCapCfg {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch m {
+	case "deepseek-flash", "deepseek-v4-flash-vision-exp":
+		return map[string]ModelCapCfg{m: {Modalities: []string{"text", "image"}}}
+	}
+	return nil
 }
 
 func getDefaultModelForFormat(apiFormat string) string {
