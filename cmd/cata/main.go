@@ -83,7 +83,7 @@ func printUsage() {
 	fmt.Println("  cata run                Start legacy server (internal: cata-pet / scheduler 用; chat 不再依赖)")
 	fmt.Println("  cata agent              Start one agent per workspace (one LLM loop; --workspace <ws_id>)")
 	fmt.Println("  cata link               Register local workspaces to a remote gateway (add/remove/list)")
-	fmt.Println("  cata supervisor [stop]   Per-machine daemon: keep registered agent processes alive; stop 级联关闭全部 agent")
+	fmt.Println("  cata supervisor [stop]   Per-machine daemon: holds the machine tunnel, respawns agents on demand; stop 级联关闭全部 agent")
 	fmt.Println("  cata schedule           Self-hosted scheduler daemon (discovers tasks, fires as real client)")
 	fmt.Println("  cata init               Initialize ~/.cata brain layout（不写 config.json）")
 	fmt.Println("  cata initconfig         Seed/refresh config.json defaults（保留未知顶层键）")
@@ -181,18 +181,26 @@ func runInitConfig() {
 		cfg.LLM.Provider, cfg.Evolution.CycleInterval, cfg.Exec.Enabled)
 }
 
+// defaultAgentIdleTimeoutSeconds agent 默认空闲回收阈值：连续该秒数没有 chat 消息即退出。
+// 半小时——工作空间不再常驻占内存，下一条消息由 supervisor / 本地入口按需拉起。
+const defaultAgentIdleTimeoutSeconds = 1800
+
 // runAgent 启动「一个工作空间一个 agent」进程：绑定单一工作空间（一个 LLM loop），
 // 服务 per-ws Unix socket（~/.cata/sockets/<ws_id>.sock）。进程生命周期内不再跨工作空间切换，
 // 从结构上消除多空间并行时的全局状态串扰。
 //   - --workspace <ws_id>  必需：要服务的工作空间 id
-//   - --idle-timeout <s>   无 chat 会话持续该秒数后自动退出（默认 300；0 表示不空闲回收）
-//   - --keep-alive         常驻（注册到网关的项目）：不因空闲退出
-//   - --link               额外持有到网关的 WSS 隧道（需 link.json 配置 gateway_url/token）
+//   - --idle-timeout <s>   **持续该秒数没有 chat 消息**（与客户端是否连着无关）后自动退出，
+//     默认 1800（30 分钟）；0 表示不空闲回收。退出后由 supervisor / 本地入口
+//     （EnsureAgent）在下一条消息到达时按需重新拉起。
+//   - --keep-alive         由 supervisor 监管（注册到网关的工作空间）：受 supervisor 存活
+//     心跳约束，但同样按上面的空闲规则退出（网关侧由 supervisor 的机器级隧道兜住消息）。
+//   - --link               额外持有到网关的 WSS 隧道（legacy 路径；正常情况下隧道由
+//     supervisor 以「机器级隧道」持有，agent 不再自己连网关）
 //
-// 由 cata chat（本地按需拉起）、cata supervisor（注册常驻）或 cata link（隧道）管理生命周期。
+// 由 cata chat（本地按需拉起）、cata supervisor（生命周期 + 机器级隧道）或 cata link 管理。
 func runAgent(args []string) {
 	wsID := ""
-	idleTimeout := 300
+	idleTimeout := defaultAgentIdleTimeoutSeconds
 	keepAlive := false
 	withTunnel := false
 	for i := 0; i < len(args); i++ {
@@ -216,7 +224,8 @@ func runAgent(args []string) {
 			fmt.Println("Usage: cata agent --workspace <ws_id> [--idle-timeout <sec>] [--keep-alive] [--link]")
 			fmt.Println()
 			fmt.Println("  One workspace = one agent = one LLM loop, bound to ~/.cata/sockets/<ws_id>.sock.")
-			fmt.Println("  --keep-alive  resident (registered to gateway); --link also holds WSS tunnel.")
+			fmt.Printf("  Exits after --idle-timeout (default %d s) with no chat message; respawned on demand.\n", defaultAgentIdleTimeoutSeconds)
+			fmt.Println("  --keep-alive: supervised by cata supervisor; --link: legacy self-held gateway tunnel.")
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "cata agent: unknown flag %q\n", a)
@@ -290,6 +299,9 @@ func runAgent(args []string) {
 	if keepAlive {
 		go link.WatchSupervisorAndStop(link.SupervisorWatchConfig{
 			Busy: srv.HasActiveChat,
+			// 由 supervisor 拉起的 agent 才「supervisor 死则死」；客户端（cata chat /
+			// gateway）按需拉起的 agent 在 supervisor 缺席时继续服务，由空闲回收兜底。
+			SpawnedBySupervisor: os.Getenv(link.EnvAgentSupervised) == "1",
 		}, func() {
 			srv.Stop()
 		})()

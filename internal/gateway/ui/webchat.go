@@ -24,7 +24,6 @@ type WebChat struct {
 	mu       sync.Mutex
 	pendingE map[string]chan bool
 	pendingC map[string]chan []string
-	pathLock map[string]func() // project path unlockers while session open
 }
 
 // NewWebChat 创建 web 聊天管理器（本地模式：拨本机 per-ws / legacy socket）。
@@ -35,7 +34,6 @@ func NewWebChat(cfg gateway.Config) *WebChat {
 		locks:    gateway.NewProcessLock(),
 		pendingE: make(map[string]chan bool),
 		pendingC: make(map[string]chan []string),
-		pathLock: make(map[string]func()),
 	}
 }
 
@@ -49,7 +47,6 @@ func NewWebChatWithRegistry(cfg gateway.Config, reg *tunnel.Registry) *WebChat {
 		remote:   reg,
 		pendingE: make(map[string]chan bool),
 		pendingC: make(map[string]chan []string),
-		pathLock: make(map[string]func()),
 	}
 }
 
@@ -60,40 +57,9 @@ func webSessionKey(projectID string) gateway.SessionKey {
 	return gateway.SessionKeyFor("web", projectID)
 }
 
-// EnsurePathLock 占用项目产出区锁（与 TUI 互斥）。
-func (w *WebChat) EnsurePathLock(projectID, absPath string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if _, ok := w.pathLock[projectID]; ok {
-		return nil
-	}
-	unlock, err := client.AcquireOutputLock(absPath)
-	if err != nil {
-		return err
-	}
-	w.pathLock[projectID] = unlock
-	return nil
-}
-
-// ReleasePathLock 释放项目锁。
-func (w *WebChat) ReleasePathLock(projectID string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if u, ok := w.pathLock[projectID]; ok {
-		u()
-		delete(w.pathLock, projectID)
-	}
-}
-
 // Close 关闭全部连接与锁。
 func (w *WebChat) Close() {
 	w.sessions.CloseAll()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for id, u := range w.pathLock {
-		u()
-		delete(w.pathLock, id)
-	}
 }
 
 // StreamEvent 推给浏览器的 NDJSON 事件。
@@ -104,18 +70,26 @@ type StreamEvent map[string]any
 // 附件走 **inline base64**（浏览器 FileReader → data URL → base64），不落盘、不经 URL：
 // server 侧 ingestInlineAttachment 校验 MIME/大小后编码为 data:<mime>;base64,… 发给模型
 // （DeepSeek 图像理解要求的格式）；remote 模式下 NDJSON 逐字节过隧道，无需额外改动。
+//
+// 产出区锁（与 `cata chat` TUI 互斥）**按轮持有**：本轮开始前获取、结束时立即释放。
+// 不要按会话缓存——网关是常驻进程，缓存等于「在 Web 控制台对某工作区聊过一次之后，
+// `cata chat` 在该目录永久报 output area busy」。
 func (w *WebChat) Chat(ctx context.Context, project gateway.Project, text string, attachments []gateway.AttachmentReq, emit func(StreamEvent) error) (gateway.ChatResult, error) {
 	abs, err := filepath.Abs(strings.TrimSpace(project.Path))
 	if err != nil {
 		return gateway.ChatResult{}, err
 	}
-	if err := w.EnsurePathLock(project.ID, abs); err != nil {
-		return gateway.ChatResult{}, err
-	}
 
+	// 同一 Web 会话（项目）串行：先拿会话锁，再拿产出区锁，避免自己和自己抢。
 	key := webSessionKey(project.ID)
 	unlock := w.locks.Lock(key)
 	defer unlock()
+
+	release, err := client.AcquireOutputLock(abs)
+	if err != nil {
+		return gateway.ChatResult{}, err
+	}
+	defer release()
 
 	conn, err := w.sessionConn(key, abs, project)
 	if err != nil {

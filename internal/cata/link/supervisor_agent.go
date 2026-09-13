@@ -159,6 +159,15 @@ type SupervisorWatchConfig struct {
 	// OnLost 失联超时 + 空闲（或无条件）时调用；默认内部 stop()（保持旧行为）。
 	// 传入后由调用方决定：可改为「先尝试重启 supervisor、再决定是否退出」。
 	OnLost func()
+	// SpawnedBySupervisor 本 agent 是否由 supervisor 自己拉起（机器级隧道按需拉起时置位，
+	// 见 EnsureAgentSupervised）。语义差别很重要：
+	//   - true  ：supervisor 是它的监管者，探测不到就退出（哪怕从未探测成功）——
+	//     保证 supervisor 被 kill -9 后不留孤儿。
+	//   - false ：由客户端（cata chat / gateway 本地模式 / link add）按需拉起时，
+	//     supervisor 可能压根没跑；此时**不**因「从未见过 supervisor」而自杀——否则
+	//     用户 kill 掉 supervisor 后，TUI 里每 30 秒就被掐一次（broken pipe）。
+	//     若曾经探测到 supervisor 存活、随后失联，仍按 Deadline 退出。
+	SpawnedBySupervisor bool
 }
 
 // supervisorWatchDefaults 读取环境变量覆盖（单位秒；非法/未设置回落代码默认）。
@@ -206,9 +215,23 @@ func WatchSupervisorAndStop(cfg SupervisorWatchConfig, stop func()) func() {
 	}
 	return func() {
 		lastAlive := time.Now()
+		seenAlive := false
+		warnedNoSupervisor := false
 		for {
 			time.Sleep(interval)
 			if aliveFn() {
+				seenAlive = true
+				lastAlive = time.Now()
+				continue
+			}
+			// 从未探测到 supervisor（例如用户没跑 / 刚被 kill 掉且本 agent 是客户端按需拉起的）：
+			// 不自杀——agent 由自身空闲回收（30 分钟无消息）兜底，否则 TUI 每 30 秒被掐一次。
+			if !cfg.SpawnedBySupervisor && !seenAlive {
+				if !warnedNoSupervisor {
+					log.Printf("supervisor not running — agent started on demand keeps serving " +
+						"(idle reaper will exit it); run `cata supervisor` to restore supervision/machine tunnel")
+					warnedNoSupervisor = true
+				}
 				lastAlive = time.Now()
 				continue
 			}
@@ -299,7 +322,7 @@ func (b *ensureBackoff) ensure(agentID string) error {
 		delete(b.paused, agentID)
 		b.failCount[agentID] = 0
 	}
-	if err := EnsureAgent(agentID); err != nil {
+	if err := EnsureAgentSupervised(agentID); err != nil {
 		b.failCount[agentID]++
 		if b.failCount[agentID] >= backoffFailThreshold {
 			b.paused[agentID] = time.Now().Add(backoffPauseDuration)

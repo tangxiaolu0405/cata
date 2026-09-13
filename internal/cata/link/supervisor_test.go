@@ -3,6 +3,7 @@ package link
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,6 +60,8 @@ func TestWatchSupervisorStopsOnUnreachable(t *testing.T) {
 		Interval: 20 * time.Millisecond,
 		Deadline: 60 * time.Millisecond,
 		AliveFn:  alive,
+		// 本用例测「supervisor 死了不留孤儿」→ 该 agent 由 supervisor 拉起。
+		SpawnedBySupervisor: true,
 	}, func() {
 		select {
 		case stopped <- struct{}{}:
@@ -105,12 +108,16 @@ func TestWatchSupervisorKeepsAlive(t *testing.T) {
 // 不应立即 stop（EOF 根因回归）；空闲后才 stop。
 func TestWatchSupervisorBusyDefersShutdown(t *testing.T) {
 	stopped := make(chan struct{}, 1)
-	busy := true // 先 busy
+	// busy 由 watch goroutine 轮询读取：用 atomic 避免测试自身的数据竞争。
+	var busy atomic.Bool
+	busy.Store(true) // 先 busy
 	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
 		Interval: 20 * time.Millisecond,
 		Deadline: 40 * time.Millisecond,
 		AliveFn:  func() bool { return false }, // supervisor 死了
-		Busy:     func() bool { return busy },
+		Busy:     func() bool { return busy.Load() },
+		// 由 supervisor 拉起的 agent：失联即收敛（本用例验证 Busy 推迟该收敛）。
+		SpawnedBySupervisor: true,
 	}, func() {
 		select {
 		case stopped <- struct{}{}:
@@ -128,7 +135,7 @@ func TestWatchSupervisorBusyDefersShutdown(t *testing.T) {
 	}
 
 	// 转为空闲后应在一次 deadline 内 stop。
-	busy = false
+	busy.Store(false)
 	select {
 	case <-stopped:
 		// ok
@@ -162,9 +169,10 @@ func TestSupervisorWatchEnvVsExplicitConfig(t *testing.T) {
 	t.Setenv("CATA_SUPERVISOR_DEADLINE", "7")
 	stopped := make(chan struct{}, 1)
 	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
-		Interval: 15 * time.Millisecond,
-		Deadline: 30 * time.Millisecond, // 显式传入，覆盖环境变量 7s
-		AliveFn:  func() bool { return false },
+		Interval:            15 * time.Millisecond,
+		Deadline:            30 * time.Millisecond, // 显式传入，覆盖环境变量 7s
+		AliveFn:             func() bool { return false },
+		SpawnedBySupervisor: true,
 	}, func() {
 		select {
 		case stopped <- struct{}{}:
@@ -177,5 +185,71 @@ func TestSupervisorWatchEnvVsExplicitConfig(t *testing.T) {
 		// ok：~30ms 内触发，说明用的是显式 Deadline 而非环境变量 7s
 	case <-time.After(time.Second):
 		t.Fatal("explicit deadline not respected")
+	}
+}
+
+// TestWatchSupervisorClientSpawnKeepsServing 客户端（cata chat / gateway）按需拉起的 agent：
+// 用户可能压根没跑 supervisor（或刚把它 kill 掉），此时**不能**自杀——否则 TUI 每 30 秒
+// 被掐一次，消息全部 broken pipe。这类 agent 由自身空闲回收兜底。
+func TestWatchSupervisorClientSpawnKeepsServing(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 10 * time.Millisecond,
+		Deadline: 20 * time.Millisecond,
+		AliveFn:  func() bool { return false }, // supervisor 从来没在跑
+		// SpawnedBySupervisor 缺省 false = 客户端拉起
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	done := make(chan struct{})
+	go func() { watch(); close(done) }()
+
+	// 远超 Deadline 也不应停。
+	select {
+	case <-stopped:
+		t.Fatal("client-spawned agent must not stop when supervisor was never running")
+	case <-time.After(300 * time.Millisecond):
+	}
+	select {
+	case <-done:
+		t.Fatal("watch returned for a client-spawned agent without a supervisor")
+	default:
+	}
+}
+
+// TestWatchSupervisorClientSpawnStopsAfterSeenAlive 客户端拉起的 agent 一旦**见过**
+// supervisor 存活、之后失联，仍按 Deadline 退出（supervisor 被 kill 的孤儿清理不受影响）。
+func TestWatchSupervisorClientSpawnStopsAfterSeenAlive(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	var seen atomic.Bool
+	seen.Store(true)
+	watch := WatchSupervisorAndStop(SupervisorWatchConfig{
+		Interval: 10 * time.Millisecond,
+		Deadline: 30 * time.Millisecond,
+		AliveFn:  func() bool { return seen.Load() },
+	}, func() {
+		select {
+		case stopped <- struct{}{}:
+		default:
+		}
+	})
+	go watch()
+
+	// 先让它探测到 supervisor 存活。
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-stopped:
+		t.Fatal("stop called while supervisor alive")
+	default:
+	}
+	// supervisor 消失 → 应在 Deadline 内停止。
+	seen.Store(false)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop was not called after supervisor disappeared (seen alive before)")
 	}
 }

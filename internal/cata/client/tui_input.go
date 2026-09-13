@@ -246,7 +246,8 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		outCwd = m.cwd
 	}
 	rt := m.runtime
-	if err := m.sess.write(req{Command: "chat", Text: sendText, Attachments: attachments, Stream: true, Cwd: outCwd, Runtime: &rt, ShowThinking: m.showThinking}); err != nil {
+	r := req{Command: "chat", Text: sendText, Attachments: attachments, Stream: true, Cwd: outCwd, Runtime: &rt, ShowThinking: m.showThinking}
+	if err := m.writeChatResilient(r); err != nil {
 		m.streaming = false
 		m.cancelRequested = false
 		m.input.Focus()
@@ -254,6 +255,25 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 	}
 	return m, waitStream(m.sess)
+}
+
+// writeChatResilient 发 chat 请求；若连接已断（agent 空闲回收 / 被 supervisor 心跳掐掉 /
+// 崩溃），自动唤醒 agent 并把**同一条消息**重发一次——用户不必重敲，也不会丢消息。
+// 只在「写入失败」时重发：写失败说明请求没送出去；若写成功但读侧断流（可能已被处理），
+// 走 handleStream 的断线提示 + /retry，避免重复执行。
+func (m *model) writeChatResilient(r req) error {
+	err := m.sess.write(r)
+	if err == nil {
+		return nil
+	}
+	if !connLost(err) {
+		return err
+	}
+	m.appendLog(styledLogLine(styleDim, "agent 连接已断开 — 正在唤醒并重发这条消息…"), true)
+	if rerr := m.reconnect(); rerr != nil {
+		return fmt.Errorf("%v（唤醒 agent 失败: %v）", err, rerr)
+	}
+	return m.sess.write(r)
 }
 
 // pendingAttachments 汇总本轮要提交的附件：行内 @path（本次输入）+ /attach 队列路径
@@ -337,7 +357,7 @@ func (m *model) queueInlineImage(img clipboardImage) {
 			label, humanSize(len(img.Data))))+"\n", true)
 }
 
-// queueSummary 渲染附件队列为 "[1] a.png, [2] b.png" 形式。
+// queueSummary 渲染路径附件队列为 "[1] a.png, [2] b.png" 形式。
 func queueSummary(paths []string) string {
 	parts := make([]string, 0, len(paths))
 	for i, p := range paths {

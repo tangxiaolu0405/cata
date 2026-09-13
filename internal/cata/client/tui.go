@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -154,6 +155,8 @@ type model struct {
 	attachQueue []string
 	// attachInline 剪贴板图片（/attach clip 或 Ctrl+V）：base64 内联附件，与上者一起提交。
 	attachInline []inlinePending
+	// dialFn 重连时拨新会话（nil = EnsureAgent + per-ws socket；测试注入假 socket）。
+	dialFn func(wsID string) (*session, error)
 }
 
 type streamTickMsg struct {
@@ -219,6 +222,11 @@ func RunChat(opts ChatOptions) {
 			fatal(err)
 		}
 	}
+	// 先清掉持有者已死的遗留锁（崩溃 / kill -9 之后留在 ~/.cata/locks 的 out_*.lock），
+	// 再取本轮产出区锁：一个产出区只允许一个在写的工作会话（TUI 会话期间持有）。
+	if n := PruneStaleOutputLocks(); n > 0 {
+		log.Printf("cata: pruned %d stale output lock(s)", n)
+	}
 	release, err := AcquireOutputLock(cwd)
 	if err != nil {
 		fatal(err)
@@ -250,17 +258,27 @@ func RunChat(opts ChatOptions) {
 	}
 }
 
-// reconnect 断线后重连（重拨 per-ws agent socket）。
+// reconnect 断线后重连（EnsureAgent 按需拉起 agent + 重拨 per-ws socket）。
 func (m *model) reconnect() error {
-	if err := link.EnsureAgent(m.wsID); err != nil {
-		return err
-	}
-	ns, err := dialAgent(m.wsID)
+	ns, err := m.dialSession()
 	if err != nil {
 		return err
 	}
 	m.swapSession(ns)
+	m.sessDown = false
 	return nil
+}
+
+// dialSession 重连入口：默认 EnsureAgent 按需拉起 + 拨 per-ws socket；
+// 测试可注入 dialFn（假 socket）以覆盖「唤醒 + 重发」链路。
+func (m *model) dialSession() (*session, error) {
+	if m.dialFn != nil {
+		return m.dialFn(m.wsID)
+	}
+	if err := link.EnsureAgent(m.wsID); err != nil {
+		return nil, err
+	}
+	return dialAgent(m.wsID)
 }
 
 // ensureSession 会话断开（agent 空闲退出/崩溃）时按需重连并拉起 agent。
@@ -422,7 +440,8 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 			// 等**下一条消息**再 EnsureAgent 拉起（ensureSession）——
 			// 用户感知是「发出去就被唤醒」，而不是白占一个常驻进程。
 			m.sessDown = true
-			m.appendLog(styledLogLine(styleDim, "agent 已断开（无消息空闲退出）— 下次发送时自动唤醒"), true)
+			m.appendLog(styledLogLine(styleDim,
+				"agent 已断开（空闲回收/被心跳掐掉/崩溃）— 下次发送会自动唤醒并重发这条；也可 /retry 重发上一条"), true)
 		}
 		return m, m.input.Focus()
 	}
