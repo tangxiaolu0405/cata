@@ -560,7 +560,12 @@
     function projectItem(p) {
       const d = document.createElement("div");
       d.className = "item" + (p.id === activeId ? " active" : "");
-      d.innerHTML = `<strong>${esc(p.name || p.id)}</strong><small>${esc(p.path)}</small>`;
+      // sleeping：机器级隧道已发布，但该工作空间的 agent 进程已空闲退出；
+      // 发消息会由 supervisor 按需拉起（首轮多几百毫秒到两秒）。
+      const badge = p.sleeping
+        ? ' <span style="color: var(--muted); font-weight: normal; font-size: 0.75rem;">· 休眠</span>'
+        : "";
+      d.innerHTML = `<strong>${esc(p.name || p.id)}${badge}</strong><small>${esc(p.path)}</small>`;
       d.onclick = () => selectProject(p.id);
       return d;
     }

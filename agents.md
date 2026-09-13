@@ -96,7 +96,7 @@
 
 | 区域 | 作用 |
 |------|------|
-| **`cmd/cata`** | `init`（初始化 ~/.cata）、`initconfig`（种子 config.json）、`config`、`agent`（per-ws）、`supervisor`（保活守护）、`link`（网关注册/隧道）、`schedule`、`update`、`chat`（默认 Bubble Tea TUI） |
+| **`cmd/cata`** | `init`（初始化 ~/.cata）、`initconfig`（种子 config.json）、`config`、`agent`（per-ws，按需/空闲回收）、`supervisor`（常驻：机器级隧道 + 按需拉起 agent）、`link`（网关注册/隧道）、`schedule`、`update`、`chat`（默认 Bubble Tea TUI） |
 | **`cmd/cata-gateway`** | 渠道入口；凭证驱动并发启渠道；Web 控制台；remote 隧道（逐机 token） |
 | **`cmd/cata-pet`** | 可选桌宠客户端（Wails + `cmd/cata-pet/pet` + `frontend/`）；同一 socket，不改 server |
 | **`cmd/cata-desktop`** | 桌面工作空间浏览器（Fyne，只读） |
@@ -611,13 +611,28 @@ link.json 的 machine_token / gateway_token / 各 agent 的 agent_token），替
 
 ---
 
-## Supervisor 进程管理（每机器一个）
+## 工作空间生命周期（空闲休眠 + 按需唤醒）
 
-- 只负责注册（link add）工作空间 agent 进程的生命周期：拉起 / 保活（30s tick）/ 停止；不转发对话、不持隧道。
+**常驻的只有 supervisor；agent 按需起、按空闲退。**
+
+- **回收基准是「消息」**：agent 距最后一条 chat 消息超过 `--idle-timeout`（默认 **1800s = 半小时**）即退出
+  （`server.startIdleReaper` 看 `lastActivity`，有流式轮次在跑时不回收）。与「客户端是否连着」无关——
+  TUI 挂着空闲连接同样回收；后台演进（evolve 周期）不算消息。`--keep-alive` **不再豁免**空闲回收。
+- **唤醒落点**（消息到达时）：
+  - 本地 `cata chat` / 本地 gateway：拨 socket 前 `link.EnsureAgent`（`client/tui.go`、`gateway/local_agent.go`）
+  - 远端 gateway：经 **supervisor 的机器级隧道**下发 `open{agent_id}` → supervisor `EnsureAgent` → 转发 stream
+  （`internal/cata/link/supervisor_tunnel.go` 的 `ensureAndDial`）
+- **TUI 断线不立即重连**：标记 `sessDown`，下次发送前 `ensureSession()` 才唤醒——否则空闲 TUI 会把
+  「休眠」变成「每半小时醒一次」（`internal/cata/client/tui.go`）。
+
+## Supervisor 进程管理（每机器一个，常驻）
+
+- 持有到网关的**机器级隧道**（每机器一条 WSS，服务本机全部注册工作空间）+ 管理 agent 进程生命周期
+  （按需拉起 / 停止；**不再**每 30s 无条件补拉全部 agent）。
 - 控制口：`~/.cata/supervisor.sock`（ping/add/ensure/stop/list/status/shutdown）。
 - **级联关闭**：`cata supervisor stop` 或 SIGTERM/SIGINT → `stopAllAgents()` 立即停；SIGKILL（kill -9）→ 各 keep-alive agent 靠控制口心跳（失联默认 30s；`CATA_SUPERVISOR_INTERVAL` / `CATA_SUPERVISOR_DEADLINE` 可调）自检退出。
 - **不打断活跃会话**：心跳 `Busy`（`srv.HasActiveChat`）为 true 时推迟退出，空闲或 supervisor 恢复后再判——避免正在进行的对话/任务被误杀。
-- 一个工作空间 = 一个 agent 进程（`cata chat` 按需拉起，注册的常驻，空闲超时回收；keep-alive 不因空闲退出）。
+- 一个工作空间 = 一个 agent 进程（按需拉起，半小时无消息退出；同一产出区同时只有一个 chat）。
 
 ---
 
@@ -625,7 +640,7 @@ link.json 的 machine_token / gateway_token / 各 agent 的 agent_token），替
 
 1. 改核心先看 **`internal/cata/`**（`server` / `client` / `evolve` / `brain`）与 **`cmd/cata`**；改渠道看 **`internal/gateway/`**；桌宠看 **`cmd/cata-pet`**（含 `pet/` 子包与 `frontend/`）。
 2. 路径以 **`internal/cata/brain/project_paths.go`**、`paths.go`、`context_paths.go` 为准；产出区 = chat 请求的 `cwd`（`--dir` 时 client 会 `chdir` 到主产出区）。
-3. **一个工作空间 = 一个 agent 进程**（`cata chat` 按需拉起，注册的常驻，空闲超时回收）；**同一产出区目录只能开一个 chat**；per-ws socket 在 `~/.cata/sockets/<ws_id>.sock`。legacy `cata run` 仅作 cata-pet / scheduler 内部支撑，chat 不依赖。
+3. **一个工作空间 = 一个 agent 进程**（按需拉起；**半小时无消息即退出**，由 supervisor / 本地入口在下条消息时唤醒）；**同一产出区目录只能开一个 chat**；per-ws socket 在 `~/.cata/sockets/<ws_id>.sock`。到网关的 WSS 隧道由 **supervisor 的机器级隧道**持有（不再每个 agent 自持 `--link`）。legacy `cata run` 仅作 cata-pet / scheduler 内部支撑，chat 不依赖。
 4. 勿虚构路径；勿把角色卡片/引导模板（`internal/llm/rolecards/`、`internal/cata/brain/guidance/`）与 `~/.cata`（运行时）混为一谈；勿把 focus_path 当成产出区；**主要内容**在 `focus_path/.cata/`，不在 home 脑子格。
 5. **提交前必须全量自检**：`gofmt -l .`（应为空）→ `go build ./...` → `go test ./...`，三者通过才提交并推送。只对改动文件逐个 gofmt 会漏掉其它未格式化文件（CI 会因 `gofmt -l .` 失败）。
 

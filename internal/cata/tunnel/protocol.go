@@ -32,8 +32,19 @@ const (
 	FramePing     = "ping"      // 双向：保活
 	FramePong     = "pong"      // 双向：保活应答
 	FrameRegister = "register"  // gateway → worker：命令本机注册一个新工作空间（相对 workspace_root 的子路径）
+	FrameAgents   = "agents"    // worker → gateway：机器级隧道更新其服务的工作空间清单（link.json 变化时推送）
+	FrameRevoke   = "revoke"    // gateway → worker：吊销某工作空间，本机不再为该 agent 服务
 	FrameDetach   = "detach"    // 预留
 )
+
+// AgentEntry 机器级隧道对外发布的一个工作空间条目（hello / agents 帧携带）。
+// 网关据此把「本机注册但 agent 进程已空闲退出」的工作空间也列出来并路由——
+// 收到消息时由 supervisor 按需拉起对应 agent 再转发（见 docs/tunnel.md）。
+type AgentEntry struct {
+	AgentID  string `json:"agent_id"`
+	Name     string `json:"name,omitempty"`
+	RootPath string `json:"root_path,omitempty"`
+}
 
 // Frame 隧道帧（JSON over WebSocket text message）。
 type Frame struct {
@@ -41,6 +52,13 @@ type Frame struct {
 	AgentID  string `json:"agent_id,omitempty"`
 	Name     string `json:"name,omitempty"`
 	RootPath string `json:"root_path,omitempty"`
+	// MachineTunnel hello 帧为 true 时表示这是**机器级隧道**：由本机 supervisor 持有
+	// （而非某个 agent 进程），AgentID 为空，Agents 列出本机注册的工作空间。
+	// 网关把它当作该机器所有工作空间的入口：DialAgent 时经该连接下发
+	// FrameOpen{AgentID: <目标>}，supervisor 按需拉起对应 agent 再转发。
+	MachineTunnel bool `json:"machine_tunnel,omitempty"`
+	// Agents 机器级隧道宣称服务的工作空间清单（hello / agents 帧）。
+	Agents []AgentEntry `json:"agents,omitempty"`
 	// MachineID 机器标识（hello 帧携带）：gateway 用它把在线 agent 按机器分组，
 	// 并向同一机器下发 register 控制帧。worker 侧生成并填充。
 	MachineID string `json:"machine_id,omitempty"`

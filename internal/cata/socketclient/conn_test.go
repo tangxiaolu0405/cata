@@ -45,6 +45,7 @@ type dummyAddr struct{}
 
 func (dummyAddr) Network() string { return "dummy" }
 func (dummyAddr) String() string  { return "dummy" }
+
 // TestChatCancelOnContextCancel 验证「停止生成」核心链路：Chat 的 ctx 取消后，
 // Conn 会向 server 发送 chat_cancel（前端 abort → gateway r.Context() 取消 → 此路径）。
 func TestChatCancelOnContextCancel(t *testing.T) {

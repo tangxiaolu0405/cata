@@ -120,7 +120,9 @@ type model struct {
 	lastIn    string
 
 	streaming bool
-	overlay   *overlayState
+	// sessDown：连接已断（agent 空闲退出/崩溃），下次发送前 ensureSession 按需唤醒并重拨。
+	sessDown bool
+	overlay  *overlayState
 	// cancelRequested：流式中已发过一次 chat_cancel；再按 ctrl+c 则强制退出。
 	cancelRequested bool
 
@@ -248,6 +250,19 @@ func (m *model) reconnect() error {
 		return err
 	}
 	m.swapSession(ns)
+	return nil
+}
+
+// ensureSession 会话断开（agent 空闲退出/崩溃）时按需重连并拉起 agent。
+// 只在真正要发消息前调用：空闲挂着的 TUI 不会把休眠的 agent 一直唤醒。
+func (m *model) ensureSession() error {
+	if !m.sessDown {
+		return nil
+	}
+	if err := m.reconnect(); err != nil {
+		return err
+	}
+	m.appendLog(styledLogLine(styleDim, "agent 已拉起，继续"), true)
 	return nil
 }
 
@@ -383,12 +398,12 @@ func (m *model) handleStream(ev streamEvent) (tea.Model, tea.Cmd) {
 		m.closeThinking()
 		m.appendLog(styleErr.Render("! "+ev.err.Error())+"\n", true)
 		if connLost(ev.err) {
-			m.appendLog(styledLogLine(styleDim, "disconnected — try again"), true)
-			if err := m.reconnect(); err != nil {
-				m.appendLog(styleErr.Render("! server: "+err.Error())+"\n", true)
-			} else {
-				m.appendLog(styledLogLine(styleDim, "reconnected"), true)
-			}
+			// 断线不再立即重连：agent 无消息半小时会空闲退出，空闲挂着的 TUI 若马上
+			// 重新拉起，就会把「休眠」变成「每半小时醒一次」。这里只标记断线，
+			// 等**下一条消息**再 EnsureAgent 拉起（ensureSession）——
+			// 用户感知是「发出去就被唤醒」，而不是白占一个常驻进程。
+			m.sessDown = true
+			m.appendLog(styledLogLine(styleDim, "agent 已断开（无消息空闲退出）— 下次发送时自动唤醒"), true)
 		}
 		return m, m.input.Focus()
 	}

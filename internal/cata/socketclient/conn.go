@@ -373,21 +373,21 @@ func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, at
 					ChoiceID: p.ChoiceID,
 					Selected: selected,
 				}); err != nil {
-				return ChatResult{Text: out.String()}, err
+					return ChatResult{Text: out.String()}, err
+				}
+			case "done":
+				success, _ := ev["success"].(bool)
+				cancelled, _ := ev["cancelled"].(bool)
+				// ctx 已取消（停止生成）时，强制标记 cancelled。
+				if cancelling {
+					cancelled = true
+				}
+				return ChatResult{
+					Text:      out.String(),
+					Success:   success,
+					Cancelled: cancelled,
+				}, nil
 			}
-		case "done":
-			success, _ := ev["success"].(bool)
-			cancelled, _ := ev["cancelled"].(bool)
-			// ctx 已取消（停止生成）时，强制标记 cancelled。
-			if cancelling {
-				cancelled = true
-			}
-			return ChatResult{
-				Text:      out.String(),
-				Success:   success,
-				Cancelled: cancelled,
-			}, nil
-		}
 		}
 	}
 }

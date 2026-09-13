@@ -30,7 +30,7 @@
 
 多项目隔离：每个项目一条会话，按 `project.ID`（= ws_id）拨到对应 agent 的 per-ws socket
 （`~/.cata/sockets/<ws_id>.sock`），未注册项目由 `EnsureAgent` 按需拉起、空闲回收；
-注册且 keep-alive 的项目由 supervisor 守护保活。不同项目 = 独立 agent 进程，可并行对话。
+注册的工作空间由 supervisor 常驻守护（持有机器级隧道并按需拉起 agent）；agent 无消息半小时即空闲退出，下一条消息自动唤醒。不同项目 = 独立 agent 进程，可并行对话。
 
 配置：
 
@@ -101,7 +101,7 @@ agent（`cwd` = 该 agent 工作空间根路径）。未绑定前的默认 worke
 |---------|------|-------------|
 | **base** | 基础版：gateway + 本机 per-ws agent 一体 | 默认 `auto_start: true`，启动时确保 supervisor（保活常驻 agent） |
 | **channel** | 渠道版：仅适配器 | 默认不确保 supervisor；agent 按需/外部运行 |
-| **remote** | 云端版：注册中心 + 隧道路由 | 不拉起本机进程；worker 由各机器 `cata agent --link` 提供 |
+| **remote** | 云端版：注册中心 + 隧道路由 | 不拉起本机进程；各机器由 `cata supervisor` 持有机器级隧道注册上来（agent 按需拉起） |
 
 `cata_server` 字段：
 
@@ -185,7 +185,7 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 | 模式 | gateway | cata worker | 传输 | 状态 |
 |------|---------|-------------|------|------|
 | **一、同机（per-ws）** | 本机 | 本机每项目一个 `cata agent` | Unix socket `~/.cata/sockets/<ws_id>.sock` | **当前实现** |
-| **四、remote（云端隧道）** | 任意位置（云端） | 各机器 `cata agent --link` | WSS 隧道（cata-tunnel.v1） | **当前实现** |
+| **四、remote（云端隧道）** | 任意位置（云端） | 各机器 `cata supervisor`（机器级隧道；按需拉起 agent） | WSS 隧道（cata-tunnel.v1） | **当前实现** |
 | **二、安全隔离** | 公网/云端 | 内网或用户本机 | HTTPS → worker HTTP API（`CATA_URL`） | 由模式四取代（设计归档） |
 | **三、全云端** | 云端 A | 云端 B（或同机） | HTTP API 或 VPC 内 socket | 由模式四取代（设计归档） |
 
@@ -213,7 +213,7 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 | `tunnel_listen` / `CATA_TUNNEL_LISTEN` | — | 隧道端点，默认 `0.0.0.0:8799` |
 | `allow_agent_ids` / `CATA_GATEWAY_ALLOW_AGENTS` | — | agent 白名单（空 = 放行所有） |
 | `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | — | 通道会话默认路由 agent |
-| `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 项目 = 在线 agent |
+| `ui_listen` / `CATA_GATEWAY_UI` | Web 控制台（默认 0.0.0.0:8787） | 项目 = 可路由工作空间（含 sleeping：agent 已空闲退出，收到消息按需唤醒） |
 | `projects` | （可选遗留；UI 列表改读 brain/workspaces） | — |
 | `socket_path` / `CATA_SOCKET` | ⚠️ deprecated（本地走 per-ws socket，不再读取） | — |
 | `cata_url` / `CATA_URL` | 忽略 | 设置即进入 remote 模式 |
@@ -224,6 +224,6 @@ GATEWAY_UI_PASSWORD=你的口令 ./install_gateway.sh --version=v1.2.3 --run=sys
 ## 扩展顺序（建议）
 
 1. ✅ 模式一：Telegram + socket + per-chat worker 目录
-2. ✅ 模式四（remote）：WSS 隧道注册中心 + 路由（`cata agent --link` / `cata link` / `cata supervisor`），见 [tunnel.md](tunnel.md)
+2. ✅ 模式四（remote）：WSS 机器级隧道注册中心 + 路由（`cata link` / `cata supervisor`；`cata agent --link` 为 legacy 自持隧道），见 [tunnel.md](tunnel.md)
 3. ✅ 模式一完善：Telegram 附件（photo/document/voice → worker 产出区 → cata attachments）、/status（当前工作空间 + LLM 状态）、渠道插件结构（`gateway.Channel` 接口 + `PendingManager` 共享 exec/choice 等待）、QQ /status + 工具执行提示、渠道转发改为「会话 /dir 切换工作空间」（移除 per-channel agent 绑定）
 4. v2：逐 agent token、按项目路由（web 会话已按项目；渠道可扩展 per-channel agent）

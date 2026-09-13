@@ -35,8 +35,9 @@ type SessionManager struct {
 	dirListSeen map[SessionKey]bool
 	// remoteDial remote 模式下按目标 agent 拨其隧道（nil = 退化为默认 connFactory）。
 	remoteDial func(agentID string) func() (net.Conn, error)
-	// sessionIdleTimeout 会话空闲回收阈值：超过该时长无消息的会话连接被关闭
-	// （触发 server 侧 ClientDisconnected → agent idle 回收链路）。0 = 不回收。
+	// sessionIdleTimeout 会话空闲回收阈值：超过该时长无消息的会话连接被关闭。
+	// agent 侧另有「半小时无消息退出」的回收；下次消息由 dialFunc 重新 EnsureAgent 拉起
+	// （remote 模式经机器级隧道唤醒）。0 = 不回收。
 	sessionIdleTimeout time.Duration
 
 	mu       sync.Mutex

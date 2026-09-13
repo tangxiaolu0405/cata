@@ -67,10 +67,11 @@ type Config struct {
 	// SocketPath 历史字段（legacy cata.sock）。本地模式已迁移为 per-ws agent
 	// socket（~/.cata/sockets/<ws_id>.sock），此字段不再被读取；保留仅向后兼容。
 	SocketPath string `json:"socket_path,omitempty"`
-	CataURL            string           `json:"cata_url,omitempty"`  // 模式二/三预留
-	UIListen           string           `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
+	CataURL    string `json:"cata_url,omitempty"`  // 模式二/三预留
+	UIListen   string `json:"ui_listen,omitempty"` // 控制台监听，默认 0.0.0.0:8787；off 关闭
 	// SessionIdleTimeoutSeconds 渠道会话空闲回收阈值（秒）：超过该时长无消息的会话连接
-	// 被关闭（触发 server 侧 ClientDisconnected → agent idle 回收）。默认 86400（24h）；0 = 不回收。
+	// 被关闭。默认 86400（24h）；0 = 不回收。agent 本身按「无消息」自行空闲退出，
+	// 下一条消息到达时按需拉起（本地 EnsureAgent / remote 经机器级隧道）。
 	SessionIdleTimeoutSeconds int `json:"session_idle_timeout_seconds,omitempty"`
 	// UIPassword 控制台访问口令。支持两种形态：
 	//   - bcrypt hash（以 $2 开头，推荐）：用 `cata-gateway passwd` 生成后写入；

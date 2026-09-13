@@ -240,7 +240,12 @@ func Stat(agentID string) (AgentEntry, bool, bool, error) {
 	return e, ok, alive, nil
 }
 
-// EnsureAll 确保所有启用的注册工作空间 agent 在运行（supervisor 用）。
+// EnsureAll 确保所有启用的注册工作空间 agent 在运行。
+//
+// 注意：supervisor **不再**周期性调用它——agent 无消息半小时即空闲退出，
+// 预先把注册的工作空间全部拉起来会立刻把「休眠」变成「常驻」。
+// 现在的语义是「按需」：本地入口（cata chat / gateway）与 supervisor 的机器级隧道
+// 在消息到达时分别调用 EnsureAgent。保留此函数供显式批量子集使用（如诊断脚本）。
 func EnsureAll() (started int, err error) {
 	cfg, err := LoadConfig()
 	if err != nil {

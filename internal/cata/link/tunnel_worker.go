@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -66,25 +65,13 @@ func RunTunnelWorker(ctx context.Context, agentID string) error {
 	}
 }
 
+// tunnelWSURL agent 自持隧道的 WSS 端点（?agent=<agent_id>；legacy 路径，见
+// supervisor_tunnel.go 的机器级隧道）。
 func tunnelWSURL(gatewayURL, agentID string) (string, error) {
-	gw := strings.TrimSpace(gatewayURL)
-	if gw == "" {
-		return "", fmt.Errorf("empty gateway url")
-	}
-	u, err := url.Parse(normalizeGatewayURL(gw))
+	u, err := tunnelEndpointURL(gatewayURL)
 	if err != nil {
 		return "", err
 	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	case "ws", "wss":
-	default:
-		return "", fmt.Errorf("unsupported gateway url scheme %q", u.Scheme)
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/cata/v1/tunnel"
 	q := u.Query()
 	q.Set("agent", agentID)
 	u.RawQuery = q.Encode()
@@ -131,9 +118,11 @@ func runOneTunnel(ctx context.Context, agentID string, cfg Config) error {
 	log.Printf("cata agent %s: tunnel connected: %s", agentID, wsURL)
 
 	ws := &tunnelConn{
-		conn:    conn,
-		streams: map[uint64]*tunnelStream{},
-		errCh:   make(chan error, 1),
+		conn:           conn,
+		streams:        map[uint64]*tunnelStream{},
+		errCh:          make(chan error, 1),
+		defaultAgentID: agentID,
+		dialSocket:     dialAgentSocketDirect,
 	}
 	defer ws.closeAll()
 
@@ -184,6 +173,13 @@ type tunnelConn struct {
 	conn    *websocket.Conn
 	streams map[uint64]*tunnelStream
 	errCh   chan error // 连接级错误（FrameError）→ 通知 readLoop 返回触发重连
+
+	// defaultAgentID 本连接默认服务的工作空间：agent 自持隧道（--link）时 = 自己；
+	// 机器级隧道留空——目标由 gateway 在 FrameOpen.AgentID 里逐流指定。
+	defaultAgentID string
+	// dialSocket 按工作空间拨本地 per-ws socket。机器级隧道传入「先 EnsureAgent
+	// 按需拉起、再拨号」的实现（见 supervisor_tunnel.go）。
+	dialSocket func(agentID string) (net.Conn, error)
 }
 
 // notifyError 非阻塞投递连接级错误（网关 FrameError）。
@@ -211,7 +207,11 @@ const tunnelSendTimeout = 15 * time.Second
 func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
 	switch f.Type {
 	case tunnel.FrameOpen:
-		t.openStream(agentID, f.Stream)
+		target := strings.TrimSpace(f.AgentID)
+		if target == "" {
+			target = t.defaultAgentID
+		}
+		t.openStream(target, f.Stream)
 	case tunnel.FrameLine:
 		if s := t.getStream(f.Stream); s != nil {
 			data, err := tunnel.DecodeData(f.Data)
@@ -251,11 +251,18 @@ func (t *tunnelConn) handleFrame(agentID string, f tunnel.Frame) {
 	}
 }
 
-func (t *tunnelConn) openStream(agentID string, id uint64) {
+// dialAgentSocketDirect 直接拨本地 per-ws socket（不拉起 agent）。
+func dialAgentSocketDirect(agentID string) (net.Conn, error) {
 	socketPath := config.ResolvedAgentSocketPath(agentID)
-	sock, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	return net.DialTimeout("unix", socketPath, 5*time.Second)
+}
+
+// openStream 为 gateway 的一条逻辑连接拨本地 per-ws socket。
+// agentID = 目标工作空间；拨号失败（含按需拉起失败）时回 FrameError + FrameClose。
+func (t *tunnelConn) openStream(agentID string, id uint64) {
+	sock, err := t.dialSocket(agentID)
 	if err != nil {
-		_ = t.send(tunnel.Frame{Type: tunnel.FrameError, Stream: id, Message: fmt.Sprintf("dial %s: %v", socketPath, err)})
+		_ = t.send(tunnel.Frame{Type: tunnel.FrameError, Stream: id, Message: fmt.Sprintf("agent %s: %v", agentID, err)})
 		_ = t.send(tunnel.Frame{Type: tunnel.FrameClose, Stream: id})
 		return
 	}

@@ -75,6 +75,7 @@ type dummyAddr struct{}
 
 func (dummyAddr) Network() string { return "dummy" }
 func (dummyAddr) String() string  { return "dummy" }
+
 // TestSessionManagerReapIdle 验证会话空闲回收：超过 idle 阈值的会话连接被关闭并删除。
 func TestSessionManagerReapIdle(t *testing.T) {
 	m := NewSessionManagerWithStore("", t.TempDir(), nil)

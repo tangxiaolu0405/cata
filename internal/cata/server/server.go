@@ -24,9 +24,12 @@ type Options struct {
 	Workspace *brain.Workspace
 	// SocketPath 非空时使用指定 Unix socket（agent 模式为 ~/.cata/sockets/<ws_id>.sock）。
 	SocketPath string
-	// IdleTimeout >0 且非 KeepAlive 时，chatSessions==0 持续该时长后自动退出。
+	// IdleTimeout >0 时，**持续该时长没有收到 chat 消息**（无论客户端是否还连着）即自动退出；
+	//  0 = 不空闲回收。注册到网关的 keep-alive agent 同样适用——退出后由 supervisor /
+	//  本地入口在下一条消息到达时按需拉起（EnsureAgent）。
 	IdleTimeout time.Duration
-	// KeepAlive 常驻（注册到网关的项目）：不因空闲退出。
+	// KeepAlive agent 由 supervisor 监管（注册到网关）：受 supervisor 存活心跳约束，
+	// 但**不再豁免空闲回收**。
 	KeepAlive bool
 }
 
@@ -44,8 +47,9 @@ type Server struct {
 	idleTimeout time.Duration
 	keepAlive   bool
 
-	idleMu    sync.Mutex
-	idleTimer *time.Timer
+	// lastActivity 最近一次收到 chat 消息的时间（UnixNano）。空闲回收以**消息**为准，
+	// 而非「客户端连接是否存在」——cata chat TUI 会长期挂着一条空闲连接。
+	lastActivity atomic.Int64
 
 	// stopOnce 保证 Stop() 只执行一次：多并发调用源（空闲回收 / managed 空连接 / SIGTERM /
 	// keep-alive supervisor 心跳）同时触发时，资源只释放一遍（mcp.Shutdown / socket close /
@@ -89,17 +93,8 @@ func (s *Server) ClientDisconnected() {
 		go s.Stop()
 		return
 	}
-	// agent 模式：空闲超时回收（仅非 keep-alive）。
-	if s.idleTimeout > 0 && !s.keepAlive && s.socketSrv != nil && s.socketSrv.ChatSessions() == 0 {
-		s.idleMu.Lock()
-		if s.idleTimer == nil {
-			s.idleTimer = time.AfterFunc(s.idleTimeout, func() {
-				log.Printf("agent %s: idle for %s, shutting down", s.workspaceID(), s.idleTimeout)
-				s.Stop()
-			})
-		}
-		s.idleMu.Unlock()
-	}
+	// agent 模式的空闲回收由 startIdleReaper 按「最后一条消息」统一计时
+	// （客户端断开本身不再是回收依据——断开那一刻可能刚好还有别的工作）。
 }
 
 // HasActiveChat 是否仍有活跃 chat 会话（supervisor 心跳据此推断 agent 是否空闲，
@@ -108,17 +103,54 @@ func (s *Server) HasActiveChat() bool {
 	return s.socketSrv != nil && s.socketSrv.ChatSessions() > 0
 }
 
-// touchActivity 取消空闲回收计时（新 chat 会话开始时调用）。
+// touchActivity 记录最后一次 chat 活动（每条 chat 消息到达时调用）。
 func (s *Server) touchActivity() {
+	s.lastActivity.Store(time.Now().UnixNano())
+}
+
+// startIdleReaper 后台按 IdleTimeout 回收进程：
+// 距最后一条 chat 消息超过 IdleTimeout、且当前没有进行中的流式轮次（工具执行/生成中
+// 不算空闲）时优雅退出。keep-alive（注册到网关）同样适用——下次消息到达时由
+// supervisor（机器级隧道）/ 本地入口 EnsureAgent 按需重新拉起。
+//
+// 背景演进（evolve 周期）**不**算消息，不会阻止回收：无消息的工作空间不再常驻占资源。
+func (s *Server) startIdleReaper() {
 	if s.idleTimeout <= 0 {
 		return
 	}
-	s.idleMu.Lock()
-	if s.idleTimer != nil {
-		s.idleTimer.Stop()
-		s.idleTimer = nil
+	interval := s.idleTimeout / 4
+	if interval < 250*time.Millisecond {
+		interval = 250 * time.Millisecond
 	}
-	s.idleMu.Unlock()
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+				if atomic.LoadInt32(&activeChatStreams) > 0 {
+					continue // 有轮次正在执行：不回收
+				}
+				last := s.lastActivity.Load()
+				if last == 0 {
+					continue
+				}
+				idle := time.Since(time.Unix(0, last))
+				if idle < s.idleTimeout {
+					continue
+				}
+				log.Printf("agent %s: no message for %s, shutting down (respawned on next message)",
+					s.workspaceID(), idle.Round(time.Second))
+				s.Stop()
+				return
+			}
+		}
+	}()
 }
 
 func (s *Server) workspaceID() string {
@@ -131,6 +163,8 @@ func (s *Server) workspaceID() string {
 // Start 启动 socket 服务。
 func (s *Server) Start() error {
 	log.Println("Starting Cata server...")
+	// 空闲计时从进程启动开始：没有任何消息的 agent 也会被回收。
+	s.touchActivity()
 
 	socketSrv, err := NewSocketServerAt(s, s.socketPath)
 	if err != nil {
@@ -173,6 +207,7 @@ func (s *Server) Start() error {
 	}
 
 	s.setupSignalHandling()
+	s.startIdleReaper()
 	if config.Config != nil && !config.Config.Exec.Enabled {
 		log.Println("WARNING: exec.enabled=false — terminal run_command disabled until config is updated")
 	}

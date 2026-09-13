@@ -20,12 +20,30 @@ func PingAgentSocket(socketPath string) error {
 	return socketclient.Ping(socketPath)
 }
 
+// EnvAgentSupervised 环境变量：置 1 表示本 agent 由 supervisor（机器级隧道）按需拉起，
+// supervisor 一死它就退出（孤儿清理）；客户端拉起的 agent 不置位，因此不会因为
+// 「用户没跑 supervisor」而在 30 秒后自杀。
+const EnvAgentSupervised = "CATA_AGENT_SUPERVISED"
+
 // EnsureAgent 幂等拉起某工作空间的 agent 进程：
 //   - per-ws socket 已存活 → 直接返回
 //   - 否则持 per-ws spawn 锁（locks/ws-<id>.lock）启动 `cata agent --workspace <id>`，
-//     注册且启用的 agent 带 --keep-alive（常驻），已配网关的带 --link（持有隧道）
+//     注册且启用的 agent 带 --keep-alive（受 supervisor 生命周期监管）
 //   - 最多等待 20s 直到 per-ws socket 可 ping
+//
+// 这是**客户端入口**（cata chat / 本地 gateway）的按需拉起落点：不因 supervisor 缺席而
+// 自杀，由自身空闲回收（默认半小时无消息）兜底。supervisor 侧见 EnsureAgentSupervised。
 func EnsureAgent(agentID string) error {
+	return ensureAgent(agentID, false)
+}
+
+// EnsureAgentSupervised supervisor / 机器级隧道路径的按需拉起：拉起的 agent 归 supervisor 管
+// （supervisor 死后随之退出，不留孤儿）。
+func EnsureAgentSupervised(agentID string) error {
+	return ensureAgent(agentID, true)
+}
+
+func ensureAgent(agentID string, supervised bool) error {
 	socketPath := config.ResolvedAgentSocketPath(agentID)
 	if PingAgentSocket(socketPath) == nil {
 		return nil
@@ -40,7 +58,6 @@ func EnsureAgent(agentID string) error {
 		}
 		entry, ok := cfg.Agents[agentID]
 		keepAlive := ok && entry.Enabled && entry.KeepAlive
-		withLink := cfg.TunnelEnabled(agentID)
 
 		exe, err := os.Executable()
 		if err != nil {
@@ -50,10 +67,10 @@ func EnsureAgent(agentID string) error {
 		if keepAlive {
 			args = append(args, "--keep-alive")
 		}
-		if withLink {
-			args = append(args, "--link")
-		}
 		cmd := exec.Command(exe, args...)
+		if supervised {
+			cmd.Env = append(os.Environ(), EnvAgentSupervised+"=1")
+		}
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 		detachCmd(cmd)

@@ -25,9 +25,9 @@ func DialLocalAgent(agentID string) func() (net.Conn, error) {
 	}
 }
 
-// EnsureLocalAgents 本地模式的启动保障：确保 supervisor 守护在跑，以保活 link.json
-// 里注册的常驻（keep-alive）agent。未注册项目的 agent 由 DialLocalAgent 按需拉起，
-// 无需在此预启动。autoStart=false（channel/external）时跳过——用户自管进程。
+// EnsureLocalAgents 本地模式的启动保障：确保 supervisor 守护在跑——它负责进程生命周期
+// 与到网关的机器级隧道（agent 空闲退出后由它按需拉起）。agent 本身一律按需启动，
+// 不在此预拉起。autoStart=false（channel/external）时跳过——用户自管进程。
 func EnsureLocalAgents(cfg Config) {
 	if !cfg.ShouldAutoStartServer() {
 		return

@@ -51,7 +51,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	log.Printf("cata-gateway: qq bot starting (sandbox=%v worker_root=%s) — WebSocket is experimental / may be disabled by QQ",
 		b.cfg.QQSandbox, root)
 
-	// 会话空闲回收：QQ 会话超时无消息自动关闭（触发 agent idle 回收链路）。
+	// 会话空闲回收：QQ 会话超时无消息自动关闭（agent 侧同样按消息空闲自行退出）。
 	b.sessions.SetIdleTimeout(b.cfg.SessionIdleTimeout())
 	b.sessions.StartReaper(ctx, time.Hour)
 

@@ -42,11 +42,12 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		}
 		// 不再预校验 gateway_token：隧道鉴权在 hello 帧用逐机器 token 完成（见下）。
 		agentID := strings.TrimSpace(r.URL.Query().Get("agent"))
-		if agentID == "" {
-			http.Error(w, "agent param required", http.StatusBadRequest)
+		machineID := strings.TrimSpace(r.URL.Query().Get("machine"))
+		if agentID == "" && machineID == "" {
+			http.Error(w, "agent or machine param required", http.StatusBadRequest)
 			return
 		}
-		if !allowedAgent(agentID, opts.AllowAgentIDs) {
+		if agentID != "" && !allowedAgent(agentID, opts.AllowAgentIDs) {
 			http.Error(w, "agent not allowed", http.StatusForbidden)
 			return
 		}
@@ -54,6 +55,12 @@ func Handler(reg *Registry, opts HandlerOptions) http.Handler {
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("cata-gateway: tunnel upgrade: %v", err)
+			return
+		}
+
+		if machineID != "" {
+			// 机器级隧道（supervisor 持有）：一个入口服务该机器全部注册工作空间。
+			serveMachineTunnel(reg, opts, r, ws, machineID)
 			return
 		}
 
@@ -155,4 +162,85 @@ func allowedAgent(agentID string, allow []string) bool {
 		}
 	}
 	return false
+}
+
+// filterAllowedAgents 过滤机器级隧道发布的工作空间清单（AllowAgentIDs 白名单）。
+func filterAllowedAgents(entries []tunnel.AgentEntry, allow []string) []tunnel.AgentEntry {
+	if len(allow) == 0 {
+		return entries
+	}
+	out := make([]tunnel.AgentEntry, 0, len(entries))
+	for _, e := range entries {
+		if allowedAgent(e.AgentID, allow) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// serveMachineTunnel 处理**机器级隧道**（由本机 supervisor 持有）的握手与帧循环。
+// 与 agent 自持隧道共用同一套 stream 机制（多路复用 + NDJSON 逐字节透传），区别：
+//   - hello 带 MachineTunnel=true，用逐机器 token 鉴权（不签发 per-agent token）
+//   - hello / agents 帧携带本机工作空间清单：网关据此把「agent 进程已空闲退出」的
+//     工作空间仍列为可路由（AgentInfo.Sleeping），收到消息时下发
+//     FrameOpen{AgentID: <目标>}，由 supervisor 按需拉起 agent 再转发
+func serveMachineTunnel(reg *Registry, opts HandlerOptions, r *http.Request, ws *websocket.Conn, queryMachineID string) {
+	ws.SetReadLimit(int64(tunnel.MaxFrameBytes))
+	_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var hello tunnel.Frame
+	if err := ws.ReadJSON(&hello); err != nil {
+		_ = ws.Close()
+		return
+	}
+	reject := func(msg string) {
+		_ = ws.WriteJSON(tunnel.Frame{Type: tunnel.FrameError, Message: msg})
+		_ = ws.Close()
+	}
+	if hello.Type != tunnel.FrameHello {
+		reject("first frame must be hello")
+		return
+	}
+	if hello.Protocol != tunnel.ProtocolName || hello.Version > tunnel.Version {
+		reject("protocol mismatch")
+		return
+	}
+	if !hello.MachineTunnel {
+		reject("machine tunnel hello required (machine_tunnel=true)")
+		return
+	}
+	machineID := strings.TrimSpace(hello.MachineID)
+	if machineID == "" || machineID != queryMachineID {
+		reject("machine id mismatch (hello vs ?machine=)")
+		return
+	}
+	if opts.Machines != nil {
+		if !opts.Machines.ValidateMachine(machineID, hello.MachineToken) {
+			reject("machine token invalid")
+			return
+		}
+		opts.Machines.TouchSeen(machineID)
+	}
+
+	// hello 校验通过后清除握手读超时，避免隧道 10s 后必然断线。
+	_ = ws.SetReadDeadline(time.Time{})
+
+	ac := newAgentConn(ws, AgentInfo{
+		AgentID:     "machine:" + machineID,
+		Name:        hello.Name,
+		MachineID:   machineID,
+		Protocol:    hello.Protocol,
+		Version:     hello.Version,
+		ConnectedAt: clock.RFC3339(),
+		RemoteAddr:  r.RemoteAddr,
+	})
+	// 机器级 stream 要等 supervisor 按需拉起 agent（冷启动），等待上限放宽。
+	ac.openTimeout = hubStreamOpenTimeout
+
+	entries := filterAllowedAgents(hello.Agents, opts.AllowAgentIDs)
+	reg.RegisterHub(ac, machineID, entries)
+	defer reg.UnregisterHub(ac, machineID)
+	log.Printf("cata-gateway: machine tunnel online: %s (workspaces=%d addr=%s)", machineID, len(entries), r.RemoteAddr)
+	ac.startHeartbeat(r.Context(), tunnel.HeartbeatInterval)
+	ac.readLoop()
+	log.Printf("cata-gateway: machine tunnel offline: %s", machineID)
 }

@@ -163,6 +163,10 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 		case "exit", "quit", "q":
 			return m, tea.Quit
 		case "clear", "reset":
+			if err := m.ensureSession(); err != nil {
+				m.appendLog(styleErr.Render("! 唤醒 agent 失败: "+err.Error())+"\n", true)
+				return m, nil
+			}
 			r, err := m.sess.call(req{Command: "chat_reset"})
 			if err != nil {
 				m.appendLog(styleErr.Render("! "+err.Error())+"\n", true)
@@ -227,6 +231,16 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 	}
 	m.attachQueue = nil // 发送即提交；失败可 /attach retry 或重输
 	m.appendLog(styleUser.Render("you: ")+line+queueTip+"\n\n", true)
+
+	// 断线（agent 空闲退出）时先唤醒 agent 再发：用户无感，休眠工作空间不白占进程。
+	if err := m.ensureSession(); err != nil {
+		m.streaming = false
+		m.cancelRequested = false
+		m.input.Focus()
+		m.appendLog(styleErr.Render("! 唤醒 agent 失败: "+err.Error())+"\n", true)
+		return m, m.input.Focus()
+	}
+
 	m.streaming = true
 	m.cancelRequested = false
 	m.input.Blur()

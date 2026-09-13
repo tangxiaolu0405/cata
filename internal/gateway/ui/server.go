@@ -108,7 +108,7 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// 会话空闲回收：web 会话超时无消息自动关闭（触发 agent idle 回收链路）。
+	// 会话空闲回收：web 会话超时无消息自动关闭（agent 侧按消息空闲自行退出，按需唤醒）。
 	if s.web != nil {
 		s.web.sessions.SetIdleTimeout(s.cfg.SessionIdleTimeout())
 		s.web.sessions.StartReaper(ctx, time.Hour)
@@ -313,7 +313,8 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reg != nil {
-		// remote 模式：项目 = 当前在线 agent。
+		// remote 模式：项目 = 可路由工作空间（在线 agent + 机器级隧道发布但 agent
+		// 已空闲退出的工作空间——后者 sleeping，收到消息时按需拉起）。
 		type arow struct {
 			ID          string `json:"id"`
 			Name        string `json:"name"`
@@ -324,6 +325,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			LastSeen    string `json:"last_seen_at,omitempty"`
 			ConnectedAt string `json:"connected_at,omitempty"`
 			RemoteAddr  string `json:"remote_addr,omitempty"`
+			Sleeping    bool   `json:"sleeping,omitempty"`
 		}
 		agents := s.reg.OnlineAgents()
 		out := make([]arow, 0, len(agents))
@@ -341,6 +343,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				HomeDir:     a.RootPath,
 				ConnectedAt: a.ConnectedAt,
 				RemoteAddr:  a.RemoteAddr,
+				Sleeping:    a.Sleeping,
 			})
 		}
 		writeJSON(w, out)
@@ -700,6 +703,8 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			"root_path":       a.RootPath,
 			"machine_id":      a.MachineID,
 			"has_agent_token": s.store.HasAgentToken(a.AgentID),
+			// sleeping=true：机器级隧道已发布但 agent 进程空闲退出，收到消息时按需拉起。
+			"sleeping": a.Sleeping,
 		})
 	}
 	writeJSON(w, out)
@@ -723,16 +728,25 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	if s.store == nil || s.reg == nil {
+	if s.reg == nil {
 		http.Error(w, "remote mode only", 400)
 		return
 	}
-	if err := s.store.RevokeAgent(agentID); err != nil {
-		http.Error(w, err.Error(), 400)
+	// 吊销 per-agent token（自持隧道的老 worker 用它鉴权）；机器级隧道服务的工作空间
+	// 没有 per-agent token（鉴权在机器 token 层），吊销 = 网关立即停止路由 +
+	// 通知 supervisor 不再服务该工作空间（见 registry.DisconnectAgent）。
+	var tokenErr error
+	if s.store != nil {
+		tokenErr = s.store.RevokeAgent(agentID)
+	} else {
+		tokenErr = fmt.Errorf("agent %q not found (no token store)", agentID)
+	}
+	served := s.reg.AgentAlive(agentID)
+	s.reg.DisconnectAgent(agentID)
+	if tokenErr != nil && !served {
+		http.Error(w, tokenErr.Error(), 400)
 		return
 	}
-	// 吊销后断开其在线连接，强制按新状态重连（自然会被拒，仅当重新 join 才恢复）。
-	s.reg.DisconnectAgent(agentID)
 	writeJSON(w, map[string]any{"ok": true})
 }
 

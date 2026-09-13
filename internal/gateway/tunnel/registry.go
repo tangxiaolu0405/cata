@@ -31,17 +31,32 @@ type AgentInfo struct {
 	Version     int    `json:"version,omitempty"`
 	ConnectedAt string `json:"connected_at,omitempty"`
 	RemoteAddr  string `json:"remote_addr,omitempty"`
+	// Sleeping true = 该工作空间由**机器级隧道**（supervisor）发布，本机 agent 进程
+	// 当前不在线（无消息空闲已退出）。网关仍可路由：首次消息会经机器级隧道
+	// 触发 supervisor 按需拉起该 agent 再转发。
+	Sleeping bool `json:"sleeping,omitempty"`
 }
 
 // Registry 在线 agent 注册中心（无状态：网关重启后 agent 重连即恢复）。
+//
+// 两类入口：
+//   - agents：单个 agent 进程自持的隧道（legacy；一个 agent 一条 WSS）
+//   - hubs：**机器级隧道**（每机器一条，由 supervisor 持有），一个入口服务该机器
+//     全部注册工作空间，按需唤醒对应 agent 进程
 type Registry struct {
-	mu     sync.Mutex
-	agents map[string]*agentConn
+	mu        sync.Mutex
+	agents    map[string]*agentConn
+	hubs      map[string]*agentConn          // machine_id → 机器级隧道连接
+	hubAgents map[string][]tunnel.AgentEntry // machine_id → 该机器发布的工作空间清单
 }
 
 // NewRegistry 创建注册中心。
 func NewRegistry() *Registry {
-	return &Registry{agents: map[string]*agentConn{}}
+	return &Registry{
+		agents:    map[string]*agentConn{},
+		hubs:      map[string]*agentConn{},
+		hubAgents: map[string][]tunnel.AgentEntry{},
+	}
 }
 
 // registerConn 注册一个 agent 的 WSS 连接。agent_id 已在线时，若旧连接是陈旧的
@@ -56,6 +71,61 @@ func (r *Registry) registerConn(a *agentConn) error {
 	}
 	r.agents[a.info.AgentID] = a
 	return nil
+}
+
+// RegisterHub 注册一条**机器级隧道**（supervisor 持有）：该机器全部注册工作空间
+// 经此连接路由，agent 进程不在线时由 supervisor 按需拉起。
+// 同一机器重复 hello（worker 重连）时顶替旧连接。
+func (r *Registry) RegisterHub(a *agentConn, machineID string, agents []tunnel.AgentEntry) {
+	machineID = strings.TrimSpace(machineID)
+	r.mu.Lock()
+	if old, ok := r.hubs[machineID]; ok && old != a {
+		log.Printf("registry: machine %q re-registering tunnel; replacing stale connection", machineID)
+		old.closeFromGateway()
+	}
+	r.hubs[machineID] = a
+	r.hubAgents[machineID] = agents
+	a.onAgents = func(entries []tunnel.AgentEntry) { r.UpdateHubAgents(machineID, a, entries) }
+	r.mu.Unlock()
+}
+
+// UnregisterHub 移除机器级隧道（仅当注册表里该机器仍指向本连接时）。
+func (r *Registry) UnregisterHub(a *agentConn, machineID string) {
+	machineID = strings.TrimSpace(machineID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.hubs[machineID]; ok && cur == a {
+		a.closeAllStreams()
+		delete(r.hubs, machineID)
+		delete(r.hubAgents, machineID)
+	}
+}
+
+// UpdateHubAgents 机器级隧道推送最新工作空间清单（link.json 变化时）。
+func (r *Registry) UpdateHubAgents(machineID string, a *agentConn, agents []tunnel.AgentEntry) {
+	machineID = strings.TrimSpace(machineID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.hubs[machineID]; !ok || cur != a {
+		return // 连接已被顶替/注销：忽略陈旧推送
+	}
+	r.hubAgents[machineID] = agents
+}
+
+// dropHubAgent 从机器级隧道发布清单里剔除某工作空间（吊销时立即停止路由）。
+func (r *Registry) dropHubAgent(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for machineID, entries := range r.hubAgents {
+		out := make([]tunnel.AgentEntry, 0, len(entries))
+		for _, e := range entries {
+			if e.AgentID == agentID {
+				continue
+			}
+			out = append(out, e)
+		}
+		r.hubAgents[machineID] = out
+	}
 }
 
 // UnregisterConn 移除 agent 连接（该连接断开时调用）。只有在注册表中该 agent_id
@@ -76,15 +146,28 @@ func (r *Registry) UnregisterConn(a *agentConn) {
 
 // DisconnectAgent 主动断开某 agent 的在线连接并从注册表移除（吊销 token 后由 UI 调用；
 // 与 UnregisterConn 相同身份语义，但这里是服务端主动踢）。
+// 该工作空间若由机器级隧道服务：立即停止路由（从该机器的发布清单剔除），并通知**服务它的**
+// 那台机器的 supervisor 不再服务它（supervisor 侧记录到本次进程生命周期内生效，
+// 重启后按 link.json 恢复）。
 func (r *Registry) DisconnectAgent(agentID string) {
+	agentID = strings.TrimSpace(agentID)
 	r.mu.Lock()
 	a, ok := r.agents[agentID]
 	if ok {
 		delete(r.agents, agentID)
 	}
+	machineID, _, served := r.findHubEntryLocked(agentID)
+	hub := r.hubs[machineID]
 	r.mu.Unlock()
 	if ok && a != nil {
 		a.closeFromGateway()
+	}
+	if !served {
+		return
+	}
+	r.dropHubAgent(agentID)
+	if hub != nil {
+		_ = hub.send(tunnel.Frame{Type: tunnel.FrameRevoke, AgentID: agentID})
 	}
 }
 
@@ -94,44 +177,72 @@ func (r *Registry) RegisterAgent(agentID, machineID string) error {
 	return r.registerConn(&agentConn{info: AgentInfo{AgentID: agentID, MachineID: machineID}})
 }
 
-// OnlineAgents 返回当前在线 agent 列表（稳定排序）。
+// OnlineAgents 返回当前**可路由**的工作空间列表（稳定排序）：
+//   - 自持隧道的在线 agent（Sleeping=false）
+//   - 机器级隧道发布的工作空间：agent 进程可能已空闲退出（Sleeping=true），
+//     网关仍可路由——首次消息会触发 supervisor 按需拉起再转发
 func (r *Registry) OnlineAgents() []AgentInfo {
 	r.mu.Lock()
-	acs := make([]*agentConn, 0, len(r.agents))
+	infos := make([]AgentInfo, 0, len(r.agents))
+	seen := make(map[string]bool, len(r.agents))
 	for _, a := range r.agents {
-		acs = append(acs, a)
+		infos = append(infos, a.infoSnapshot())
+		seen[a.info.AgentID] = true
+	}
+	for machineID, entries := range r.hubAgents {
+		for _, e := range entries {
+			if seen[e.AgentID] {
+				continue // 直连优先（legacy agent 仍自持隧道时）
+			}
+			seen[e.AgentID] = true
+			infos = append(infos, AgentInfo{
+				AgentID:   e.AgentID,
+				Name:      e.Name,
+				RootPath:  e.RootPath,
+				MachineID: machineID,
+				Sleeping:  true,
+			})
+		}
 	}
 	r.mu.Unlock()
-	infos := make([]AgentInfo, 0, len(acs))
-	for _, a := range acs {
-		infos = append(infos, a.infoSnapshot())
-	}
 	sortAgentInfos(infos)
 	return infos
 }
 
-// AgentAlive 某 agent 是否在线。
+// AgentAlive 某工作空间是否可路由（直连 agent 在线，或机器级隧道在服务它）。
 func (r *Registry) AgentAlive(agentID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.agents[agentID]
-	return ok
+	if _, ok := r.agents[agentID]; ok {
+		return true
+	}
+	return r.hubForAgentLocked(agentID) != nil
 }
 
-// FindAgent 按 id 查在线 agent 信息。
+// FindAgent 按 id 查可路由的 agent 信息（含机器级隧道发布的休眠工作空间）。
 func (r *Registry) FindAgent(agentID string) (AgentInfo, bool) {
 	r.mu.Lock()
-	a, ok := r.agents[agentID]
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if a, ok := r.agents[agentID]; ok {
+		return a.infoSnapshot(), true
+	}
+	machineID, entry, ok := r.findHubEntryLocked(agentID)
 	if !ok {
 		return AgentInfo{}, false
 	}
-	return a.infoSnapshot(), true
+	return AgentInfo{
+		AgentID:   entry.AgentID,
+		Name:      entry.Name,
+		RootPath:  entry.RootPath,
+		MachineID: machineID,
+		Sleeping:  true,
+	}, true
 }
 
-// FindAgentByMachine 返回某机器（machine_id）当前在线的任意一个 agent 连接（用于下发
-// register 控制帧：register 是机器级操作，经该机器任一在线 agent 转交本机 supervisor）。
-// 返回 nil 表示该机器当前无在线 agent（如首次接入，需机器侧手动 cata link add）。
+// FindAgentByMachine 返回某机器（machine_id）当前的隧道连接（用于下发
+// register 控制帧：register 是机器级操作，经该机器任一连接转交本机 supervisor）。
+// 机器级隧道优先（常驻），其次该机器自持隧道的 agent。
+// 返回 nil 表示该机器当前无在线连接（如首次接入，需机器侧手动 cata link add）。
 func (r *Registry) FindAgentByMachine(machineID string) *agentConn {
 	machineID = strings.TrimSpace(machineID)
 	if machineID == "" {
@@ -139,6 +250,9 @@ func (r *Registry) FindAgentByMachine(machineID string) *agentConn {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if h, ok := r.hubs[machineID]; ok {
+		return h
+	}
 	for _, a := range r.agents {
 		if a.info.MachineID == machineID {
 			return a
@@ -151,6 +265,11 @@ func (r *Registry) FindAgentByMachine(machineID string) *agentConn {
 func (r *Registry) Machines() []string {
 	r.mu.Lock()
 	seen := map[string]bool{}
+	for m := range r.hubs {
+		if m != "" {
+			seen[m] = true
+		}
+	}
 	for _, a := range r.agents {
 		if m := strings.TrimSpace(a.info.MachineID); m != "" {
 			seen[m] = true
@@ -169,21 +288,61 @@ func (r *Registry) Machines() []string {
 func (r *Registry) SendRegister(machineID, subpath string) error {
 	a := r.FindAgentByMachine(machineID)
 	if a == nil {
-		return fmt.Errorf("machine %q has no online agent", machineID)
+		return fmt.Errorf("machine %q has no online tunnel", machineID)
 	}
 	return a.send(tunnel.Frame{Type: tunnel.FrameRegister, RootPath: subpath})
 }
 
-// DialAgent 打开一条到某在线 agent 的逻辑连接（stream）。返回的 net.Conn
+// DialAgent 打开一条到某工作空间的逻辑连接（stream）。返回的 net.Conn
 // 由调用方（socketclient.Conn）当作普通 Unix socket 连接使用——NDJSON chat 协议零改动。
+//
+// 路由：自持隧道的 agent 直连优先；否则用服务该工作空间的**机器级隧道**，
+// 由 supervisor 侧按需拉起 agent 进程再拨其 per-ws socket（冷启动可能数秒）。
 func (r *Registry) DialAgent(agentID string) (net.Conn, error) {
 	r.mu.Lock()
-	a, ok := r.agents[agentID]
+	target, hint := r.routeTargetLocked(agentID)
 	r.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("agent %q not online", agentID)
+	if target == nil {
+		return nil, fmt.Errorf("agent %q not reachable (no online tunnel serves it)", agentID)
 	}
-	return a.openStream()
+	return target.openStream(hint)
+}
+
+// routeTargetLocked 决定某工作空间的 stream 走哪条连接（调用方持锁）：
+// 自持隧道的在线 agent 直连优先，否则用服务它的机器级隧道（hint = 目标 agent，
+// 让 supervisor 侧按需拉起再转发）。返回 nil 表示当前不可达。
+func (r *Registry) routeTargetLocked(agentID string) (*agentConn, string) {
+	if a, ok := r.agents[agentID]; ok {
+		return a, ""
+	}
+	if hub := r.hubForAgentLocked(agentID); hub != nil {
+		return hub, agentID
+	}
+	return nil, ""
+}
+
+// hubForAgentLocked 返回服务该工作空间的机器级隧道（调用方持锁）。
+func (r *Registry) hubForAgentLocked(agentID string) *agentConn {
+	for machineID, entries := range r.hubAgents {
+		for _, e := range entries {
+			if e.AgentID == agentID {
+				return r.hubs[machineID]
+			}
+		}
+	}
+	return nil
+}
+
+// findHubEntryLocked 查某工作空间由哪台机器（经机器级隧道）发布（调用方持锁）。
+func (r *Registry) findHubEntryLocked(agentID string) (string, tunnel.AgentEntry, bool) {
+	for machineID, entries := range r.hubAgents {
+		for _, e := range entries {
+			if e.AgentID == agentID {
+				return machineID, e, true
+			}
+		}
+	}
+	return "", tunnel.AgentEntry{}, false
 }
 
 func sortAgentInfos(infos []AgentInfo) {
@@ -194,7 +353,7 @@ func sortAgentInfos(infos []AgentInfo) {
 	}
 }
 
-// agentConn 网关侧对单个 agent WSS 连接的管理。
+// agentConn 网关侧对单个 WSS 隧道连接的管理（既用于 agent 自持隧道，也用于机器级隧道）。
 type agentConn struct {
 	info       AgentInfo
 	ws         *websocket.Conn
@@ -206,6 +365,13 @@ type agentConn struct {
 
 	// pingInterval 心跳周期（>0 时网关主动发 ping 并设读 deadline 检测半开连接）。
 	pingInterval time.Duration
+
+	// openTimeout stream 打开等待上限：机器级隧道要按需拉起 agent 进程（冷启动），
+	// 需要比直连更长的等待（见 hubStreamOpenTimeout）。
+	openTimeout time.Duration
+
+	// onAgents 机器级隧道推送工作空间清单（agents 帧）时的回调；由 Registry 注入。
+	onAgents func([]tunnel.AgentEntry)
 }
 
 func newAgentConn(ws *websocket.Conn, info AgentInfo) *agentConn {
@@ -229,7 +395,17 @@ func (a *agentConn) send(f tunnel.Frame) error {
 	return a.ws.WriteJSON(f)
 }
 
-func (a *agentConn) openStream() (net.Conn, error) {
+// hubStreamOpenTimeout 机器级隧道打开 stream 的等待上限：supervisor 收到 open 后要
+// 按需拉起 agent 进程（冷启动含工作空间绑定 + socket 监听，实测数百毫秒~数秒），
+// 直连 agent 则用较短上限。
+const (
+	hubStreamOpenTimeout    = 60 * time.Second
+	directStreamOpenTimeout = 10 * time.Second
+)
+
+// openStream 打开一条新 stream。agentHint 非空 = 机器级隧道：让 supervisor 为
+// 该工作空间按需拉起 agent 并把 stream 接到它的 per-ws socket。
+func (a *agentConn) openStream(agentHint string) (net.Conn, error) {
 	if a.closed.Load() {
 		return nil, io.ErrClosedPipe
 	}
@@ -250,9 +426,13 @@ func (a *agentConn) openStream() (net.Conn, error) {
 	a.streams[id] = sc
 	a.streamsMu.Unlock()
 
-	if err := a.send(tunnel.Frame{Type: tunnel.FrameOpen, Stream: id}); err != nil {
+	if err := a.send(tunnel.Frame{Type: tunnel.FrameOpen, Stream: id, AgentID: agentHint}); err != nil {
 		a.dropStream(id)
 		return nil, err
+	}
+	timeout := a.openTimeout
+	if timeout <= 0 {
+		timeout = directStreamOpenTimeout
 	}
 	select {
 	case <-sc.opened:
@@ -260,7 +440,7 @@ func (a *agentConn) openStream() (net.Conn, error) {
 	case err := <-sc.errCh:
 		a.dropStream(id)
 		return nil, err
-	case <-time.After(10 * time.Second):
+	case <-time.After(timeout):
 		a.dropStream(id)
 		return nil, fmt.Errorf("agent %s: stream %d open timeout", a.info.AgentID, id)
 	}
@@ -334,6 +514,11 @@ func (a *agentConn) handleFrame(f tunnel.Frame) {
 		_ = a.send(tunnel.Frame{Type: tunnel.FramePong})
 	case tunnel.FramePong:
 		// ignore
+	case tunnel.FrameAgents:
+		// 机器级隧道推送最新工作空间清单（link.json 变化）。
+		if a.onAgents != nil {
+			a.onAgents(f.Agents)
+		}
 	}
 }
 

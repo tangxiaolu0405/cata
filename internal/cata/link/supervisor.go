@@ -34,9 +34,13 @@ func NewSupervisor() *Supervisor {
 }
 
 // RunSupervisor 前台运行 supervisor 守护（cata supervisor）。
-//   - 启动时确保所有启用+常驻的 agent 在运行
-//   - 监听 supervisor.sock 控制接口（ensure/stop/list/status/ping）
-//   - 每 30s 复查常驻 agent 并补拉（带失败退避：连续失败暂停该 agent）
+//   - 监听 supervisor.sock 控制接口（ensure/stop/list/status/ping/add）
+//   - 持有到网关的**机器级隧道**（每机器一条，见 supervisor_tunnel.go）：gateway
+//     要某工作空间的连接时按需拉起对应 agent 再转发
+//   - 每 30s 复查 link.json（清单变化经隧道推送给网关）+ 截断超大运行日志
+//
+// 注意：**不再**周期性无条件补拉全部注册 agent——agent 在空闲（默认 30 分钟无消息）
+// 后自行退出，仅在消息到达（本地 chat/gateway 或经机器级隧道）时按需拉起。
 //
 // 阻塞直到 ctx 取消或收到 SIGINT/SIGTERM。
 func RunSupervisor(ctx context.Context) error {
@@ -44,9 +48,6 @@ func RunSupervisor(ctx context.Context) error {
 	redirectSupervisorLogs()
 
 	s := NewSupervisor()
-	if err := s.ensureAll(); err != nil {
-		log.Printf("cata supervisor: initial ensure: %v", err)
-	}
 
 	// 控制 socket 单例：已有 supervisor 在跑则退出。
 	ln, acquired, err := acquireSupervisorLock(s.socketPath)
@@ -91,21 +92,33 @@ func RunSupervisor(ctx context.Context) error {
 		}
 	}()
 
-	// 常驻保活复查
+	// 机器级隧道：让云端 gateway 在 agent 休眠时仍能送下消息（按需唤醒）。
+	// 未配网关（还没 join）时隧道侧自己等配置出现，不报错、不影响本地按需拉起。
+	go func() {
+		if err := RunSupervisorTunnel(ctx, s.backoff); err != nil {
+			log.Printf("cata supervisor: machine tunnel stopped: %v", err)
+		}
+	}()
+
+	// 定时维护复查
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	tickCount := 0
 	for {
 		select {
 		case <-ctx.Done():
-			// 级联关闭：supervisor 退出时把保活的 agent 一起停掉，
-			// 避免留下脱离监管的常驻进程继续占资源/持隧道。
+			// 级联关闭：supervisor 退出时把 agent 一起停掉，
+			// 避免留下脱离监管的进程继续占资源。
 			s.stopAllAgents()
 			log.Println("cata supervisor: stopped (all agents stopped)")
 			return nil
 		case <-ticker.C:
-			if err := s.ensureAll(); err != nil {
-				log.Printf("cata supervisor: ensure all: %v", err)
+			// 自动接入本机新增工作空间（git/marked），使云端不必逐个手动注册。
+			// 只写 link.json，**不**预启动 agent——首个消息到达时才拉起。
+			if cfg, err := LoadConfig(); err == nil {
+				if err := autoLinkExistingWorkspaces(cfg); err != nil {
+					log.Printf("supervisor: auto-link: %v", err)
+				}
 			}
 			// 每 10 分钟（20 tick）截断一次超大的运行日志，防止 ~/.cata 膨胀。
 			tickCount++
@@ -132,35 +145,6 @@ func (s *Supervisor) stopAllAgents() {
 		}
 		log.Printf("cata supervisor: stopped agent %s", id)
 	}
-}
-
-func (s *Supervisor) ensureAll() error {
-	cfg, err := LoadConfig()
-	if err != nil {
-		return err
-	}
-	// 自动接入本机已有工作空间（git/marked），避免用户逐个手动 link add。
-	if err := autoLinkExistingWorkspaces(cfg); err != nil {
-		log.Printf("supervisor: auto-link: %v", err)
-	}
-	// 无条件重载：auto-link 可能新增了 agent（无论成功还是部分失败后 cfg 都已变）。
-	cfg, err = LoadConfig()
-	if err != nil {
-		return err
-	}
-	ids := cfg.LinkedAgentIDs()
-	for _, id := range ids {
-		e := cfg.Agents[id]
-		if !e.Enabled {
-			continue
-		}
-		// 带崩溃退避：单个失败不阻断其它 agent，连续失败暂停补拉。
-		if err := s.backoff.ensure(id); err != nil {
-			log.Printf("supervisor: ensure agent %s: %v", id, err)
-			continue
-		}
-	}
-	return nil
 }
 
 // autoLinkExistingWorkspaces 扫描 home 脑子格下的工作空间，把尚未注册到 link.json 的

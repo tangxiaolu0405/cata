@@ -7,35 +7,42 @@
 
 ```
            云端（任意位置）                      各机器
-┌────────────────────────────┐      WSS       ┌─────────────────────────────┐
-│ cata-gateway (remote 模式)  │ ◀────────────▶ │ cata supervisor             │
-│  · 无状态注册中心 + 路由      │   隧道         │  · 每机器一个，只管进程生命周期 │
-│  · Web UI / 渠道 都是会话    │                └───────────┬─────────────────┘
-│  · 不跑 LLM、不写脑子        │                            │ 拉起 / 保活 / 停止
-└────────────────────────────┘                            ▼
-                                             ┌─────────────────────────────┐
-                                             │ cata agent --workspace <id> │
-                                             │  · 一个工作空间 = 一个 LLM loop │
-                                             │  · 自持到网关的 WSS 隧道        │
-                                             └─────────────────────────────┘
+┌────────────────────────────┐      WSS       ┌───────────────────────────────┐
+│ cata-gateway (remote 模式)  │ ◀────────────▶ │ cata supervisor（常驻）        │
+│  · 无状态注册中心 + 路由      │  机器级隧道     │  · 每机器一条：机器级隧道       │
+│  · Web UI / 渠道 都是会话    │                │  · 收到消息时按需拉起 agent 转发 │
+│  · 不跑 LLM、不写脑子        │                └───────────┬───────────────────┘
+└────────────────────────────┘                            │ 按需拉起 / 停止
+                                                          ▼
+                                             ┌───────────────────────────────┐
+                                             │ cata agent --workspace <id>    │
+                                             │  · 一个工作空间 = 一个 LLM loop  │
+                                             │  · 只服务 per-ws socket，       │
+                                             │    无消息半小时即空闲退出        │
+                                             └───────────────────────────────┘
 ```
 
-- **gateway（云端）**：一个对外渠道。部署在任意位置，注册上来的 worker 都能用。
-- **supervisor（每机器一个）**：只负责本机注册工作空间的 agent 进程生命周期；不转发对话、不持隧道。
-  `kill supervisor`（任一信号，含 SIGKILL）都会收敛到停止全部保活 agent：SIGTERM/SIGINT 走级联
+- **gateway（云端）**：一个对外渠道。部署在任意位置，注册上来的机器都能用。它是无状态的——
+  机器重连即恢复；工作空间"在线/休眠"由 supervisor 发布的清单决定。
+- **supervisor（每机器一个，常驻）**：持有到网关的**机器级隧道**（一条 WSS 服务本机所有注册工作空间），
+  并在 gateway 要求某工作空间的连接时**按需拉起该 agent、把 stream 转发给它**。
+  `kill supervisor`（任一信号，含 SIGKILL）都会收敛到停止全部 agent：SIGTERM/SIGINT 走级联
   `stopAllAgents`；SIGKILL 下各 agent 靠控制口心跳（失联 ~30s）自行优雅退出，不留孤儿进程。
-- **agent（每工作空间一个）**：`cata agent --workspace <id>`，绑定单一工作空间（一个实际上的 LLM loop），
-  服务本机 `~/.cata/sockets/<ws_id>.sock`；注册且配了网关时自持 WSS 隧道。
+- **agent（每工作空间一个，按需）**：`cata agent --workspace <id>`，绑定单一工作空间（一个实际上的
+  LLM loop），服务本机 `~/.cata/sockets/<ws_id>.sock`；**无消息超过 `--idle-timeout`（默认 1800s）即退出**，
+  下次消息由 supervisor（远端）或本地入口（`cata chat` / 本地 gateway）按需重新拉起。
 
-**隔离键 = agent_id = ws_id（工作空间 id）**。网关视角下，`workerid + worker 的工作空间` 就构成实际隔离。
+**隔离键 = agent_id = ws_id（工作空间 id）**。网关视角下，`machine_id + 工作空间` 就构成实际隔离。
 
 ## 为什么这样设计
 
-- 网关简单化：就是一个对外渠道，无状态；重启后 agent 重连即恢复。
-- 协议简单：`agent_id` 唯一标识 worker 的工作空间；会话 = 网关把一条「逻辑 socket 连接」经隧道
-  反向拨到对应 agent 的本地 per-ws socket。
+- 网关简单化：就是一个对外渠道，无状态；重启后机器重连即恢复。
+- 协议简单：`agent_id` 唯一标识工作空间；会话 = 网关把一条「逻辑 socket 连接」经隧道
+  反向拨到对应 agent 的本地 per-ws socket（`open` 帧带目标 `agent_id`）。
 - 结构上消除跨工作空间并行串扰：一个 agent 进程只服务一个工作空间，全局状态不再跨空间共享。
-- 本地无网关时退化：`cata chat` 按需拉起 per-ws agent、空闲回收；注册（`cata link add`）的常驻。
+- **常驻的只有 supervisor**：agent 无消息半小时即退出，工作空间不再按数量常驻占用内存与后台演进；
+  消息到达时按需拉起（冷启动约 0.5~2s，gateway 侧 `open` 等待上限放宽到 60s）。
+- 本地无网关时同样成立：`cata chat` / 本地 gateway 在拨 socket 前 `EnsureAgent` 按需拉起。
 
 ## 注册与常驻（cata link）
 
@@ -60,30 +67,56 @@
 | `cata link add --dir <path>` | 注册工作空间（join 后）；写 link.json 并拉起 agent + supervisor |
 | `cata link remove <agent_id>` | 注销并停止 agent |
 | `cata link list` / `cata link status` | 查看注册与运行状态 |
-| `cata supervisor` | 每机器守护：启动时确保全部注册 agent 在跑，每 30s 复查补拉；控制 socket `~/.cata/supervisor.sock` |
+| `cata supervisor` | 每机器守护（**常驻**）：持有机器级隧道、按需拉起/停止 agent、每 30s 复查 link.json（清单变化即推送给网关）；控制 socket `~/.cata/supervisor.sock` |
 
 agent 启动参数：
 
 | 参数 | 说明 |
 |------|------|
 | `--workspace <ws_id>` | 绑定工作空间（必需） |
-| `--idle-timeout <s>` | 无会话空闲回收（默认 300；0 关闭） |
-| `--keep-alive` | 常驻（注册到网关的项目，不因空闲退出） |
-| `--link` | 额外持有到网关的 WSS 隧道 |
+| `--idle-timeout <s>` | **无 chat 消息**持续该秒数即退出（默认 1800 = 半小时；0 关闭）。与客户端是否连着无关——TUI 挂着但没消息同样回收 |
+| `--keep-alive` | 由 supervisor 监管生命周期（注册到网关的工作空间）；**不再豁免空闲回收**，网关侧消息由机器级隧道兜住 |
+| `--link` | legacy：agent 自持到网关的 WSS 隧道（正常情况下隧道由 supervisor 的机器级隧道持有，不要再用） |
+
+## 空闲休眠与按需唤醒（工作空间生命周期）
+
+```
+消息到达 ──▶ 唤醒 ──▶ agent 处理 ──▶ 半小时无消息 ──▶ agent 退出（释放内存 / 后台演进）
+   │                                    ▲
+   └── 入口不同：                         └── 网关侧「工作空间」条目仍在线（Sleeping）：
+       · 本地  cata chat / gateway：EnsureAgent 后拨 per-ws socket
+       · 远端  机器级隧道 open{agent_id} → supervisor EnsureAgent → 转发 stream
+```
+
+- **计时基准是「消息」**，不是「有没有客户端连接」：`cata chat` TUI 长期挂着空闲连接也算空闲
+  （`server.startIdleReaper` 按 `lastActivity` 判定）；有流式轮次在跑时不回收。
+- TUI 断线后**不立即重连**（否则会把休眠变成每半小时醒一次）：标记断线，等用户下次发送时
+  `ensureSession` 唤醒 agent 再发（`internal/cata/client/tui.go`）。
+- 远端能唤醒的前提是 supervisor 常驻并持有机器级隧道——这是本设计的关键取舍：
+  **常驻一个 supervisor，换取 N 个工作空间可休眠**。
+- 后台演进（evolve 周期）不算消息，不会阻止回收；该工作空间下次被唤醒后继续演进。
 
 ## 隧道协议（cata-tunnel.v1）
 
-- 传输：WebSocket（wss），端点 `GET /cata/v1/tunnel?agent=<agent_id>`。不再要求 `gateway_token`；
-  鉴权在 **hello 帧**用逐机器 `machine_token` 完成（网关存 hash，可单台吊销）。
+- 传输：WebSocket（wss）。两种入口：
+  - **机器级隧道（推荐）**：`GET /cata/v1/tunnel?machine=<machine_id>`，由 `cata supervisor` 持有，
+    一条连接服务本机全部注册工作空间；hello 带 `machine_tunnel: true` + `agents` 清单。
+  - **agent 自持隧道（legacy）**：`GET /cata/v1/tunnel?agent=<agent_id>`，单个 agent 进程持有。
+- 两种入口都要求 `Upgrade: websocket`；鉴权在 **hello 帧**用逐机器 `machine_token` 完成
+  （网关存 hash，可单台吊销）。
 - join 握手：机器侧 `cata link join` 的请求带自定义协议头 `X-Cata-Join: cata-tunnel.v1`，
   网关端在最外层校验——未携带该头的请求（随机扫描/爆破）直接 400 丢弃并记录告警，不进状态机。
+- **兼容**：agent 自持隧道的老 worker 与新 gateway 完全兼容（直接路由优先）；但**老 gateway 不认
+  `?machine=`**（会 400 拒绝机器级隧道）——升级时 gateway 必须先升，机器侧 supervisor 再升。
 - 帧：JSON text message。`stream` 是网关侧分配的递增 id，标识一条「逻辑 socket 连接」。
 - `line` 帧的 `data` 为 base64，逐字节透传（不含行尾约定），因此 NDJSON chat 协议无需任何改动。
 
 | 帧 | 方向 | 含义 |
 |----|------|------|
-| `hello` | worker → gateway | 注册：agent_id / name / root_path / **machine_id** / **machine_token** / protocol / version（必须第一帧） |
-| `open` | gateway → worker | 打开一条新 stream |
+| `hello` | worker → gateway | 注册（必须第一帧）：`machine_id` / `machine_token` / protocol / version；agent 自持隧道另带 `agent_id`/`name`/`root_path`，机器级隧道带 **`machine_tunnel: true`** + **`agents`**（本机工作空间清单） |
+| `agents` | worker → gateway | 机器级隧道更新工作空间清单（link.json 变化时推送；网关据此增删可路由条目） |
+| `revoke` | gateway → worker | 吊销某工作空间：本机不再服务它（supervisor 停掉其 agent，直到 supervisor 重启） |
+| `open` | gateway → worker | 打开一条新 stream；机器级隧道带 **`agent_id`** = 目标工作空间（supervisor 据此按需拉起） |
 | `opened` | worker → gateway | stream 已建立（本地 per-ws socket 已拨通） |
 | `line` | 双向 | stream 上的原始字节（base64） |
 | `close` | 双向 | 关闭 stream |
@@ -94,14 +127,16 @@ agent 启动参数：
 
 单帧上限 8 MiB（`MaxFrameBytes`），超过断开。
 
-### 隧道鉴权（per-agent token，machine token 为兜底）
+### 隧道鉴权
 
-- **hello 帧层**：**per-agent `agent_token` 优先**（每工作空间独立，吊销粒度到单 agent）；
-  worker 未持有 agent_token 时以 `machine_id + machine_token` 首次注册，网关按机器权威签发
-  per-agent token（`hello_ack` 下发，worker 落盘 link.json 后带 token 重连建正式隧道）。
-  机器/agent token 均按 sha256 hash 存表（`machines.json`，0600），**不落明文**。
-- 兼容：旧 worker（不带 agent_token）回退 machine token 校验；已签发 agent_token 的 agent
-  若无 token 直连会被要求重连（防 machine token 无限续期）。
+- **machines.json**（0800/0600，只存 sha256 hash）保存逐机器 token 与（legacy 路径的）per-agent token。
+- **机器级隧道**：hello 必须带 `machine_tunnel: true`，且 `machine_id` 与 URL 的 `?machine=` 一致，
+  否则拒绝；鉴权只认逐机器 `machine_token`。**信任边界是机器**——该机器 link.json 里注册的工作空间
+  才提供服务（`open` 时校验 `HasAgent`），越权唤醒其它工作空间会被拒。
+- **agent 自持隧道（legacy）**：per-agent `agent_token` 优先；worker 未持有时以 `machine_token`
+  首次注册，网关按机器权威签发 per-agent token（`hello_ack` 下发，worker 落盘后带 token 重连）。
+- **吊销**：UI revoke → 网关立刻停止路由该工作空间，并下发 `revoke` 帧让 supervisor 停掉其 agent、
+  从清单剔除（本进程生命周期内生效；重新 `cata link add` 或 supervisor 重启后恢复）。
 
 ### join 流程（机器首次接入）
 
@@ -134,7 +169,8 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 2. gateway UI 按 `machine_id` 分组，选择目标机器 + 填**项目名**（如 `abc`）或**绝对路径**；
 3. gateway 经该机器任一在线 agent 下发 `register{root_path=输入}`；
 4. worker 侧解析路径（见下），确保目录存在（不存在则创建），经 supervisor.sock 转交 supervisor 执行 `Add + EnsureAgent`；
-5. 新 agent 进程自带 `--link` 回连网关，网关 registry 出现新 agent。
+5. supervisor 的机器级隧道在 30s 内把更新后的清单推给网关（`agents` 帧）——无需重连，新工作空间
+   立刻在网关 UI 出现并可被路由（即使其 agent 随后空闲退出，也仍是「Sleeping 可路由」）。
 
 **路径语义**：
 
@@ -174,13 +210,16 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 | `default_agent_id` / `CATA_GATEWAY_DEFAULT_AGENT` | 通道类会话（telegram/qq）默认路由 agent；空 = 第一个在线 |
 
 - `edition: remote` 或 `cata_server.mode: remote`（或设了 `cata_url`）进入 remote 模式。
-- remote 模式**不**拉起本机 cata server；worker 在各机器由 `cata agent --link` 自持隧道。
+- remote 模式**不**拉起本机 cata server；各机器由 `cata supervisor` 持有机器级隧道注册上来
+  （agent 进程按需拉起，见上「空闲休眠与按需唤醒」）。
 - 端点：`/cata/v1/tunnel`（WSS 注册）、`/cata/v1/join/*`（机器首次接入，协议头拦截 + 挑战-应答 + IP 限流）。
   `/cata/v1/agents` 与批准（approve）已改为 UI 进程内调用，不再暴露为远端无鉴权 API。
 
 ## 会话路由
 
-- **Web UI**：项目 = 当前在线 agent（`/cata/v1/agents` / 注册表）；会话经隧道 `DialAgent(project_id)` 拨到对应 agent 的 per-ws socket。
+- **Web UI**：项目 = 当前**可路由**工作空间（`/api/projects`，含 `sleeping: true` 的休眠项——
+  机器级隧道已发布但 agent 进程已空闲退出）；会话经 `DialAgent(project_id)` 拨到对应 agent 的
+  per-ws socket，休眠项由 supervisor 收到 `open` 后先拉起再转发。
 - **Telegram / QQ**：v1 全部会话拨到 `default_agent_id`（或第一个在线 agent），cwd 用该 agent 的 `root_path`（history 仍 per-会话）。
 - **本地模式不变**：仍走本机 Unix socket（`socket_path` / `CATA_SOCKET`）。
 
@@ -196,8 +235,8 @@ gateway 可经隧道向某机器下发 `register` 帧，让该机器**动态注�
 
 | | 旧（模式一，同机） | 新（remote） |
 |--|--------------------|--------------|
-| 连接 | 本机 Unix socket `~/.cata/cata.sock` | WSS 隧道 + 每工作空间 per-ws socket |
-| worker | 单 server 多空间（曾有串扰） | 每工作空间一个 agent 进程（结构隔离） |
+| 连接 | 本机 Unix socket `~/.cata/cata.sock` | 每机器一条 WSS 机器级隧道 + 每工作空间 per-ws socket |
+| worker | 单 server 多空间（曾有串扰） | supervisor 常驻 + 每工作空间一个按需 agent 进程（结构隔离） |
 | gateway | 本机渠道适配 | 云端注册中心 + 路由 |
 | 协议 | NDJSON over Unix socket | 同 NDJSON，经隧道逐字节透传 |
 
