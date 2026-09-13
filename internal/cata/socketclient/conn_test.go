@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -125,4 +128,103 @@ func TestChatCancelOnContextCancel(t *testing.T) {
 	if !c.Healthy() {
 		t.Fatal("conn should stay healthy after cancel (history preserved)")
 	}
+}
+
+// TestBackToBackChatsOnSameConn 回归：同一连接连续两轮 chat，第二轮必须拿到自己的**全部**事件。
+//
+// 旧实现里每轮 chat 起一个读 goroutine，函数返回时只 close(readStopped) 就返回——
+// 那个 goroutine 可能仍阻塞在 ReadBytes 上，把**下一轮的行**读走并丢弃
+// （表现：第二轮卡住，或丢前几个事件）。现在收尾会等它真正退出。
+func TestBackToBackChatsOnSameConn(t *testing.T) {
+	serverEnd, clientEnd := net.Pipe()
+	defer serverEnd.Close()
+
+	c := NewConnWithDialer("", "/tmp", func() (net.Conn, error) { return clientEnd, nil })
+
+	const round2Tokens = 30
+	go func() {
+		br := bufio.NewReader(serverEnd)
+		for i := 0; i < 2; i++ {
+			line, err := br.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			if json.Unmarshal(bytes.TrimSpace(line), &req) != nil || req["command"] != "chat" {
+				return
+			}
+			if i == 0 {
+				// 第一轮：正常收尾。
+				for _, ev := range []string{
+					`{"type":"progress","message":"warmup"}`,
+					`{"type":"token","content":"first"}`,
+					`{"type":"done","success":true}`,
+				} {
+					if _, err := serverEnd.Write([]byte(ev + "\n")); err != nil {
+						return
+					}
+				}
+				continue
+			}
+			// 第二轮：立刻连发多行。上一轮残留的读 goroutine 若还活着，会在这里偷行。
+			if _, err := serverEnd.Write([]byte(`{"type":"progress","message":"second"}` + "\n")); err != nil {
+				return
+			}
+			for j := 0; j < round2Tokens; j++ {
+				ev := `{"type":"token","content":"t` + strconv.Itoa(j) + `,"}` + "\n"
+				if _, err := serverEnd.Write([]byte(ev)); err != nil {
+					return
+				}
+			}
+			if _, err := serverEnd.Write([]byte(`{"type":"done","success":true}` + "\n")); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 第一轮。
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, err := c.Chat(ctx1, "hi", &collectHandler{}); err != nil {
+		cancel1()
+		t.Fatalf("round 1: %v", err)
+	}
+	cancel1()
+
+	// 第二轮：必须收齐全部 token（丢任何一行都说明被上一轮的读 goroutine 吞了）。
+	h := &collectHandler{}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	res, err := c.Chat(ctx2, "hi", h)
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("round 2 not successful: %+v", res)
+	}
+	want := ""
+	for j := 0; j < round2Tokens; j++ {
+		want += "t" + strconv.Itoa(j) + ","
+	}
+	if got := h.tokens.String(); got != want {
+		t.Fatalf("round 2 tokens=\n%q\nwant\n%q（有行被上一轮的读 goroutine 吞掉）", got, want)
+	}
+	if n := h.progress.Load(); n != 1 {
+		t.Fatalf("round 2 progress count=%d want 1（首行丢失）", n)
+	}
+}
+
+// collectHandler 记录 token 与 progress 计数的最小 StreamHandler。
+type collectHandler struct {
+	tokens   strings.Builder
+	progress atomic.Int32
+}
+
+func (h *collectHandler) OnToken(s string)   { h.tokens.WriteString(s) }
+func (h *collectHandler) OnProgress(string)  { h.progress.Add(1) }
+func (h *collectHandler) OnToolStart(string) {}
+func (h *collectHandler) ConfirmExec(context.Context, ExecConfirmPrompt) (bool, error) {
+	return false, nil
+}
+func (h *collectHandler) Choose(context.Context, UserChoicePrompt) ([]string, error) {
+	return nil, nil
 }

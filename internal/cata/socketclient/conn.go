@@ -277,8 +277,23 @@ func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, at
 	// （server 长时间无输出如 LLM 思考中时，停止生成必须即时生效）。
 	lineCh := make(chan lineResult, 8)
 	readStopped := make(chan struct{})
-	defer close(readStopped) // 函数返回时通知读 goroutine 退出（防泄漏）
+	readerDone := make(chan struct{})
+	// 收尾必须**等读 goroutine 真正退出**再返回：它可能正阻塞在 ReadBytes 里，
+	// 若放任其存活，下一轮 chat 的第一行会被它读走并丢弃（同一连接连续两轮时
+	// 表现为「第二轮卡住/丢首事件」）。这里先关信号，再用立即到期的 read deadline
+	// 把阻塞读打断，最后等它退出并清除 deadline。
+	defer func() {
+		close(readStopped)
+		if c.conn != nil {
+			_ = c.conn.SetReadDeadline(time.Now())
+		}
+		<-readerDone
+		if c.conn != nil {
+			_ = c.conn.SetReadDeadline(time.Time{})
+		}
+	}()
 	go func() {
+		defer close(readerDone)
 		for {
 			line, err := c.readLine(readStopped)
 			select {
