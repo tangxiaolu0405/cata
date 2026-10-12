@@ -116,8 +116,10 @@ func (b *Bot) handleIncoming(ctx context.Context, msg IncomingMessage) {
 	log.Printf("qq: cata chat start key=%s", key)
 	result, err := conn.Chat(ctx, text, handler)
 	if err != nil {
+		// 死连接（agent 空闲退出后缓存连接未失效）已由 socketclient 自动重拨重发；
+		// 走到这里说明重试后仍失败，属真实不可用。
 		log.Printf("qq: cata chat error: %v", err)
-		_ = b.reply(ctx, msg, "cata 不可用（确认 cata run / base 自动拉起）。\n"+err.Error())
+		_ = b.reply(ctx, msg, "cata 暂时不可用，请稍后重试（agent 可能正在冷启动）。\n"+err.Error())
 		return
 	}
 	reply := strings.TrimSpace(result.Text)

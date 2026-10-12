@@ -228,3 +228,76 @@ func (h *collectHandler) ConfirmExec(context.Context, ExecConfirmPrompt) (bool, 
 func (h *collectHandler) Choose(context.Context, UserChoicePrompt) ([]string, error) {
 	return nil, nil
 }
+
+// TestChatRetriesOnDeadConn 回归 QQ 渠道故障：缓存连接在对端（agent）空闲退出后仍被复用，
+// 首次读写立刻报 "io: read/write on closed pipe"。修复后应自动失效 + 重拨一次并重发，
+// 用户消息不丢失（remote 模式 dialFunc 会经隧道重新 EnsureAgent 拉起 agent）。
+func TestChatRetriesOnDeadConn(t *testing.T) {
+	var dials atomic.Int32
+
+	// 第一次拨号返回「对端已关」的连接（写即 EPIPE）；第二次返回可用的 pipe。
+	serverEnd, clientEnd := net.Pipe()
+	defer serverEnd.Close()
+
+	c := NewConnWithDialer("", "/tmp", func() (net.Conn, error) {
+		if dials.Add(1) == 1 {
+			return deadPipeConn{}, nil
+		}
+		return clientEnd, nil
+	})
+
+	// 扮演 server：只服务第二次拨号（第一次是死连接，写不进去）。
+	gotText := make(chan string, 1)
+	go func() {
+		br := bufio.NewReader(serverEnd)
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			gotText <- ""
+			return
+		}
+		var req map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(line), &req); err != nil {
+			gotText <- ""
+			return
+		}
+		text, _ := req["text"].(string)
+		gotText <- text
+		_, _ = serverEnd.Write([]byte(`{"type":"token","content":"pong"}` + "\n"))
+		_, _ = serverEnd.Write([]byte(`{"type":"done","success":true}` + "\n"))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := c.Chat(ctx, "hello-after-idle", nil)
+	if err != nil {
+		t.Fatalf("chat should self-heal on dead conn, got err: %v", err)
+	}
+	if !res.Success || res.Text != "pong" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if n := dials.Load(); n != 2 {
+		t.Fatalf("dial count=%d want 2（应重拨一次）", n)
+	}
+	select {
+	case text := <-gotText:
+		if text != "hello-after-idle" {
+			t.Fatalf("server got text %q want %q（消息必须重发，不能丢）", text, "hello-after-idle")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server never received the retried chat")
+	}
+}
+
+// deadPipeConn 模拟「对端已关闭」的连接：Write 返回 EPIPE，Read 返回 EOF。
+type deadPipeConn struct{}
+
+func (deadPipeConn) Read([]byte) (int, error)    { return 0, io.ErrClosedPipe }
+func (deadPipeConn) Write([]byte) (int, error)   { return 0, io.ErrClosedPipe }
+func (deadPipeConn) Close() error                { return nil }
+func (deadPipeConn) LocalAddr() net.Addr         { return dummyAddr{} }
+func (deadPipeConn) RemoteAddr() net.Addr        { return dummyAddr{} }
+func (deadPipeConn) SetDeadline(time.Time) error { return nil }
+func (deadPipeConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+func (deadPipeConn) SetWriteDeadline(time.Time) error { return nil }

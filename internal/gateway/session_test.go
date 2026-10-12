@@ -36,26 +36,29 @@ func TestSessionManagerDialerRouting(t *testing.T) {
 	}
 
 	// 触发实际拨号（Chat 会 ensureConn → dialFunc）。
+	// eofConn 读即 EOF（死连接），socketclient 会自动失效并重拨一次后重发，
+	// 故这里同一轮 chat 会拨两次（都指向同一 agent）——这正是「agent 空闲退出后
+	// 缓存连接未失效」场景的自愈行为（见 TestChatRetriesOnDeadConn）。
 	_, _ = c1.Chat(context.Background(), "hi", nil)
-	if len(dialed) != 1 || dialed[0].id != "ws-a" {
-		t.Fatalf("dialed=%+v want exactly [ws-a]", dialed)
+	if len(dialed) != 2 || dialed[0].id != "ws-a" || dialed[1].id != "ws-a" {
+		t.Fatalf("dialed=%+v want [ws-a ws-a] (dead conn self-heal redials same agent)", dialed)
 	}
 
-	// 读失败后连接被 invalidate（EOF → unhealthy），下次 Get 应自动重建并重新 dial。
+	// 读失败后连接被 invalidate（EOF → unhealthy），下次 Get 应自动重建。
 	c2, _ := m.GetWithCwdDialer("web:ws-a", "/proj/a", dialerFor("ws-a"))
 	if c2 == c1 {
 		t.Fatalf("after EOF the cached conn should be invalidated and rebuilt")
 	}
 	_, _ = c2.Chat(context.Background(), "hi", nil)
-	if len(dialed) != 2 || dialed[1].id != "ws-a" {
-		t.Fatalf("dialed=%+v want [ws-a ws-a] (rebuild redials same agent)", dialed)
+	if len(dialed) != 4 || dialed[2].id != "ws-a" || dialed[3].id != "ws-a" {
+		t.Fatalf("dialed=%+v want [ws-a ws-a ws-a ws-a]", dialed)
 	}
 
 	// 不同键独立，各自 dial 自己的 agent。
 	cb, _ := m.GetWithCwdDialer("web:ws-b", "/proj/b", dialerFor("ws-b"))
 	_, _ = cb.Chat(context.Background(), "hi", nil)
-	if len(dialed) != 3 || dialed[2].id != "ws-b" {
-		t.Fatalf("dialed=%+v want [ws-a ws-a ws-b]", dialed)
+	if len(dialed) != 6 || dialed[4].id != "ws-b" || dialed[5].id != "ws-b" {
+		t.Fatalf("dialed=%+v want [ws-a ws-a ws-a ws-a ws-b ws-b]", dialed)
 	}
 }
 

@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"cata/internal/cata/brain"
@@ -252,7 +254,47 @@ func (c *Conn) ChatAs(ctx context.Context, text, runAs string, h StreamHandler) 
 // ChatAsWithAttachments 发送用户消息（可带附件）并消费 NDJSON 流直到 done。
 // attachments 为 server 端 AttachmentReq（path 相对产出区或附件白名单目录；
 // inline 为已编码 base64）。逐条失败的会发 attachment_rejected 事件。
+//
+// 死连接自愈：缓存连接可能在对端（agent）空闲退出后仍被复用，此时首次写入/读取
+// 会立刻报 EPIPE / "io: read/write on closed pipe"（对端已关，Healthy() 无法提前感知）。
+// 这里识别该类错误，强制失效并重拨一次后重发——remote 模式的 dialFunc 会经隧道
+// 重新 EnsureAgent 拉起 agent，因此用户消息不会因冷启动窗口而丢失。
 func (c *Conn) ChatAsWithAttachments(ctx context.Context, text, runAs string, attachments []AttachmentReq, h StreamHandler) (ChatResult, error) {
+	res, err := c.chatAsWithAttachmentsOnce(ctx, text, runAs, attachments, h)
+	if err == nil || ctx.Err() != nil || !isDeadConnErr(err) {
+		return res, err
+	}
+	// 死连接：强制失效（清 conn 引用），下一次 ensureConn 重新拨号（按需拉起 agent）。
+	c.invalidateLocked()
+	log.Printf("socketclient: dead conn on chat (%v), reconnecting once", err)
+	res, err = c.chatAsWithAttachmentsOnce(ctx, text, runAs, attachments, h)
+	return res, err
+}
+
+// isDeadConnErr 判断错误是否属于「对端已关闭/连接已死」类，可安全重拨重发。
+// 只认连接层错误，业务错误（如 server 返回的 error 事件）不在此列。
+func isDeadConnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	// 兜底：部分平台/包装层不实现 errors.Is 链，按文案识别。
+	msg := err.Error()
+	for _, s := range []string{
+		"closed pipe", "broken pipe", "connection reset", "use of closed network connection",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Conn) chatAsWithAttachmentsOnce(ctx context.Context, text, runAs string, attachments []AttachmentReq, h StreamHandler) (ChatResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
