@@ -16,7 +16,7 @@ func TestAppendLLMLogCreatesDir(t *testing.T) {
 	t.Setenv("LLM_LOG_FILE", nested)
 
 	c := &Client{apiURL: "http://example.com", model: "m"}
-	c.appendLLMLog(ChatRequest{}, nil, "", "hello reply", nil, nil)
+	c.appendLLMLog(ChatRequest{}, nil, nil, "", "hello reply", nil, nil)
 
 	data, err := os.ReadFile(nested)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestAppendLLMLogRecordsRetrieved(t *testing.T) {
 	t.Setenv("LLM_LOG_FILE", logFile)
 
 	c := &Client{apiURL: "http://example.com", model: "m", lastRetrieved: []string{"memory/long/foo.md"}}
-	c.appendLLMLog(ChatRequest{}, nil, "", "reply", nil, nil)
+	c.appendLLMLog(ChatRequest{}, nil, nil, "", "reply", nil, nil)
 
 	data, _ := os.ReadFile(logFile)
 	if !strings.Contains(string(data), "memory/long/foo.md") {

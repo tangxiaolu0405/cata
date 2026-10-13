@@ -270,10 +270,7 @@ func pruneIndexLearningFragmentsFor(w *Workspace, playbookRel string) error {
 }
 
 func indexEntryFromWorkspace(w *Workspace, rel, updatedAt string) (IndexEntry, bool) {
-	prev := Active()
-	SetActive(w)
-	defer SetActive(prev)
-	return indexEntryFromFile(rel, updatedAt)
+	return indexEntryFromFile(w, rel, updatedAt)
 }
 
 func isLegacyLearningFragmentRel(rel string) bool {

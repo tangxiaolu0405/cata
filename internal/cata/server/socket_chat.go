@@ -141,6 +141,9 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 	ctx = withChatSubagentPool(ctx, pool)
 	ctx = withChatWorkspace(ctx, chatWS)
 
+	// 本会话的工具结果溢出状态（序号 + 已摘要指纹）；会话结束由调用方清理溢出目录。
+	spill := newSpillState()
+
 	scheduled := IsScheduledRun(ctx)
 	var task *brain.TaskState
 	if chatWS != nil && !scheduled {
@@ -184,6 +187,14 @@ func (ss *SocketServer) handleTerminalChatStream(ctx context.Context, conn net.C
 			roundProfile = *promptPeak
 		}
 		tools := ss.buildTerminalChatToolsForTier(tier, cc.WS, cc.OutputCwd, cc.Runtime)
+		// 超过 spillKeepRecentRounds 轮的 tool 结果 / 老 assistant 正文压成摘要 + 溢出到文件，
+		// 近期轮次保持全文。会话结束时由 clearSessionSpill 删除溢出目录。
+		if n := compactHistoryForContext(*history, cc.OutputCwd, spillSessionID(chatOpenCodeSID), spill); n > 0 {
+			_ = ss.emitStreamLine(conn, map[string]interface{}{
+				"type":    "progress",
+				"message": fmt.Sprintf("已摘要化 %d 条早期工具结果（原文见 .cata/session-spill/，可用 read_file 展开）", n),
+			})
+		}
 		ss.maybeContextCompress(ctx, conn, client, history, tools)
 		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
 
@@ -692,4 +703,15 @@ func newOpenCodeSessionID() string {
 		return fmt.Sprintf("sess-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// spillSessionID 取会话溢出目录名：优先 opencode 会话 id，空则回退 "default"。
+func spillSessionID(sid *string) string {
+	if sid == nil {
+		return "default"
+	}
+	if s := strings.TrimSpace(*sid); s != "" {
+		return s
+	}
+	return "default"
 }

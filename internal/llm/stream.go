@@ -314,12 +314,14 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	}
 
 	var resp *http.Response
+	var effectiveMsgs []Message
 	for i, u := range candidates {
 		c.apiURL = u
-		httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
+		httpReq, eff, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, true)
 		if err != nil {
 			return "", "", nil, "", usage, err
 		}
+		effectiveMsgs = eff
 		resp, err = hc.Do(httpReq)
 		if err != nil {
 			return "", "", nil, "", usage, fmt.Errorf("stream request: %w", err)
@@ -383,7 +385,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 				"empty non-SSE body")
 		}
 		sendAssistantDelta(onDelta, onReasoning, assistant, reasoning)
-		c.appendLLMLog(req, tools, toolChoice, assistantText(assistant, reasoning), toolCalls, body)
+		c.appendLLMLog(req, effectiveMsgs, tools, toolChoice, assistantText(assistant, reasoning), toolCalls, body)
 		return assistantText(assistant, reasoning), reasoning, toolCalls, finishReason, usage, nil
 	}
 
@@ -420,7 +422,7 @@ func (c *Client) chatStreamRound(ctx context.Context, messages []Message, tools 
 	}
 
 	out := assistantText(assistant, reasoning)
-	c.appendLLMLog(req, tools, toolChoice, out, toolCalls, nil)
+	c.appendLLMLog(req, effectiveMsgs, tools, toolChoice, out, toolCalls, nil)
 	return out, reasoning, toolCalls, finishReason, usage, nil
 }
 

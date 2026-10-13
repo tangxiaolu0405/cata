@@ -415,12 +415,13 @@ func (a *agentConn) openStream(agentHint string) (net.Conn, error) {
 	a.streamsMu.Unlock()
 
 	sc := &streamConn{
-		agent:  a,
-		id:     id,
-		rch:    make(chan []byte, 64),
-		errCh:  make(chan error, 1),
-		opened: make(chan struct{}),
-		done:   make(chan struct{}),
+		agent:     a,
+		id:        id,
+		rch:       make(chan []byte, 64),
+		errCh:     make(chan error, 1),
+		opened:    make(chan struct{}),
+		done:      make(chan struct{}),
+		createdAt: time.Now(),
 	}
 	a.streamsMu.Lock()
 	a.streams[id] = sc
@@ -488,19 +489,35 @@ func (a *agentConn) handleFrame(f tunnel.Frame) {
 		}
 		// 背压：非阻塞入队 + 字节配额。慢消费者（本地 socket 读得慢）填满配额时
 		// 只关闭该流，绝不阻塞 agentConn.readLoop（否则该 agent 的所有流一起停摆）。
-		if sc.queuedBytes.Load() > maxStreamQueuedBytes {
-			log.Printf("registry: stream %d over byte quota (%d), closing slow stream", sc.id, sc.queuedBytes.Load())
-			sc.closeFromRemote(fmt.Errorf("stream over byte quota"))
-			return
+		//
+		// 区分「慢消费者」与「读侧卡死」：读侧若长时间完全没消费（lastRead 陈旧），
+		// 说明是读侧被阻塞（如旧实现 deadline no-op 导致 Read 永久卡住），
+		// 此时断流只会把根因掩盖成「网关主动关流」。这类流只记日志、不断流，
+		// 让上游（socketclient 的 deadline/收尾逻辑）自行恢复。
+		if q := sc.queuedBytes.Load(); q > maxStreamQueuedBytes {
+			if sc.readerStalled() {
+				log.Printf("registry: stream %d over byte quota (%d) but reader stalled (no consume for %s); keeping stream (likely blocked reader, not slow consumer)",
+					sc.id, q, time.Since(sc.lastRead()).Round(time.Second))
+			} else {
+				log.Printf("registry: stream %d over byte quota (%d), closing slow stream", sc.id, q)
+				sc.closeFromRemote(fmt.Errorf("stream over byte quota"))
+				return
+			}
 		}
 		select {
 		case sc.rch <- data:
 			sc.queuedBytes.Add(int64(len(data)))
 		case <-sc.done:
 		default:
-			// rch 满但未超字节配额（条目上限）：仍关闭慢流，避免 readLoop 阻塞。
-			log.Printf("registry: stream %d channel full, closing slow stream", sc.id)
-			sc.closeFromRemote(fmt.Errorf("stream channel full"))
+			// rch 满但未超字节配额（条目上限）：同样先看读侧是否卡死。
+			if sc.readerStalled() {
+				log.Printf("registry: stream %d channel full but reader stalled (no consume for %s); keeping stream",
+					sc.id, time.Since(sc.lastRead()).Round(time.Second))
+			} else {
+				// rch 满但未超字节配额（条目上限）：仍关闭慢流，避免 readLoop 阻塞。
+				log.Printf("registry: stream %d channel full, closing slow stream", sc.id)
+				sc.closeFromRemote(fmt.Errorf("stream channel full"))
+			}
 		}
 	case tunnel.FrameClose:
 		if sc := a.getStream(f.Stream); sc != nil {
@@ -608,32 +625,129 @@ type streamConn struct {
 	errCh  chan error
 	opened chan struct{}
 
-	rmu    sync.Mutex
-	rbuf   bytes.Buffer
-	closed atomic.Bool
-	done   chan struct{}
-	once   sync.Once
+	rmu       sync.Mutex
+	rbuf      bytes.Buffer
+	closed    atomic.Bool
+	done      chan struct{}
+	once      sync.Once
+	createdAt time.Time // 流创建时间（readerStalled 对「从未消费」流的判定基准）
 
 	// 背压：每流有界字节配额。FrameLine 入队非阻塞（不拖死 agentConn.readLoop），
 	// 队列字节数超限时关闭该流（慢消费者断流重连），而不是阻塞整个多路复用器。
 	queuedBytes atomic.Int64
+
+	// lastReadNano 读侧最近一次「消费到数据」的时间（unix nano）。
+	// 用于区分「慢消费者」（在读、只是慢）与「读侧卡死」（长时间完全没消费）。
+	// 读侧卡死时不应被背压逻辑误判为慢消费者而断流——那会把真实根因掩盖成
+	// 「网关主动关流」。见 handleFrame 的 FrameLine 分支。
+	lastReadNano atomic.Int64
+
+	// 读 deadline：socketclient 的 chat 收尾依赖 SetReadDeadline 打断阻塞读
+	// （见 internal/cata/socketclient/conn.go chatAsWithAttachmentsOnce 的 defer）。
+	// 旧实现把 SetReadDeadline 做成 no-op，导致 rch 空且流未关时 Read 永久阻塞，
+	// Chat() 永不返回、永不打印 chat done（remote/隧道模式必现）。
+	// deadlineMu 保护 readDeadline / deadlineCh；deadlineCh 用于唤醒正在阻塞的 Read。
+	deadlineMu   sync.Mutex
+	readDeadline time.Time
+	deadlineCh   chan struct{}
+	deadlineSet  atomic.Bool
 }
+
+// readerStalledGrace 判定「读侧卡死」的静默阈值：读侧超过该时长完全没消费到数据，
+// 视为被阻塞（而非慢消费者）。取 30s：正常 LLM 流式输出间隙远小于此，
+// 而真正的阻塞读（deadline no-op 场景）会无限期静默。
+const readerStalledGrace = 30 * time.Second
+
+// lastRead 返回读侧最近一次消费数据的时间（零值 = 从未消费）。
+func (c *streamConn) lastRead() time.Time {
+	n := c.lastReadNano.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// readerStalled 读侧是否疑似「卡死」（长时间完全没消费）。
+// 从未消费过（lastRead 零值）时：以流创建时间为基准判断，避免新流被误判。
+// 注意：本方法只在背压路径调用，用于**避免误断流**，因此判定偏保守——
+// 宁可不断流（让上游 deadline 逻辑恢复），也不要把阻塞读误报成慢消费者。
+func (c *streamConn) readerStalled() bool {
+	last := c.lastRead()
+	if last.IsZero() {
+		// 从未消费：若流已存在超过 grace 且队列仍积压，说明读侧一直没动。
+		return time.Since(c.createdAt) > readerStalledGrace
+	}
+	return time.Since(last) > readerStalledGrace
+}
+
+// streamReadTimeout 隧道流读超时错误（实现 net.Error，Timeout() 返回 true，
+// 使 socketclient.readLine 的 netErr.Timeout() 分支能正确识别并继续/收尾）。
+type streamReadTimeout struct{}
+
+func (streamReadTimeout) Error() string   { return "tunnel: stream read timeout" }
+func (streamReadTimeout) Timeout() bool   { return true }
+func (streamReadTimeout) Temporary() bool { return true }
 
 func (c *streamConn) Read(p []byte) (int, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	for c.rbuf.Len() == 0 {
+		// 已设 deadline：先算剩余等待时间，用 timer 分支参与 select，
+		// 使阻塞读能在 deadline 到期时返回超时错误（socketclient 据此收尾）。
+		var timerC <-chan time.Time
+		var timer *time.Timer
+		if c.deadlineSet.Load() {
+			c.deadlineMu.Lock()
+			dl := c.readDeadline
+			c.deadlineMu.Unlock()
+			if !dl.IsZero() {
+				d := time.Until(dl)
+				if d <= 0 {
+					return 0, streamReadTimeout{}
+				}
+				timer = time.NewTimer(d)
+				timerC = timer.C
+			}
+		}
 		select {
 		case chunk := <-c.rch:
+			if timer != nil {
+				timer.Stop()
+			}
 			c.rbuf.Write(chunk)
 			c.queuedBytes.Add(-int64(len(chunk)))
+			c.lastReadNano.Store(time.Now().UnixNano())
 		case err := <-c.errCh:
+			if timer != nil {
+				timer.Stop()
+			}
 			return 0, err
 		case <-c.done:
+			if timer != nil {
+				timer.Stop()
+			}
 			return 0, io.EOF
+		case <-timerC:
+			return 0, streamReadTimeout{}
+		case <-c.deadlineChanged():
+			// deadline 被重新设置（如收尾时 SetReadDeadline(now)）：立即重算。
+			if timer != nil {
+				timer.Stop()
+			}
 		}
 	}
 	return c.rbuf.Read(p)
+}
+
+// deadlineChanged 返回一个在 SetReadDeadline 时被关闭的 channel，
+// 用于唤醒阻塞中的 Read 重新计算 deadline。调用方持 rmu（非 deadlineMu）。
+func (c *streamConn) deadlineChanged() <-chan struct{} {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if c.deadlineCh == nil {
+		c.deadlineCh = make(chan struct{})
+	}
+	return c.deadlineCh
 }
 
 func (c *streamConn) Write(p []byte) (int, error) {
@@ -679,8 +793,28 @@ func (c *streamConn) pushError(err error) {
 	}
 }
 
-func (c *streamConn) LocalAddr() net.Addr                { return c.agent.ws.LocalAddr() }
-func (c *streamConn) RemoteAddr() net.Addr               { return c.agent.ws.RemoteAddr() }
-func (c *streamConn) SetDeadline(t time.Time) error      { return nil }
-func (c *streamConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *streamConn) LocalAddr() net.Addr  { return c.agent.ws.LocalAddr() }
+func (c *streamConn) RemoteAddr() net.Addr { return c.agent.ws.RemoteAddr() }
+
+// SetDeadline 同时设置读/写 deadline（写 deadline 隧道侧无缓冲语义，忽略）。
+func (c *streamConn) SetDeadline(t time.Time) error {
+	return c.SetReadDeadline(t)
+}
+
+// SetReadDeadline 设置读 deadline：零值 = 清除（永久阻塞）。
+// 必须真实生效——socketclient 的 chat 收尾靠它打断阻塞读（见 Read 注释）。
+func (c *streamConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	c.readDeadline = t
+	c.deadlineSet.Store(!t.IsZero())
+	// 唤醒正在阻塞的 Read 重新计算 deadline（关闭旧 channel 并换新的）。
+	if c.deadlineCh != nil {
+		close(c.deadlineCh)
+	}
+	c.deadlineCh = make(chan struct{})
+	c.deadlineMu.Unlock()
+	return nil
+}
+
+// SetWriteDeadline 写 deadline 在隧道侧无实际语义（send 自带 ws 写超时），保留 no-op。
 func (c *streamConn) SetWriteDeadline(t time.Time) error { return nil }

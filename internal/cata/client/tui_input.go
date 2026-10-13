@@ -103,6 +103,10 @@ func (m *model) updateSlashKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 func (m *model) slashMenuLines() int {
+	// / 命令菜单与 @文件 菜单互斥（@ 只在非 / 行触发），取当前打开者。
+	if m.atList != nil {
+		return m.atMenuLines()
+	}
 	if m.slashList == nil {
 		return 0
 	}
@@ -114,17 +118,21 @@ func (m *model) slashMenuLines() int {
 	return 1 + h
 }
 
-// renderInputPane 输入区：编辑行 +（可选）框内 / 命令列表。
+// renderInputPane 输入区：编辑行 +（可选）框内 / 命令列表 或 @文件 候选列表。
 func (m *model) renderInputPane() string {
 	borderW := m.vp.Width + 2
 	parts := []string{m.input.View()}
-	if m.slashList != nil {
+	menu := m.slashList
+	if m.atList != nil {
+		menu = m.atList
+	}
+	if menu != nil {
 		sepW := m.mainInputWidth()
 		if sepW > 4 {
 			sepW = min(sepW-2, 32)
 		}
 		sep := styleDim.Render("  " + strings.Repeat("─", sepW))
-		parts = append(parts, sep, m.slashList.View())
+		parts = append(parts, sep, menu.View())
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return styleBorder.Width(borderW).Render(inner)
@@ -136,6 +144,7 @@ func (m *model) tryComposeSend(seq uint64) (tea.Model, tea.Cmd) {
 	}
 	m.composeSendSeq = 0
 	m.slashList = nil
+	m.atList = nil
 	line := strings.TrimSpace(m.input.Value())
 	m.input.SetValue("")
 	m.syncInputSize()
@@ -192,7 +201,8 @@ func (m *model) handleInput(line string) (tea.Model, tea.Cmd) {
 			m.setChatContent(true)
 			return m, nil
 		case "help":
-			m.appendLog("/model /provider /attach /clear /cls /exit /status /retry /config\n", true)
+			m.appendLog("/model /provider /attach /clear /cls /exit /status /retry /config\n"+
+				"@文件：输入 @ 弹出工作目录文件候选，↑↓ 选择 · enter/tab 补全（补全后作为附件随消息提交）\n", true)
 			return m, nil
 		case "status":
 			m.refreshRuntime()

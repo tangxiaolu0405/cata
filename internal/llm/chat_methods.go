@@ -109,9 +109,11 @@ func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []
 // buildHTTPChatRequest 构建 HTTP 请求（stream 为 true 时使用 SSE）。
 // injectBrain 由 req.NoBrainInject 控制；演进模块应设 NoBrainInject=true。
 // 角色卡片（Client.card）决定默认注入档位 / 采样 / thinking。
-func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
+// 返回值 effective 为本轮实际出站的 messages（身份 + 检索 + 脑子节选 + coalesce 后），
+// 供调用方写 llm.log —— 必须用返回值而非入参 req.Messages（后者是注入前的原始历史）。
+func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool) (httpReq *http.Request, effective []Message, err error) {
 	if c.apiKey == "" {
-		return nil, fmt.Errorf("API key is empty")
+		return nil, nil, fmt.Errorf("API key is empty")
 	}
 	card := c.card
 	injectOff := card != nil && card.Inject == InjectOff
@@ -156,7 +158,7 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	if messagesHaveMedia(req.Messages) {
 		m, err := resolveModelForMessages(c.llmCfg, c.model, req.Messages)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		effectiveModel = m
 	}
@@ -172,9 +174,9 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 	}
 	c.lastEffectiveModel = effectiveModel
 	caps := capsForModel(c.llmCfg, effectiveModel)
-	httpReq, err := c.adapter.BuildRequest(c.apiURL, c.apiKey, effectiveModel, caps, req.Messages, req.MaxTokens, temperature, tools, toolChoice, stream, disableThinking)
+	httpReq, err = c.adapter.BuildRequest(c.apiURL, c.apiKey, effectiveModel, caps, req.Messages, req.MaxTokens, temperature, tools, toolChoice, stream, disableThinking)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if ctx != nil {
 		httpReq = httpReq.WithContext(ctx)
@@ -183,7 +185,7 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 	applyOutboundHeaders(httpReq, c)
-	return httpReq, nil
+	return httpReq, req.Messages, nil
 }
 
 // applyOutboundHeaders 附加出站自定义请求头：
@@ -256,7 +258,7 @@ func (c *Client) chatWithContext(ctx context.Context, req ChatRequest, tools []T
 	var lastStatusErr error
 	for i, u := range candidates {
 		c.apiURL = u
-		httpReq, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, false)
+		httpReq, effectiveMsgs, err := c.buildHTTPChatRequest(ctx, req, tools, toolChoice, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -314,7 +316,7 @@ func (c *Client) chatWithContext(ctx context.Context, req ChatRequest, tools []T
 				return nil, nil, err
 			}
 			if !skipAppendLog {
-				c.appendLLMLog(req, tools, toolChoice, content, toolCalls, body)
+				c.appendLLMLog(req, effectiveMsgs, tools, toolChoice, content, toolCalls, body)
 			}
 			chatResp := &ChatResponse{
 				Choices: []struct {
@@ -388,18 +390,19 @@ func inferPromptSources(msgs []Message) []string {
 }
 
 // appendLLMLog 将一轮 LLM 对话追加为一行 JSON（JSON Lines）。
+// effective 必须传「实际出站的 messages」（buildHTTPChatRequest 的第二个返回值）：
+// 身份 + 检索 + 脑子节选 + coalesce 之后的那份载荷，勿传注入前的原始 history。
 // 默认写入 prompt 组件清单（static 仅 chars/preview，conversation 仅末尾几条全文），避免每轮重复刷 boot-leader 全文。
 // 设置 LLM_LOG_VERBOSE=1 可恢复完整 messages/tools/raw_body。
 // 日志路径由环境变量 LLM_LOG_FILE 控制，默认 llm.log。
-func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, content string, toolCalls []ToolCall, rawBody []byte) {
+func (c *Client) appendLLMLog(req ChatRequest, effective []Message, tools []Tool, toolChoice string, content string, toolCalls []ToolCall, rawBody []byte) {
 	logPath := brain.LLMLogPath()
 	if out := strings.TrimSpace(req.LogOutputCwd); out != "" {
 		logPath = brain.LLMLogPathFor(out)
 	}
 
-	// req.Messages 已经是 buildHTTPChatRequest 组装+coalesce 后的实际载荷，直接用于日志，
-	// 勿再重新组装（会重复插入身份/brain 节选，且与实际发送不一致）。
-	effectiveMessages := append([]Message(nil), req.Messages...)
+	// effective 已是实际载荷，直接用于日志；勿再重新组装（会与实际发送不一致）。
+	effectiveMessages := append([]Message(nil), effective...)
 
 	respLog := map[string]interface{}{
 		"content": content,

@@ -110,7 +110,7 @@ func SyncMemoryIndexAfterEvolution(w *Workspace, touched []string, learning, arc
 	if w == nil {
 		return fmt.Errorf("SyncMemoryIndexAfterEvolution: workspace required")
 	}
-	idx, err := LoadMemoryIndex()
+	idx, err := LoadMemoryIndexFor(w)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func SyncMemoryIndexAfterEvolution(w *Workspace, touched []string, learning, arc
 		}
 		rel = normalizeModePathRel(rel)
 		seen[rel] = true
-		entry, ok := indexEntryFromFile(rel, now)
+		entry, ok := indexEntryFromFile(w, rel, now)
 		if !ok {
 			continue
 		}
@@ -154,13 +154,13 @@ func SyncMemoryIndexAfterEvolution(w *Workspace, touched []string, learning, arc
 
 	if learn := strings.TrimSpace(learning); utf8.RuneCountInString(learn) >= 24 {
 		_ = appendLearningPlaybook(w, learn, now)
-		if entry, ok := indexEntryFromFile(RelMemoryLongLearnings, now); ok {
+		if entry, ok := indexEntryFromFile(w, RelMemoryLongLearnings, now); ok {
 			idx.Upsert(entry)
 		}
 	}
 
 	idx.Prune(maxIndexEntries)
-	return SaveMemoryIndex(idx)
+	return SaveMemoryIndexFor(w, idx)
 }
 
 // Upsert 按 source 或 id 替换/追加条目。
@@ -304,8 +304,9 @@ func (idx *MemoryIndex) entriesByPriority() []IndexEntry {
 	return out
 }
 
-func indexEntryFromFile(rel, updatedAt string) (IndexEntry, bool) {
-	w := Active()
+// indexEntryFromFile 从指定 workspace 的 rel 文件生成索引条目。
+// w 必须显式传入：多 cata 并行时全局 Active() 可能已被后台 evolve 改写，读它会写错脑子格。
+func indexEntryFromFile(w *Workspace, rel, updatedAt string) (IndexEntry, bool) {
 	if w == nil {
 		return IndexEntry{}, false
 	}

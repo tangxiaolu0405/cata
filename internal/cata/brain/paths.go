@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-// 仓库模板 brain/ 内相对路径（种子来源，与 ~/.cata/global/ 名称一致）。
+// 现行 workspace 布局的相对路径（与 layout.go 的 Rel* 保持一致，勿在此重复定义新值）。
 const (
 	RelPathConstraints = "constraints.md"
 	RelPathBehavior    = "behavior.md"
@@ -14,12 +14,19 @@ const (
 	RelPathEvolutionLog = "evolution_log.json"
 )
 
-// legacy paths kept for migration / backward-compatible fallbacks
+// legacy 路径：旧版扁平 ~/.cata/brain/{hot.md,memory/short-term,…} 布局。
+// 仅两处消费：
+//   - MigrateLegacyBrain：一次性把旧布局搬进首个 workspace（已由 .legacy_brain_migrated_v1 标记）；
+//   - NormalizeEvolveUpdatePath：把模型可能写出的旧路径归一成现行路径。
+//
+// 注意：这些不是现行 workspace 布局。现行值见 layout.go：
+// short=RelShortCurrent("memory/short/current.md")、long=RelMemoryLong("memory/long")、
+// archive=RelMemoryArchive("memory/archive")。新增代码勿引用本组常量。
 const (
-	RelPathHot              = "hot.md" // migrated → modes/_default/persona.md
-	RelPathShortTermCurrent = "memory/short-term/current_session.md"
-	RelPathLongTerm         = "memory/long-term"
-	RelPathArchive          = "archive"
+	RelPathHot              = "hot.md"                               // legacy → 现行 modes/_default/persona.md
+	RelPathShortTermCurrent = "memory/short-term/current_session.md" // legacy → 现行 memory/short/current.md
+	RelPathLongTerm         = "memory/long-term"                     // legacy → 现行 memory/long
+	RelPathArchive          = "archive"                              // legacy → 现行 memory/archive
 )
 
 // Path 在活跃 workspace 下解析相对路径；无 workspace 时回退到 legacy brain 根。

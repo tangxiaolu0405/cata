@@ -149,8 +149,11 @@ type model struct {
 
 	composeSendSeq uint64 // 当前挂起的 Enter 发送代号，0 表示无
 	slashList      *list.Model
-	hoverPane      hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
-	subagents      []subagentRecord
+	// atList：`@文件` 补全候选菜单（惰性构建的文件索引，见 fileindex.go / tui_atfile.go）。
+	atList    *list.Model
+	fileIdx   *fileIndex
+	hoverPane hoverPane // 鼠标所在区域，决定滚轮/翻页滚动目标
+	subagents []subagentRecord
 	// attachQueue /attach 命令累积的待发送附件（发送时与行内 @path 合并提交；成功后清空）。
 	attachQueue []string
 	// attachInline 剪贴板图片（/attach clip 或 Ctrl+V）：base64 内联附件，与上者一起提交。
@@ -181,7 +184,7 @@ func newChatTextarea() textarea.Model {
 func newModel(s *session, cwd string, ws *brain.Workspace) model {
 	ti := newChatTextarea()
 
-	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste（剪贴板是图片即作为附件）") + "\n"
+	welcome := styleDim.Render("Type a message. enter send · double-enter newline · ctrl+v paste（剪贴板是图片即作为附件）· @文件 引用工作目录文件") + "\n"
 	vp := viewport.New(80, 20)
 
 	m := model{
@@ -193,6 +196,7 @@ func newModel(s *session, cwd string, ws *brain.Workspace) model {
 		log:       welcome,
 		stats:     paneStats{state: "ready", outputCwd: cwd},
 		runtime:   brain.DetectRuntimeEnvFromProcess(),
+		fileIdx:   newFileIndex(cwd),
 		width:     100,
 		height:    24,
 	}
@@ -374,6 +378,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, cmd := m.updateSlashKeys(msg); handled {
 			return m, cmd
 		}
+		// `@文件` 补全菜单优先于普通编辑键：↑↓ 选择、Tab/Enter 补全、Esc 关闭。
+		if handled, cmd := m.updateAtKeys(msg); handled {
+			return m, cmd
+		}
 		if msg.Type == tea.KeyEnter && msg.String() == "enter" {
 			if m.composeSendSeq != 0 {
 				// 粘贴/多行：连续 Enter → 换行，取消待发发送
@@ -415,10 +423,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.syncInputSize()
 	listCmd := m.syncSlashList()
+	atCmd := m.syncAtList()
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && m.hoverPane == hoverChat && chatScrollKey(keyMsg) {
 		m.vp, _ = m.vp.Update(msg)
 	}
-	return m, tea.Batch(cmd, listCmd)
+	return m, tea.Batch(cmd, listCmd, atCmd)
 }
 
 func waitStream(s *session) tea.Cmd {
@@ -830,6 +839,9 @@ func (m *model) footerView() string {
 			return styleDim.Render("cancelling… ctrl+c again to quit")
 		}
 		return styleDim.Render("streaming… ctrl+c cancel · twice to quit")
+	}
+	if m.atList != nil {
+		return styleDim.Render("@文件: ↑↓ 选择 · enter/tab 补全 · esc 关闭")
 	}
 	if m.slashList != nil {
 		return styleDim.Render("↑↓ select · enter run (or apply) · tab complete · esc clear")

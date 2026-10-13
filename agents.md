@@ -226,7 +226,30 @@ socket_chat history (user/assistant/tool only)
 
 **防重复原则**：路径路由只写在 constraints；工作方式只写在 behavior；绝对路径只写在路径块；boot 只指向这三层，不复述表格。
 
+**脑子格显式化（多 cata 并行不变量）**：注入链与索引链一律用**显式 workspace**，勿读全局 `Active()`——
+后台 evolve 会临时改写全局 Active，多 chat 并行时读全局会串格。约定：
+
+- 组装入口带 ctx：`TerminalBrainSystemExtensionForContext(ctx, …)` / `MemoryIndexPromptBlockForWorkspace(w, …)`；
+- 索引读写带 For：`LoadMemoryIndexFor(w)` / `SaveMemoryIndexFor(w, idx)` / `indexEntryFromFile(w, rel, ts)`；
+- 全局版 `LoadMemoryIndex()` / `SaveMemoryIndex()` / `Active()` 仅作无 workspace 的兜底，**新增代码勿用**。
+
+**日志必须反映实际出站载荷**：`buildHTTPChatRequest` 返回 `(httpReq, effective, err)`，
+调用方须把 `effective`（身份 + 检索 + 节选 + coalesce 后）传给 `appendLLMLog`——
+传注入前的原始 history 会让 `boot-leader` / `brain-excerpt` 恒为 null，出站审计失效。
+
+**legacy 路径陷阱**：`paths.go` 的 `RelPathHot` / `RelPathShortTermCurrent` / `RelPathLongTerm` / `RelPathArchive`
+是**旧版扁平布局**，只服务一次性迁移与 evolve 路径归一。现行布局见 `layout.go`
+（`memory/short/current.md`、`memory/long`、`memory/archive`）。新增代码勿引用 legacy 组。
+
 **工具**：OpenAI `tools` 数组（`server.buildTerminalChatToolsForTier`：按 ContextTier 内置 + MCP），**不**拼进 system 正文。
+
+**会话历史工具结果摘要化（spill）**：多轮工具循环里 tool 结果会全文注入每轮请求，长会话迅速吃满 context。做法（`internal/cata/server/session_spill.go` + `internal/cata/brain/session_spill.go`）：
+
+- 以 user 消息为轮次边界，**距末尾 > 5 轮**的 `tool` 结果（≥1200B）与老 `assistant` 长正文（≥2400B）压成一行摘要；
+- 原文写到产出区 `.cata/session-spill/<sid>/<序号>-<工具名>.txt`，摘要带**相对产出区路径**（`read_file` 可展开）；
+- 近期 5 轮保持全文（模型能直接看到最近工具结果原貌）；带 `tool_calls` 的 assistant 消息**永不**摘要化（协议要求原样回传）；
+- 就地改写 history 且幂等（`[已摘要]` 前缀 + 指纹去重），同一消息不重复溢出；
+- **会话结束清理**：`chat_reset` / 连接关闭 / 产出区变更时删除该会话溢出目录。
 
 **演进与其它 LLM**：
 
@@ -337,6 +360,17 @@ socket_chat history (user/assistant/tool only)
 
 斜杠：`/help` `/status` `/clear` `/exit` `/retry` `/config` `/attach` `/provider` `/model`（`/provider` 打开**选项式菜单**：选 provider → 自动探测 → 选模型；`/model` 直接在当前激活 provider 下**选项式切模型**（`/model <name>` 文本快捷）；`/provider probe <name>`、`/provider switch <name> [model]` 文本快捷保留，见「LLM（多提供商）」）。
 
+### @文件 补全（工作目录文件索引）
+
+输入 `@` 弹出**工作目录（产出区 cwd）文件候选**，↑↓ 选择 · Enter/Tab 补全为 `@<相对路径>`，Esc 关闭。
+补全后行内 `@<path>` 由 `splitAttachmentTokens` 识别，随消息作为附件提交（与 `/attach`、Ctrl+V 同链路）。
+
+- 索引：`client/fileindex.go` — 惰性扫描（首次 `@` 时构建，避免启动卡顿）+ 缓存（TTL 5min，`Refresh()` 强制重建）。
+- 忽略：`.git/.cata/node_modules/vendor/dist/target/__pycache__/.venv` 等目录、点文件、二进制/归档/媒体扩展名、>4MiB 文件；上限 20000 条（`fs.SkipAll` 截断）。
+- 匹配：`matchFiles` 子串（不区分大小写），排序「文件名前缀 > 路径前缀 > 文件名包含 > 路径包含」，同级按路径字典序；候选上限 200、菜单 8 行。
+- 触发：`currentAtQuery` 要求 `@` 位于行首或空白后、token 内无空白（与 `splitAttachmentTokens` 一致，避免「补全出来却不被识别」）；`@token` 已精确命中某文件时 Enter 直接发送（不再补全）。
+- 交互：`client/tui_atfile.go`（菜单/按键/补全）、`client/tui_input.go`（`renderInputPane`/`slashMenuLines` 复用输入区渲染）、`client/tui.go`（Update 中 `updateAtKeys` 优先于普通编辑键，`syncAtList` 与 `/` 菜单互斥）。
+
 **预留**（server 未发或未接）：无（`file_written` 与 `diff` 均已落地：写入工具成功时发
 `file_written{name,path,bytes,id,diff}`——unified diff 在 verbose 模式展示全文、auto 记入侧栏详情）。
 
@@ -368,7 +402,7 @@ Server 在 `tool_start` / `tool_result` 事件附带 `level` 字段（`silent` /
 
 | 入口 | 方式 | 代码 |
 |------|------|------|
-| `cata chat` TUI | `/attach <path>` · 行内 `@path` · `/attach clip` 或 **Ctrl+V**（读系统剪贴板图片） | `client/tui_input.go`、`client/clipboard_image_*.go` |
+| `cata chat` TUI | `/attach <path>` · 行内 `@path`（`@` 触发工作目录文件补全，见「@文件 补全」）· `/attach clip` 或 **Ctrl+V**（读系统剪贴板图片） | `client/tui_input.go`、`client/tui_atfile.go`、`client/fileindex.go`、`client/clipboard_image_*.go` |
 | cata-gateway Web 控制台 | 📎 选择文件 / 拖拽到聊天区 / Ctrl+V 粘贴 → FileReader → `attachments[].inline` | `gateway/ui/static/index.html`、`gateway/ui/webchat.go` |
 | Telegram / QQ | 渠道图片下载到产出区 → `attachments[].path` | `gateway/telegram/bot.go`、`gateway/qq/bot.go` |
 
@@ -509,6 +543,7 @@ type MediaRef struct {
 | 操作 | 行为 |
 |------|------|
 | `/attach <path>` | 加入待发送附件队列，发送时一并提交（`/attach clear` 清空，`/attach` 查看）；行内 `@path` 亦识别 |
+| **`@`** | 输入 `@` 弹工作目录文件候选（惰性索引 `fileindex.go`），↑↓ 选择 · Enter/Tab 补全为 `@<相对路径>` · Esc 关闭；补全结果随消息作为附件提交 |
 | `/attach clip`（别名 `clipboard`/`paste`） | 读系统剪贴板图片（macOS osascript / Linux wl-paste·xclip / Windows PowerShell）→ base64 入队（最多 6 张） |
 | **Ctrl+V** | 剪贴板是图片则作为内联附件入队；不是图片则落回普通按键，不影响文本编辑 |
 | 发送 | `text` + `attachments` 一并提交（本行 `@` > `/attach` 路径队列 > 剪贴板图片） |
